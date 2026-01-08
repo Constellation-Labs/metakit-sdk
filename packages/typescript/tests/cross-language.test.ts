@@ -20,7 +20,7 @@ describe('Cross-language compatibility', () => {
   let testVectors: TestVector[];
 
   beforeAll(() => {
-    const vectorsPath = path.join(__dirname, '../../../shared/test_vectors.json');
+    const vectorsPath = path.join(__dirname, '../../..', 'shared/test_vectors.json');
     const content = fs.readFileSync(vectorsPath, 'utf-8');
     testVectors = JSON.parse(content);
   });
