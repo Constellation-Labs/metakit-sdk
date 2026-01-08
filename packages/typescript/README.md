@@ -1,6 +1,8 @@
 # Constellation Metagraph SDK - TypeScript
 
-TypeScript SDK for standard operations on Constellation Network metagraphs built using the metakit framework
+TypeScript SDK for signing data transactions on Constellation Network data metagraphs built with the [metakit](https://github.com/Constellation-Labs/metakit) framework.
+
+> **Note:** This SDK is for data transactions only. For currency transactions, use [dag4.js](https://github.com/StardustCollective/dag4.js) directly. This SDK implements the standardized serialization, hashing, and signing routines defined by metakit and may not be compatible with metagraphs using custom serialization.
 
 ## Installation
 

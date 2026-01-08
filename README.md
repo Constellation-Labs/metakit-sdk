@@ -1,11 +1,22 @@
 # Constellation Metagraph SDK
 
-Official multi-language SDK for Constellation Metagraph signing operations.
+Multi-language SDK for signing data transactions on Constellation Network data metagraphs built with the [metakit](https://github.com/Constellation-Labs/metakit) framework.
+
+> **Scope:** Data transactions for metakit-based metagraphs. Currency transactions not yet supported (use [dag4.js](https://github.com/StardustCollective/dag4.js) for JavaScript). This SDK implements metakit's standardized serialization and may not be compatible with metagraphs using custom routines.
 
 [![CI](https://github.com/Constellation-Labs/metakit-sdk/actions/workflows/ci.yml/badge.svg)](https://github.com/Constellation-Labs/metakit-sdk/actions/workflows/ci.yml)
 [![npm version](https://img.shields.io/npm/v/@constellation-network/metagraph-sdk.svg)](https://www.npmjs.com/package/@constellation-network/metagraph-sdk)
 [![PyPI version](https://img.shields.io/pypi/v/constellation-metagraph-sdk.svg)](https://pypi.org/project/constellation-metagraph-sdk/)
 [![Crates.io](https://img.shields.io/crates/v/constellation-metagraph-sdk.svg)](https://crates.io/crates/constellation-metagraph-sdk)
+
+## Overview
+
+This SDK provides standard cryptographic operations (canonicalization, hashing, signing, verification) for data metagraphs built using the metakit framework. The metakit framework standardizes serialization, hashing, and signing routines for data metagraphs, and this SDK implements those standards.
+
+**Scope:**
+- **Data transactions** for metakit-based data metagraphs
+- **Not included (yet):** Currency transaction support (for JavaScript, use [dag4.js](https://github.com/StardustCollective/dag4.js) directly)
+- **Compatibility:** Designed for metakit metagraphs; may not be compatible with metagraphs using custom serialization
 
 ## Packages
 

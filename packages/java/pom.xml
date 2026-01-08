@@ -10,7 +10,7 @@
     <packaging>jar</packaging>
 
     <name>Constellation Metagraph SDK</name>
-    <description>Java SDK for Constellation Metagraph operations</description>
+    <description>Java SDK for signing data transactions on Constellation data metagraphs built with metakit</description>
     <url>https://github.com/Constellation-Labs/metakit-sdk</url>
 
     <licenses>

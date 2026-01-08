@@ -1,6 +1,8 @@
 # Constellation Metagraph SDK - Java
 
-Java SDK for standard cryptographic operations on Constellation data metagraphs built using metakit.
+Java SDK for signing data transactions on Constellation Network data metagraphs built with the [metakit](https://github.com/Constellation-Labs/metakit) framework.
+
+> **Note:** This SDK is for data transactions only. It implements the standardized serialization, hashing, and signing routines defined by metakit and may not be compatible with metagraphs using custom serialization.
 
 ## Requirements
 
