@@ -252,6 +252,107 @@ units = token_to_units(100.5)  # 10050000000
 tokens = units_to_token(10050000000)  # 100.5
 ```
 
+### Network Operations
+
+#### `CurrencyL1Client`
+
+Client for interacting with Currency L1 nodes.
+
+```python
+from constellation_sdk import CurrencyL1Client, NetworkConfig
+
+config = NetworkConfig(
+    l1_url='http://localhost:9010',
+    timeout=30.0,  # optional, defaults to 30s
+)
+
+client = CurrencyL1Client(config)
+
+# Get last transaction reference for an address
+last_ref = client.get_last_reference('DAG...')
+
+# Submit a signed transaction
+result = client.post_transaction(signed_tx)
+print(f'Transaction hash: {result.hash}')
+
+# Check pending transaction status
+pending = client.get_pending_transaction(result.hash)
+if pending:
+    print(f'Status: {pending.status}')  # 'Waiting' | 'InProgress' | 'Accepted'
+
+# Check node health
+is_healthy = client.check_health()
+```
+
+#### `DataL1Client`
+
+Client for interacting with Data L1 nodes (metagraphs).
+
+```python
+from constellation_sdk import DataL1Client, NetworkConfig
+
+config = NetworkConfig(data_l1_url='http://localhost:8080')
+
+client = DataL1Client(config)
+
+# Estimate fee for data submission
+fee_info = client.estimate_fee(signed_data)
+print(f'Fee: {fee_info.fee}, Address: {fee_info.address}')
+
+# Submit signed data
+result = client.post_data(signed_data)
+print(f'Data hash: {result.hash}')
+
+# Check node health
+is_healthy = client.check_health()
+```
+
+#### Combined Configuration
+
+```python
+config = NetworkConfig(
+    l1_url='http://localhost:9010',       # Currency L1
+    data_l1_url='http://localhost:8080',  # Data L1
+    timeout=30.0,
+)
+
+l1_client = CurrencyL1Client(config)
+data_client = DataL1Client(config)
+```
+
+#### Network Types
+
+```python
+@dataclass
+class NetworkConfig:
+    l1_url: Optional[str] = None       # Currency L1 endpoint
+    data_l1_url: Optional[str] = None  # Data L1 endpoint
+    timeout: float = 30.0              # Request timeout in seconds
+
+@dataclass
+class PostTransactionResponse:
+    hash: str
+
+@dataclass
+class PendingTransaction:
+    hash: str
+    status: Literal["Waiting", "InProgress", "Accepted"]
+    transaction: CurrencyTransaction
+
+@dataclass
+class EstimateFeeResponse:
+    fee: int
+    address: str
+
+@dataclass
+class PostDataResponse:
+    hash: str
+
+class NetworkError(Exception):
+    status_code: Optional[int]
+    response: Optional[str]
+```
+
 ## Types
 
 ```python
@@ -291,8 +392,7 @@ class VerificationResult:
 ### Submit DataUpdate to L1
 
 ```python
-import requests
-from constellation_sdk import create_signed_object
+from constellation_sdk import create_signed_object, DataL1Client, NetworkConfig
 
 # Your metagraph data update
 data_update = {
@@ -305,17 +405,10 @@ data_update = {
 # Sign as DataUpdate
 signed = create_signed_object(data_update, private_key, is_data_update=True)
 
-# Submit to data-l1
-response = requests.post(
-    'http://l1-node:9300/data',
-    json={
-        'value': signed.value,
-        'proofs': [
-            {'id': p.id, 'signature': p.signature}
-            for p in signed.proofs
-        ]
-    }
-)
+# Submit to data-l1 using the client
+client = DataL1Client(NetworkConfig(data_l1_url='http://l1-node:9300'))
+result = client.post_data(signed)
+print(f'Submitted with hash: {result.hash}')
 ```
 
 ### Multi-Signature Workflow

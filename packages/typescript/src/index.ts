@@ -73,3 +73,15 @@ export {
   tokenToUnits,
   unitsToToken,
 } from './currency-transaction';
+
+// Network operations
+export { CurrencyL1Client, DataL1Client, HttpClient, NetworkError } from './network';
+export type {
+  NetworkConfig,
+  RequestOptions,
+  TransactionStatus,
+  PendingTransaction,
+  PostTransactionResponse,
+  EstimateFeeResponse,
+  PostDataResponse,
+} from './network';

@@ -33,6 +33,14 @@ rand = "0.8"
 num-bigint = "0.4"
 regex = "1.0"
 
+# Network (optional)
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
+
+[features]
+default = []
+network = ["reqwest", "tokio"]
+
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }
 pretty_assertions = "1.4"

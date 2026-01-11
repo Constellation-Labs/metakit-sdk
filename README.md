@@ -45,6 +45,12 @@ This SDK provides standard cryptographic operations (canonicalization, hashing, 
   - Transaction batching and chaining
   - Address validation and key pair generation
 
+- **Network Operations**:
+  - Submit currency transactions to Currency-L1 nodes
+  - Submit data transactions to Data-L1 nodes
+  - Query transaction status and last references
+  - Estimate data submission fees
+
 - **Cryptography**:
   - ECDSA on secp256k1 (compatible with Constellation Network)
   - SHA-256 and SHA-512 hashing

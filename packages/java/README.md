@@ -301,6 +301,107 @@ CurrencyTransaction.unitsToToken(10050000000L);  // 100.5
 CurrencyTypes.TOKEN_DECIMALS;  // 1e-8
 ```
 
+### Network Operations
+
+#### `CurrencyL1Client`
+
+Client for interacting with Currency L1 nodes.
+
+```java
+import io.constellationnetwork.metagraph.sdk.*;
+
+NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
+    .l1Url("http://localhost:9010")
+    .timeout(30)  // optional, defaults to 30s
+    .build();
+
+CurrencyL1Client client = new CurrencyL1Client(config);
+
+// Get last transaction reference for an address
+CurrencyTypes.TransactionReference lastRef = client.getLastReference("DAG...");
+
+// Submit a signed transaction
+NetworkTypes.PostTransactionResponse result = client.postTransaction(signedTx);
+System.out.println("Transaction hash: " + result.getHash());
+
+// Check pending transaction status
+NetworkTypes.PendingTransaction pending = client.getPendingTransaction(result.getHash());
+if (pending != null) {
+    System.out.println("Status: " + pending.getStatus());  // Waiting, InProgress, Accepted
+}
+
+// Check node health
+boolean isHealthy = client.checkHealth();
+```
+
+#### `DataL1Client`
+
+Client for interacting with Data L1 nodes (metagraphs).
+
+```java
+import io.constellationnetwork.metagraph.sdk.*;
+
+NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
+    .dataL1Url("http://localhost:8080")
+    .build();
+
+DataL1Client client = new DataL1Client(config);
+
+// Estimate fee for data submission
+NetworkTypes.EstimateFeeResponse feeInfo = client.estimateFee(signedData);
+System.out.println("Fee: " + feeInfo.getFee() + ", Address: " + feeInfo.getAddress());
+
+// Submit signed data
+NetworkTypes.PostDataResponse result = client.postData(signedData);
+System.out.println("Data hash: " + result.getHash());
+
+// Check node health
+boolean isHealthy = client.checkHealth();
+```
+
+#### Combined Configuration
+
+```java
+NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
+    .l1Url("http://localhost:9010")      // Currency L1
+    .dataL1Url("http://localhost:8080")  // Data L1
+    .timeout(30)
+    .build();
+
+CurrencyL1Client l1Client = new CurrencyL1Client(config);
+DataL1Client dataClient = new DataL1Client(config);
+```
+
+#### Network Types
+
+```java
+// NetworkTypes.NetworkConfig - Builder pattern
+NetworkConfig.Builder()
+    .l1Url(String)        // Currency L1 endpoint
+    .dataL1Url(String)    // Data L1 endpoint
+    .timeout(int)         // Request timeout in seconds
+    .build()
+
+// NetworkTypes.PostTransactionResponse
+String getHash()
+
+// NetworkTypes.PendingTransaction
+String getHash()
+TransactionStatus getStatus()  // Waiting, InProgress, Accepted
+CurrencyTransaction getTransaction()
+
+// NetworkTypes.EstimateFeeResponse
+long getFee()
+String getAddress()
+
+// NetworkTypes.PostDataResponse
+String getHash()
+
+// NetworkTypes.NetworkException extends RuntimeException
+int getStatusCode()
+String getResponse()
+```
+
 ## Types
 
 ```java

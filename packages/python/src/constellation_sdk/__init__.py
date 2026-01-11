@@ -46,6 +46,20 @@ from .currency_types import (
 # Hashing
 from .hash import compute_digest, hash_bytes, hash_data
 
+# Network operations
+from .network import (
+    CurrencyL1Client,
+    DataL1Client,
+    EstimateFeeResponse,
+    NetworkConfig,
+    NetworkError,
+    PendingTransaction,
+    PostDataResponse,
+    PostTransactionResponse,
+    RequestOptions,
+    TransactionStatus,
+)
+
 # Signing
 from .sign import sign, sign_data_update, sign_hash
 
@@ -138,4 +152,15 @@ __all__ = [
     "is_valid_dag_address",
     "token_to_units",
     "units_to_token",
+    # Network operations
+    "CurrencyL1Client",
+    "DataL1Client",
+    "NetworkConfig",
+    "NetworkError",
+    "RequestOptions",
+    "TransactionStatus",
+    "PendingTransaction",
+    "PostTransactionResponse",
+    "EstimateFeeResponse",
+    "PostDataResponse",
 ]

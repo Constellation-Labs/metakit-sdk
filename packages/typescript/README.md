@@ -38,9 +38,9 @@ console.log('Valid:', result.isValid);
 
 - **Data Transactions**: Sign and verify metagraph state updates for submission to data L1 endpoints
 - **Currency Transactions**: Create and sign metagraph token transfers (v2 format)
+- **Network Operations**: Submit transactions and query L1 nodes directly
 - **Multi-signature Support**: Add multiple signatures to transactions for multi-party authorization
 - **Cross-language Compatible**: Works seamlessly with Python, Rust, Go, and Java implementations
-- **Offline Transaction Creation**: Generate transactions without network access
 
 ## API Reference
 
@@ -313,6 +313,113 @@ unitsToToken(10050000000);  // 100.5
 TOKEN_DECIMALS;  // 1e-8
 ```
 
+### Network Operations
+
+#### `CurrencyL1Client`
+
+Client for interacting with Currency L1 nodes.
+
+```typescript
+import { CurrencyL1Client, NetworkConfig } from '@constellation-network/metagraph-sdk';
+
+const config: NetworkConfig = {
+  l1Url: 'http://localhost:9010',
+  timeout: 30000,  // optional, defaults to 30s
+};
+
+const client = new CurrencyL1Client(config);
+
+// Get last transaction reference for an address
+const lastRef = await client.getLastReference('DAG...');
+
+// Submit a signed transaction
+const result = await client.postTransaction(signedTx);
+console.log('Transaction hash:', result.hash);
+
+// Check pending transaction status
+const pending = await client.getPendingTransaction(result.hash);
+if (pending) {
+  console.log('Status:', pending.status);  // 'Waiting' | 'InProgress' | 'Accepted'
+}
+
+// Check node health
+const isHealthy = await client.checkHealth();
+```
+
+#### `DataL1Client`
+
+Client for interacting with Data L1 nodes (metagraphs).
+
+```typescript
+import { DataL1Client, NetworkConfig } from '@constellation-network/metagraph-sdk';
+
+const config: NetworkConfig = {
+  dataL1Url: 'http://localhost:8080',
+};
+
+const client = new DataL1Client(config);
+
+// Estimate fee for data submission
+const feeInfo = await client.estimateFee(signedData);
+console.log('Fee:', feeInfo.fee, 'Address:', feeInfo.address);
+
+// Submit signed data
+const result = await client.postData(signedData);
+console.log('Data hash:', result.hash);
+
+// Check node health
+const isHealthy = await client.checkHealth();
+```
+
+#### Combined Configuration
+
+You can configure both L1 clients from a single config:
+
+```typescript
+const config: NetworkConfig = {
+  l1Url: 'http://localhost:9010',      // Currency L1
+  dataL1Url: 'http://localhost:8080',  // Data L1
+  timeout: 30000,
+};
+
+const l1Client = new CurrencyL1Client(config);
+const dataClient = new DataL1Client(config);
+```
+
+#### Network Types
+
+```typescript
+interface NetworkConfig {
+  l1Url?: string;       // Currency L1 endpoint
+  dataL1Url?: string;   // Data L1 endpoint
+  timeout?: number;     // Request timeout in ms
+}
+
+interface PostTransactionResponse {
+  hash: string;
+}
+
+interface PendingTransaction {
+  hash: string;
+  status: 'Waiting' | 'InProgress' | 'Accepted';
+  transaction: CurrencyTransaction;
+}
+
+interface EstimateFeeResponse {
+  fee: number;
+  address: string;
+}
+
+interface PostDataResponse {
+  hash: string;
+}
+
+class NetworkError extends Error {
+  statusCode?: number;
+  response?: string;
+}
+```
+
 ## Usage Examples
 
 ### Data Transactions
@@ -320,7 +427,7 @@ TOKEN_DECIMALS;  // 1e-8
 #### Submit DataUpdate to L1
 
 ```typescript
-import { createSignedObject } from '@constellation-network/metagraph-sdk';
+import { createSignedObject, DataL1Client } from '@constellation-network/metagraph-sdk';
 
 // Your metagraph data update
 const dataUpdate = {
@@ -335,12 +442,10 @@ const signed = await createSignedObject(dataUpdate, privateKey, {
   isDataUpdate: true
 });
 
-// Submit to data-l1
-const response = await fetch('http://l1-node:9300/data', {
-  method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify(signed)
-});
+// Submit to data-l1 using the client
+const client = new DataL1Client({ dataL1Url: 'http://l1-node:9300' });
+const result = await client.postData(signed);
+console.log('Submitted with hash:', result.hash);
 ```
 
 ### Multi-Signature Workflow
@@ -364,24 +469,25 @@ console.log(`${result.validProofs.length} valid signatures`);
 
 ### Currency Transactions
 
-#### Create and Verify Token Transaction
+#### Create and Submit Token Transaction
 
 ```typescript
 import {
   generateKeyPair,
   createCurrencyTransaction,
   verifyCurrencyTransaction,
+  CurrencyL1Client,
 } from '@constellation-network/metagraph-sdk';
+
+// Set up L1 client
+const client = new CurrencyL1Client({ l1Url: 'http://localhost:9010' });
 
 // Generate keys
 const senderKey = generateKeyPair();
 const recipientKey = generateKeyPair();
 
-// Get last transaction reference (from network or previous transaction)
-const lastRef = {
-  hash: 'abc123...previous-tx-hash',
-  ordinal: 5
-};
+// Get last transaction reference from the network
+const lastRef = await client.getLastReference(senderKey.address);
 
 // Create transaction
 const tx = await createCurrencyTransaction(
@@ -394,12 +500,17 @@ const tx = await createCurrencyTransaction(
   lastRef
 );
 
-// Verify
+// Verify locally before submitting
 const result = await verifyCurrencyTransaction(tx);
 console.log('Transaction valid:', result.isValid);
 
-// Note: Network submission not yet implemented in this SDK
-// You can submit the transaction using dag4.js or custom network code
+// Submit to network
+const response = await client.postTransaction(tx);
+console.log('Transaction hash:', response.hash);
+
+// Poll for status
+const pending = await client.getPendingTransaction(response.hash);
+console.log('Status:', pending?.status);
 ```
 
 #### Batch Token Transactions

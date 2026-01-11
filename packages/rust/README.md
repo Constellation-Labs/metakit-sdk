@@ -301,6 +301,121 @@ units_to_token(10050000000);  // 100.5
 TOKEN_DECIMALS;  // 1e-8
 ```
 
+### Network Operations
+
+Enable the `network` feature in your `Cargo.toml`:
+
+```toml
+[dependencies]
+constellation-metagraph-sdk = { version = "0.1", features = ["network"] }
+```
+
+#### `CurrencyL1Client`
+
+Client for interacting with Currency L1 nodes.
+
+```rust
+use constellation_sdk::network::{CurrencyL1Client, NetworkConfig};
+
+let config = NetworkConfig {
+    l1_url: Some("http://localhost:9010".to_string()),
+    timeout: Some(30),  // optional, defaults to 30s
+    ..Default::default()
+};
+
+let client = CurrencyL1Client::new(config)?;
+
+// Get last transaction reference for an address
+let last_ref = client.get_last_reference("DAG...").await?;
+
+// Submit a signed transaction
+let result = client.post_transaction(&signed_tx).await?;
+println!("Transaction hash: {}", result.hash);
+
+// Check pending transaction status
+if let Some(pending) = client.get_pending_transaction(&result.hash).await? {
+    println!("Status: {:?}", pending.status);  // Waiting, InProgress, or Accepted
+}
+
+// Check node health
+let is_healthy = client.check_health().await;
+```
+
+#### `DataL1Client`
+
+Client for interacting with Data L1 nodes (metagraphs).
+
+```rust
+use constellation_sdk::network::{DataL1Client, NetworkConfig};
+
+let config = NetworkConfig {
+    data_l1_url: Some("http://localhost:8080".to_string()),
+    ..Default::default()
+};
+
+let client = DataL1Client::new(config)?;
+
+// Estimate fee for data submission
+let fee_info = client.estimate_fee(&signed_data).await?;
+println!("Fee: {}, Address: {}", fee_info.fee, fee_info.address);
+
+// Submit signed data
+let result = client.post_data(&signed_data).await?;
+println!("Data hash: {}", result.hash);
+
+// Check node health
+let is_healthy = client.check_health().await;
+```
+
+#### Combined Configuration
+
+```rust
+let config = NetworkConfig {
+    l1_url: Some("http://localhost:9010".to_string()),      // Currency L1
+    data_l1_url: Some("http://localhost:8080".to_string()), // Data L1
+    timeout: Some(30),
+};
+
+let l1_client = CurrencyL1Client::new(config.clone())?;
+let data_client = DataL1Client::new(config)?;
+```
+
+#### Network Types
+
+```rust
+pub struct NetworkConfig {
+    pub l1_url: Option<String>,       // Currency L1 endpoint
+    pub data_l1_url: Option<String>,  // Data L1 endpoint
+    pub timeout: Option<u64>,         // Request timeout in seconds
+}
+
+pub struct PostTransactionResponse {
+    pub hash: String,
+}
+
+pub struct PendingTransaction {
+    pub hash: String,
+    pub status: TransactionStatus,  // Waiting, InProgress, Accepted
+    pub transaction: CurrencyTransaction,
+}
+
+pub struct EstimateFeeResponse {
+    pub fee: i64,
+    pub address: String,
+}
+
+pub struct PostDataResponse {
+    pub hash: String,
+}
+
+pub enum NetworkError {
+    HttpError { message: String, status_code: Option<u16>, response: Option<String> },
+    Timeout,
+    ConfigError(String),
+    SerializationError(String),
+}
+```
+
 ## Types
 
 ```rust

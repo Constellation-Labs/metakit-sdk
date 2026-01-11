@@ -251,6 +251,114 @@ units := constellation.TokenToUnits(100.5)       // 10050000000
 tokens := constellation.UnitsToToken(10050000000) // 100.5
 ```
 
+### Network Operations
+
+#### `CurrencyL1Client`
+
+Client for interacting with Currency L1 nodes.
+
+```go
+config := constellation.NetworkConfig{
+    L1URL:   "http://localhost:9010",
+    Timeout: 30,  // optional, defaults to 30s
+}
+
+client, err := constellation.NewCurrencyL1Client(config)
+if err != nil {
+    return err
+}
+
+// Get last transaction reference for an address
+lastRef, err := client.GetLastReference("DAG...")
+
+// Submit a signed transaction
+result, err := client.PostTransaction(signedTx)
+fmt.Printf("Transaction hash: %s\n", result.Hash)
+
+// Check pending transaction status
+pending, err := client.GetPendingTransaction(result.Hash)
+if pending != nil {
+    fmt.Printf("Status: %s\n", pending.Status)  // "Waiting", "InProgress", "Accepted"
+}
+
+// Check node health
+isHealthy := client.CheckHealth()
+```
+
+#### `DataL1Client`
+
+Client for interacting with Data L1 nodes (metagraphs).
+
+```go
+config := constellation.NetworkConfig{
+    DataL1URL: "http://localhost:8080",
+}
+
+client, err := constellation.NewDataL1Client(config)
+if err != nil {
+    return err
+}
+
+// Estimate fee for data submission
+feeInfo, err := client.EstimateFee(signedData)
+fmt.Printf("Fee: %d, Address: %s\n", feeInfo.Fee, feeInfo.Address)
+
+// Submit signed data
+result, err := client.PostData(signedData)
+fmt.Printf("Data hash: %s\n", result.Hash)
+
+// Check node health
+isHealthy := client.CheckHealth()
+```
+
+#### Combined Configuration
+
+```go
+config := constellation.NetworkConfig{
+    L1URL:     "http://localhost:9010",  // Currency L1
+    DataL1URL: "http://localhost:8080",  // Data L1
+    Timeout:   30,
+}
+
+l1Client, _ := constellation.NewCurrencyL1Client(config)
+dataClient, _ := constellation.NewDataL1Client(config)
+```
+
+#### Network Types
+
+```go
+type NetworkConfig struct {
+    L1URL     string  // Currency L1 endpoint
+    DataL1URL string  // Data L1 endpoint
+    Timeout   int     // Request timeout in seconds
+}
+
+type PostTransactionResponse struct {
+    Hash string `json:"hash"`
+}
+
+type PendingTransaction struct {
+    Hash        string              `json:"hash"`
+    Status      TransactionStatus   `json:"status"`  // "Waiting", "InProgress", "Accepted"
+    Transaction CurrencyTransaction `json:"transaction"`
+}
+
+type EstimateFeeResponse struct {
+    Fee     int64  `json:"fee"`
+    Address string `json:"address"`
+}
+
+type PostDataResponse struct {
+    Hash string `json:"hash"`
+}
+
+type NetworkError struct {
+    Message    string
+    StatusCode int
+    Response   string
+}
+```
+
 ## Types
 
 ```go

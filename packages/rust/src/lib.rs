@@ -71,6 +71,9 @@ pub mod types;
 pub mod verify;
 pub mod wallet;
 
+#[cfg(feature = "network")]
+pub mod network;
+
 // Re-export commonly used items at the crate root
 pub use types::{
     Hash, KeyPair, Result, SdkError, SignatureProof, Signed, SigningOptions, VerificationResult,
