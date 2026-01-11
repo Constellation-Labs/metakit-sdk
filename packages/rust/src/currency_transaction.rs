@@ -42,8 +42,8 @@ pub fn is_valid_dag_address(address: &str) -> bool {
         return false;
     }
     // Remaining 36 characters must be base58 (no 0, O, I, l)
-    let re = Regex::new(r"^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$")
-        .unwrap();
+    let re =
+        Regex::new(r"^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$").unwrap();
     re.is_match(&address[4..])
 }
 
@@ -77,7 +77,7 @@ fn encode_transaction(tx: &CurrencyTransaction) -> String {
 
     // Convert salt to hex
     let salt_int = tx.value.salt.parse::<BigUint>().unwrap();
-    let salt_hex = format!("{:x}", salt_int);
+    let salt_hex = format!("{salt_int:x}");
 
     // Build encoded string (length-prefixed format)
     format!(
@@ -219,7 +219,9 @@ pub fn create_currency_transaction(
 
     // Validate addresses
     if !is_valid_dag_address(&source) {
-        return Err(SdkError::InvalidAddress("Invalid source address".to_string()));
+        return Err(SdkError::InvalidAddress(
+            "Invalid source address".to_string(),
+        ));
     }
     if !is_valid_dag_address(&params.destination) {
         return Err(SdkError::InvalidAddress(
@@ -408,7 +410,7 @@ pub fn hash_currency_transaction(transaction: &CurrencyTransaction) -> Hash {
     let hash_bytes = hasher.finalize();
 
     Hash {
-        value: hex::encode(&hash_bytes),
+        value: hex::encode(hash_bytes),
         bytes: hash_bytes.to_vec(),
     }
 }

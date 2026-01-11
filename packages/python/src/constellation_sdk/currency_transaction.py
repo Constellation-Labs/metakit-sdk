@@ -14,9 +14,9 @@ from ecdsa import SECP256k1, SigningKey, VerifyingKey
 from ecdsa.util import sigdecode_der, sigencode_der
 
 from .currency_types import (
+    TOKEN_DECIMALS,
     CurrencyTransaction,
     CurrencyTransactionValue,
-    TOKEN_DECIMALS,
     TransactionReference,
     TransferParams,
 )
@@ -84,7 +84,9 @@ def is_valid_dag_address(address: str) -> bool:
     if not address[3].isdigit() or int(address[3]) > 8:
         return False
     # Remaining 36 characters must be base58 (no 0, O, I, l)
-    base58_pattern = re.compile(r"^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$")
+    base58_pattern = re.compile(
+        r"^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$"
+    )
     return bool(base58_pattern.match(address[4:]))
 
 
@@ -159,6 +161,7 @@ def _kryo_serialize(msg: str, set_references: bool = True) -> bytes:
     Returns:
         Serialized bytes
     """
+
     # UTF-8 length encoding
     def utf8_length(value: int) -> bytes:
         """Encode length as variable-length integer."""
@@ -169,20 +172,24 @@ def _kryo_serialize(msg: str, set_references: bool = True) -> bytes:
         elif value >> 20 == 0:
             return bytes([value | 0x40 | 0x80, (value >> 6) | 0x80, value >> 13])
         elif value >> 27 == 0:
-            return bytes([
-                value | 0x40 | 0x80,
-                (value >> 6) | 0x80,
-                (value >> 13) | 0x80,
-                value >> 20,
-            ])
+            return bytes(
+                [
+                    value | 0x40 | 0x80,
+                    (value >> 6) | 0x80,
+                    (value >> 13) | 0x80,
+                    value >> 20,
+                ]
+            )
         else:
-            return bytes([
-                value | 0x40 | 0x80,
-                (value >> 6) | 0x80,
-                (value >> 13) | 0x80,
-                (value >> 20) | 0x80,
-                value >> 27,
-            ])
+            return bytes(
+                [
+                    value | 0x40 | 0x80,
+                    (value >> 6) | 0x80,
+                    (value >> 13) | 0x80,
+                    (value >> 20) | 0x80,
+                    value >> 27,
+                ]
+            )
 
     # Build serialized message
     prefix_bytes = bytes([0x03])
@@ -452,7 +459,9 @@ def hash_currency_transaction(transaction: CurrencyTransaction) -> Hash:
     return Hash(value=hash_bytes.hex(), bytes=hash_bytes)
 
 
-def get_transaction_reference(transaction: CurrencyTransaction, ordinal: int) -> TransactionReference:
+def get_transaction_reference(
+    transaction: CurrencyTransaction, ordinal: int
+) -> TransactionReference:
     """
     Get transaction reference from a currency transaction.
 
@@ -497,7 +506,7 @@ def _sign_hash(hash_hex: str, private_key: str) -> str:
 
     # Sign with ECDSA
     sk = SigningKey.from_string(bytes.fromhex(private_key), curve=SECP256k1)
-    signature_bytes = sk.sign_digest(digest, sigencode=sigencode_der)
+    signature_bytes: bytes = sk.sign_digest(digest, sigencode=sigencode_der)
 
     return signature_bytes.hex()
 

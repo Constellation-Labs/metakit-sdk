@@ -197,13 +197,10 @@ public class Example {
 }
 ```
 
-## Usage Guide
+## Usage Examples
 
 ### Data Transactions
 
-Data transactions are used for submitting state updates to metagraph data L1 endpoints.
-
-#### TypeScript
 ```typescript
 import { createSignedObject, addSignature } from '@constellation-network/metagraph-sdk';
 
@@ -216,28 +213,13 @@ let multiSig = await createSignedObject(data, privateKey1, { isDataUpdate: true 
 multiSig = await addSignature(multiSig, privateKey2, { isDataUpdate: true });
 ```
 
-#### Python
-```python
-from constellation_sdk import create_signed_object, add_signature
-
-# Single signature
-data = {'action': 'UPDATE', 'users': [{'id': 1, 'name': 'Alice'}]}
-signed = create_signed_object(data, private_key, is_data_update=True)
-
-# Multi-signature
-multi_sig = create_signed_object(data, private_key1, is_data_update=True)
-multi_sig = add_signature(multi_sig, private_key2, is_data_update=True)
-```
-
 ### Currency Transactions
 
-Currency transactions are used for metagraph token transfers.
-
-#### TypeScript
 ```typescript
 import {
   createCurrencyTransaction,
   verifyCurrencyTransaction,
+  signCurrencyTransaction,
   generateKeyPair
 } from '@constellation-network/metagraph-sdk';
 
@@ -258,135 +240,18 @@ const tx = await createCurrencyTransaction(
 // Verify the transaction
 const result = await verifyCurrencyTransaction(tx);
 console.log('Valid:', result.isValid);
+
+// Multi-signature: Party 2 adds their signature
+const multiSigTx = await signCurrencyTransaction(tx, privateKey2);
+// Now multiSigTx.proofs.length === 2
 ```
 
-#### Python
-```python
-from constellation_sdk.currency_transaction import (
-    create_currency_transaction,
-    verify_currency_transaction,
-)
-from constellation_sdk.currency_types import TransferParams, TransactionReference
-from constellation_sdk import generate_key_pair
-
-# Generate key pair
-key_pair = generate_key_pair()
-
-# Create a transaction
-tx = create_currency_transaction(
-    TransferParams(
-        destination='DAG88C9WDSKH5CYZTCEOZD...',  # Recipient address
-        amount=100.5,                             # Amount in tokens
-        fee=0,                                    # Transaction fee
-    ),
-    key_pair.private_key,
-    TransactionReference(hash='parent_tx_hash...', ordinal=5)
-)
-
-# Verify the transaction
-result = verify_currency_transaction(tx)
-print(f'Valid: {result.is_valid}')
-```
-
-#### Rust
-```rust
-use constellation_sdk::{
-    wallet::generate_key_pair,
-    currency_transaction::{create_currency_transaction, verify_currency_transaction},
-    currency_types::{TransferParams, TransactionReference},
-};
-
-// Generate key pair
-let key_pair = generate_key_pair();
-
-// Create a transaction
-let tx = create_currency_transaction(
-    &TransferParams {
-        destination: "DAG88C9WDSKH5CYZTCEOZD...".to_string(),
-        amount: 100.5,
-        fee: Some(0.0),
-    },
-    &key_pair.private_key,
-    &TransactionReference {
-        hash: "parent_tx_hash...".to_string(),
-        ordinal: 5,
-    },
-)?;
-
-// Verify the transaction
-let result = verify_currency_transaction(&tx);
-println!("Valid: {}", result.is_valid);
-```
-
-#### Go
-```go
-import constellation "github.com/Constellation-Labs/metakit-sdk/packages/go"
-
-// Generate key pair
-keyPair, _ := constellation.GenerateKeyPair()
-
-// Create a transaction
-tx, _ := constellation.CreateCurrencyTransaction(
-    constellation.TransferParams{
-        Destination: "DAG88C9WDSKH5CYZTCEOZD...",
-        Amount:      100.5,
-        Fee:         0,
-    },
-    keyPair.PrivateKey,
-    constellation.TransactionReference{
-        Hash:    "parent_tx_hash...",
-        Ordinal: 5,
-    },
-)
-
-// Verify the transaction
-result := constellation.VerifyCurrencyTransaction(tx)
-fmt.Println("Valid:", result.IsValid)
-```
-
-#### Java
-```java
-import io.constellationnetwork.metagraph.sdk.*;
-
-// Generate key pair
-Types.KeyPair keyPair = Wallet.generateKeyPair();
-
-// Create a transaction
-CurrencyTypes.CurrencyTransaction tx = CurrencyTransaction.createCurrencyTransaction(
-    new CurrencyTypes.TransferParams(
-        "DAG88C9WDSKH5CYZTCEOZD...",  // destination
-        100.5,                         // amount
-        0.0                            // fee
-    ),
-    keyPair.getPrivateKey(),
-    new CurrencyTypes.TransactionReference("parent_tx_hash...", 5L)
-);
-
-// Verify the transaction
-Types.VerificationResult result = CurrencyTransaction.verifyCurrencyTransaction(tx);
-System.out.println("Valid: " + result.isValid());
-```
-
-### Multi-Signature Currency Transactions
-
-```typescript
-import { createCurrencyTransaction, signCurrencyTransaction } from '@constellation-network/metagraph-sdk';
-
-// Party 1 creates the transaction
-let tx = await createCurrencyTransaction(params, privateKey1, lastRef);
-
-// Party 2 adds their signature
-tx = await signCurrencyTransaction(tx, privateKey2);
-
-// Now tx has 2 signatures (tx.proofs.length === 2)
-```
-
-For complete API documentation, see the individual package READMEs:
-- [TypeScript API](./packages/typescript/README.md)
-- [Python API](./packages/python/README.md)
-- [Rust API](./packages/rust/README.md)
-- [Go API](./packages/go/README.md)
-- [Java API](./packages/java/README.md)
+**For language-specific examples and complete API documentation:**
+- [TypeScript](./packages/typescript/README.md) - Node.js and browser
+- [Python](./packages/python/README.md) - Python 3.10+
+- [Rust](./packages/rust/README.md) - Safe and performant
+- [Go](./packages/go/README.md) - Simple and efficient
+- [Java](./packages/java/README.md) - JVM 11+
 
 ## Development
 

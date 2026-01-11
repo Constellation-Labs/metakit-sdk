@@ -124,7 +124,7 @@ pub fn get_address(public_key: &str) -> String {
     let normalized_key = normalize_public_key(public_key);
 
     // Prepend PKCS prefix
-    let pkcs_encoded = format!("{}{}", PKCS_PREFIX, normalized_key);
+    let pkcs_encoded = format!("{PKCS_PREFIX}{normalized_key}");
 
     // SHA-256 hash
     let pkcs_bytes = hex::decode(&pkcs_encoded).unwrap_or_default();
@@ -151,7 +151,7 @@ pub fn get_address(public_key: &str) -> String {
     let parity = digit_sum % 9;
 
     // Return with DAG prefix, parity, and last36
-    format!("DAG{}{}", parity, last36)
+    format!("DAG{parity}{last36}")
 }
 
 /// Validate that a private key is correctly formatted
@@ -186,7 +186,7 @@ pub fn is_valid_public_key(public_key: &str) -> bool {
 /// Normalize public key to include 04 prefix
 pub fn normalize_public_key(public_key: &str) -> String {
     if public_key.len() == 128 {
-        format!("04{}", public_key)
+        format!("04{public_key}")
     } else {
         public_key.to_string()
     }

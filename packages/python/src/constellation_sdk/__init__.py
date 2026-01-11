@@ -20,6 +20,29 @@ from .canonicalize import canonicalize, canonicalize_bytes
 # Codec utilities
 from .codec import decode_data_update
 
+# Currency transaction operations
+from .currency_transaction import (
+    create_currency_transaction,
+    create_currency_transaction_batch,
+    encode_currency_transaction,
+    get_transaction_reference,
+    hash_currency_transaction,
+    is_valid_dag_address,
+    sign_currency_transaction,
+    token_to_units,
+    units_to_token,
+    verify_currency_transaction,
+)
+
+# Currency transaction types
+from .currency_types import (
+    TOKEN_DECIMALS,
+    CurrencyTransaction,
+    CurrencyTransactionValue,
+    TransactionReference,
+    TransferParams,
+)
+
 # Hashing
 from .hash import compute_digest, hash_bytes, hash_data
 
@@ -52,29 +75,6 @@ from .wallet import (
     is_valid_private_key,
     is_valid_public_key,
     key_pair_from_private_key,
-)
-
-# Currency transaction types
-from .currency_types import (
-    TOKEN_DECIMALS,
-    CurrencyTransactionValue,
-    CurrencyTransaction,
-    TransactionReference,
-    TransferParams,
-)
-
-# Currency transaction operations
-from .currency_transaction import (
-    create_currency_transaction,
-    create_currency_transaction_batch,
-    encode_currency_transaction,
-    get_transaction_reference,
-    hash_currency_transaction,
-    is_valid_dag_address,
-    sign_currency_transaction,
-    token_to_units,
-    units_to_token,
-    verify_currency_transaction,
 )
 
 __all__ = [

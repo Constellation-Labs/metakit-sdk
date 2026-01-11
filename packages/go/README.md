@@ -169,6 +169,88 @@ Get the public key ID (128 chars, no 04 prefix) for use in proofs.
 id, _ := constellation.GetPublicKeyID(privateKey)
 ```
 
+### Currency Transactions
+
+#### `CreateCurrencyTransaction(params TransferParams, privateKey string, lastRef TransactionReference) (*CurrencyTransaction, error)`
+
+Create a metagraph token transaction.
+
+```go
+tx, err := constellation.CreateCurrencyTransaction(
+    constellation.TransferParams{
+        Destination: "DAG88C9WDSKH5CYZTCEOZD...",
+        Amount:      100.5, // Tokens
+        Fee:         0,
+    },
+    privateKey,
+    constellation.TransactionReference{Hash: "parent_hash...", Ordinal: 5},
+)
+```
+
+#### `VerifyCurrencyTransaction(transaction *CurrencyTransaction) *VerificationResult`
+
+Verify all signatures on a currency transaction.
+
+```go
+result := constellation.VerifyCurrencyTransaction(tx)
+if result.IsValid {
+    fmt.Printf("Valid: %d proofs\n", len(result.ValidProofs))
+}
+```
+
+#### `SignCurrencyTransaction(transaction *CurrencyTransaction, privateKey string) (*CurrencyTransaction, error)`
+
+Add an additional signature to a currency transaction (multi-sig).
+
+```go
+// Add second signature
+txMultiSig, err := constellation.SignCurrencyTransaction(tx, privateKey2)
+// txMultiSig.Proofs has 2 signatures now
+```
+
+#### `CreateCurrencyTransactionBatch(transfers []TransferParams, privateKey string, lastRef TransactionReference) ([]*CurrencyTransaction, error)`
+
+Create multiple currency transactions in a batch.
+
+```go
+transactions, err := constellation.CreateCurrencyTransactionBatch(
+    []constellation.TransferParams{
+        {Destination: "DAG...1", Amount: 10, Fee: 0},
+        {Destination: "DAG...2", Amount: 20, Fee: 0},
+    },
+    privateKey,
+    lastRef,
+)
+```
+
+#### `HashCurrencyTransaction(transaction *CurrencyTransaction) *Hash`
+
+Hash a currency transaction.
+
+```go
+hash := constellation.HashCurrencyTransaction(tx)
+fmt.Println("Hash:", hash.Value)
+```
+
+#### `IsValidDAGAddress(address string) bool`
+
+Validate a DAG address format.
+
+```go
+if constellation.IsValidDAGAddress("DAG88C9WDSKH5CYZTCEOZD...") {
+    fmt.Println("Valid address")
+}
+```
+
+#### `TokenToUnits(amount float64) int64` / `UnitsToToken(units int64) float64`
+
+Convert between token amounts and smallest units (1e-8).
+
+```go
+units := constellation.TokenToUnits(100.5)       // 10050000000
+tokens := constellation.UnitsToToken(10050000000) // 100.5
+```
+
 ## Types
 
 ```go

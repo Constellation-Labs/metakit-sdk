@@ -59,7 +59,7 @@ pub fn decode_data_update<T: DeserializeOwned>(data: &[u8]) -> Result<T> {
     // Decode base64
     let decoded_bytes = base64::engine::general_purpose::STANDARD
         .decode(base64_data)
-        .map_err(|e| SdkError::SerializationError(format!("Invalid base64: {}", e)))?;
+        .map_err(|e| SdkError::SerializationError(format!("Invalid base64: {e}")))?;
 
     // Parse JSON
     serde_json::from_slice(&decoded_bytes).map_err(|e| e.into())
@@ -87,7 +87,7 @@ mod tests {
 
     #[test]
     fn test_decode_invalid_format() {
-        let data = format!("{}invalid", CONSTELLATION_PREFIX);
+        let data = format!("{CONSTELLATION_PREFIX}invalid");
         let result: Result<Value> = decode_data_update(data.as_bytes());
         assert!(result.is_err());
     }

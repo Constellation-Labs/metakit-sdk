@@ -142,8 +142,7 @@ fn test_public_key_derivation() {
     let vectors = load_test_vectors();
     let basic = &vectors.test_vectors.basic_transaction;
 
-    let secret_key =
-        SecretKey::from_slice(&hex::decode(&basic.private_key_hex).unwrap()).unwrap();
+    let secret_key = SecretKey::from_slice(&hex::decode(&basic.private_key_hex).unwrap()).unwrap();
     let secp = Secp256k1::new();
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
     let public_key_hex = hex::encode(public_key.serialize_uncompressed());
@@ -156,8 +155,7 @@ fn test_address_derivation() {
     let vectors = load_test_vectors();
     let basic = &vectors.test_vectors.basic_transaction;
 
-    let secret_key =
-        SecretKey::from_slice(&hex::decode(&basic.private_key_hex).unwrap()).unwrap();
+    let secret_key = SecretKey::from_slice(&hex::decode(&basic.private_key_hex).unwrap()).unwrap();
     let secp = Secp256k1::new();
     let public_key = secp256k1::PublicKey::from_secret_key(&secp, &secret_key);
     let public_key_hex = hex::encode(public_key.serialize_uncompressed());
@@ -298,7 +296,11 @@ fn test_multi_signature() {
 
     assert!(result.is_valid, "Multi-sig transaction should be valid");
     assert_eq!(result.valid_proofs.len(), 2, "Should have 2 valid proofs");
-    assert_eq!(result.invalid_proofs.len(), 0, "Should have 0 invalid proofs");
+    assert_eq!(
+        result.invalid_proofs.len(),
+        0,
+        "Should have 0 invalid proofs"
+    );
 }
 
 #[test]

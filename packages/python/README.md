@@ -157,6 +157,101 @@ Get the public key ID (128 chars, no 04 prefix) for use in proofs.
 id = get_public_key_id(private_key)
 ```
 
+### Currency Transactions
+
+#### `create_currency_transaction(params, private_key, last_ref)`
+
+Create a metagraph token transaction.
+
+```python
+from constellation_sdk.currency_transaction import create_currency_transaction
+from constellation_sdk.currency_types import TransferParams, TransactionReference
+
+tx = create_currency_transaction(
+    TransferParams(
+        destination='DAG88C9WDSKH5CYZTCEOZD...',
+        amount=100.5,  # Tokens
+        fee=0,
+    ),
+    private_key,
+    TransactionReference(hash='parent_hash...', ordinal=5)
+)
+```
+
+#### `verify_currency_transaction(transaction)`
+
+Verify all signatures on a currency transaction.
+
+```python
+from constellation_sdk.currency_transaction import verify_currency_transaction
+
+result = verify_currency_transaction(tx)
+print(f'Valid: {result.is_valid}')
+print(f'Valid proofs: {len(result.valid_proofs)}')
+```
+
+#### `sign_currency_transaction(transaction, private_key)`
+
+Add an additional signature to a currency transaction (multi-sig).
+
+```python
+from constellation_sdk.currency_transaction import sign_currency_transaction
+
+# Add second signature
+tx_multi_sig = sign_currency_transaction(tx, private_key2)
+# tx_multi_sig.proofs has 2 signatures now
+```
+
+#### `create_currency_transaction_batch(transfers, private_key, last_ref)`
+
+Create multiple currency transactions in a batch.
+
+```python
+from constellation_sdk.currency_transaction import create_currency_transaction_batch
+
+transactions = create_currency_transaction_batch(
+    [
+        TransferParams(destination='DAG...1', amount=10, fee=0),
+        TransferParams(destination='DAG...2', amount=20, fee=0),
+    ],
+    private_key,
+    last_ref
+)
+```
+
+#### `hash_currency_transaction(transaction)`
+
+Hash a currency transaction.
+
+```python
+from constellation_sdk.currency_transaction import hash_currency_transaction
+
+hash_result = hash_currency_transaction(tx)
+print(f'Hash: {hash_result.value}')
+```
+
+#### `is_valid_dag_address(address)`
+
+Validate a DAG address format.
+
+```python
+from constellation_sdk.currency_transaction import is_valid_dag_address
+
+if is_valid_dag_address('DAG88C9WDSKH5CYZTCEOZD...'):
+    print('Valid address')
+```
+
+#### `token_to_units(amount)` / `units_to_token(units)`
+
+Convert between token amounts and smallest units (1e-8).
+
+```python
+from constellation_sdk.currency_transaction import token_to_units, units_to_token
+
+units = token_to_units(100.5)  # 10050000000
+tokens = units_to_token(10050000000)  # 100.5
+```
+
 ## Types
 
 ```python

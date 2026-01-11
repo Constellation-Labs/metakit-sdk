@@ -2,10 +2,9 @@
 
 use constellation_sdk::{
     create_currency_transaction, create_currency_transaction_batch, encode_currency_transaction,
-    generate_key_pair, get_transaction_reference, hash_currency_transaction,
-    is_valid_dag_address, sign_currency_transaction, token_to_units, units_to_token,
-    verify_currency_transaction, SignatureProof, TransactionReference, TransferParams,
-    TOKEN_DECIMALS,
+    generate_key_pair, get_transaction_reference, hash_currency_transaction, is_valid_dag_address,
+    sign_currency_transaction, token_to_units, units_to_token, verify_currency_transaction,
+    SignatureProof, TransactionReference, TransferParams, TOKEN_DECIMALS,
 };
 
 #[cfg(test)]
@@ -213,8 +212,8 @@ mod batch_transactions {
             },
         ];
 
-        let txns = create_currency_transaction_batch(transfers, &key_pair.private_key, last_ref)
-            .unwrap();
+        let txns =
+            create_currency_transaction_batch(transfers, &key_pair.private_key, last_ref).unwrap();
 
         assert_eq!(txns.len(), 3);
         assert_eq!(txns[0].value.amount, 1000000000); // 10 * 1e8

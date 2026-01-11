@@ -4,7 +4,6 @@ import pytest
 
 from constellation_sdk import (
     TOKEN_DECIMALS,
-    CurrencyTransaction,
     TransactionReference,
     TransferParams,
     create_currency_transaction,

@@ -5,10 +5,8 @@ Validates Python implementation against reference test vectors from tessellation
 """
 
 import json
-import os
 from pathlib import Path
 
-import pytest
 from ecdsa import SECP256k1, SigningKey
 
 from constellation_sdk.currency_transaction import (
@@ -26,7 +24,9 @@ from constellation_sdk.types import SignatureProof, Signed
 from constellation_sdk.wallet import get_address
 
 # Load test vectors
-VECTORS_PATH = Path(__file__).parent.parent.parent.parent / "shared" / "currency_transaction_vectors.json"
+VECTORS_PATH = (
+    Path(__file__).parent.parent.parent.parent / "shared" / "currency_transaction_vectors.json"
+)
 with open(VECTORS_PATH) as f:
     test_vectors = json.load(f)
 
@@ -141,10 +141,9 @@ class TestSignatureVerification:
             amount=tx_data["amount"],
             fee=tx_data["fee"],
             parent=TransactionReference(
-                hash=tx_data["parent"]["hash"],
-                ordinal=tx_data["parent"]["ordinal"]
+                hash=tx_data["parent"]["hash"], ordinal=tx_data["parent"]["ordinal"]
             ),
-            salt=str(tx_data["salt"])
+            salt=str(tx_data["salt"]),
         )
 
         tx = Signed(
@@ -175,10 +174,9 @@ class TestSignatureVerification:
             amount=tx_data["amount"],
             fee=tx_data["fee"],
             parent=TransactionReference(
-                hash=tx_data["parent"]["hash"],
-                ordinal=tx_data["parent"]["ordinal"]
+                hash=tx_data["parent"]["hash"], ordinal=tx_data["parent"]["ordinal"]
             ),
-            salt=str(tx_data["salt"])
+            salt=str(tx_data["salt"]),
         )
 
         # Convert dict proofs to SignatureProof objects

@@ -30,10 +30,8 @@ fn load_test_vectors() -> Vec<TestVector> {
         .join("shared")
         .join("test_vectors.json");
 
-    let content = fs::read_to_string(&vectors_path).expect(&format!(
-        "Failed to read test vectors from {:?}",
-        vectors_path
-    ));
+    let content = fs::read_to_string(&vectors_path)
+        .unwrap_or_else(|_| panic!("Failed to read test vectors from {vectors_path:?}"));
 
     serde_json::from_str(&content).expect("Failed to parse test vectors")
 }
@@ -150,8 +148,7 @@ mod by_source_language {
 
         assert!(
             !lang_vectors.is_empty(),
-            "No test vectors found for {}",
-            language
+            "No test vectors found for {language}"
         );
 
         for vector in lang_vectors {
@@ -162,8 +159,7 @@ mod by_source_language {
 
                 assert_eq!(
                     hash.value, vector.sha256_hash_hex,
-                    "{} TestData hash mismatch",
-                    language
+                    "{language} TestData hash mismatch"
                 );
 
                 let is_valid = verify_hash(
@@ -175,8 +171,7 @@ mod by_source_language {
 
                 assert!(
                     is_valid,
-                    "{} TestData signature verification failed",
-                    language
+                    "{language} TestData signature verification failed"
                 );
             }
 
@@ -187,8 +182,7 @@ mod by_source_language {
 
                 assert_eq!(
                     hash.value, vector.sha256_hash_hex,
-                    "{} TestDataUpdate hash mismatch",
-                    language
+                    "{language} TestDataUpdate hash mismatch"
                 );
 
                 let is_valid = verify_hash(
@@ -200,8 +194,7 @@ mod by_source_language {
 
                 assert!(
                     is_valid,
-                    "{} TestDataUpdate signature verification failed",
-                    language
+                    "{language} TestDataUpdate signature verification failed"
                 );
             }
         }

@@ -91,12 +91,12 @@ pub use wallet::{
 };
 
 // Re-export currency transaction types and functions
-pub use currency_types::{
-    CurrencyTransaction, CurrencyTransactionValue, TransactionReference, TransferParams,
-    TOKEN_DECIMALS,
-};
 pub use currency_transaction::{
     create_currency_transaction, create_currency_transaction_batch, encode_currency_transaction,
     get_transaction_reference, hash_currency_transaction, is_valid_dag_address,
     sign_currency_transaction, token_to_units, units_to_token, verify_currency_transaction,
+};
+pub use currency_types::{
+    CurrencyTransaction, CurrencyTransactionValue, TransactionReference, TransferParams,
+    TOKEN_DECIMALS,
 };
