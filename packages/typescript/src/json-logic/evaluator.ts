@@ -212,7 +212,7 @@ const evalApply = (
       return evalFind(argExprs, ctx);
     case 'count':
       return evalCount(argExprs, ctx);
-    default:
+    default: {
       // Evaluate all arguments first
       const args: JsonLogicValue[] = [];
       for (const argExpr of argExprs) {
@@ -221,6 +221,7 @@ const evalApply = (
         args.push(result.value);
       }
       return applyOp(op, args);
+    }
   }
 };
 

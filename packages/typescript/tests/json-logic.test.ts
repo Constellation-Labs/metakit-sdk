@@ -13,6 +13,7 @@ describe('JSON Logic VM', () => {
       expect(jsonLogic.apply(1, {})).toBe(1);
       expect(jsonLogic.apply('hello', {})).toBe('hello');
       expect(jsonLogic.apply(true, {})).toBe(true);
+      // eslint-disable-next-line prefer-spread -- this is jsonLogic.apply(), not Function.prototype.apply()
       expect(jsonLogic.apply(null, {})).toBe(null);
       expect(jsonLogic.apply([1, 2, 3], {})).toEqual([1, 2, 3]);
       expect(jsonLogic.apply({ a: 1, b: 2 }, {})).toEqual({ a: 1, b: 2 });
