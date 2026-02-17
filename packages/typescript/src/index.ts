@@ -3,6 +3,16 @@
  *
  * TypeScript SDK for signing operations on Constellation Network metagraphs.
  *
+ * This is the **core** module containing signing, hashing, verification,
+ * and JSON Logic operations. It has no network dependencies.
+ *
+ * For network operations (connecting to ML0/CL1/DL1 nodes), import from
+ * the separate network module:
+ *
+ * ```typescript
+ * import { MetagraphClient } from '@constellation-network/metagraph-sdk/network';
+ * ```
+ *
  * @packageDocumentation
  */
 
@@ -74,7 +84,17 @@ export {
   unitsToToken,
 } from './currency-transaction';
 
-// Network operations
+// ============================================================
+// DEPRECATED: Network exports moved to separate entrypoint
+// ============================================================
+//
+// Network operations are now in a separate module to keep the
+// core SDK network-free. Import from '@constellation-network/metagraph-sdk/network'
+//
+// These re-exports are maintained for backwards compatibility
+// but will be removed in a future major version.
+//
+
 export { CurrencyL1Client, DataL1Client, HttpClient, NetworkError } from './network';
 export type {
   NetworkConfig,
