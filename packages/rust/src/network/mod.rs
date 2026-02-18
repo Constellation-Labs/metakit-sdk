@@ -1,6 +1,6 @@
 //! Network operations for Metagraph L1 node interactions
 //!
-//! This module provides clients for interacting with Constellation Network
+//! This module provides a unified client for interacting with Constellation Network
 //! metagraph nodes at various layers:
 //!
 //! - **ML0** (Metagraph L0): State channel operations
@@ -21,25 +21,22 @@
 //! ```ignore
 //! use constellation_sdk::network::{MetagraphClient, LayerType, create_metagraph_client};
 //!
-//! // Generic client for any layer
+//! // Currency L1 client
+//! let cl1 = create_metagraph_client("http://localhost:9300", LayerType::CL1)?;
+//! let last_ref = cl1.get_last_reference("DAG...").await?;
+//! cl1.post_transaction(&signed_tx).await?;
+//!
+//! // Data L1 client
 //! let dl1 = create_metagraph_client("http://localhost:9400", LayerType::DL1)?;
-//! let result = dl1.post_data(&signed_data).await?;
+//! let fee = dl1.estimate_fee(&signed_data).await?;
+//! dl1.post_data(&signed_data).await?;
 //!
-//! // Or use convenience clients
-//! use constellation_sdk::network::{CurrencyL1Client, NetworkConfig};
-//!
-//! let config = NetworkConfig {
-//!     l1_url: Some("http://localhost:9010".to_string()),
-//!     ..Default::default()
-//! };
-//!
-//! let client = CurrencyL1Client::new(config)?;
-//! let last_ref = client.get_last_reference("DAG...").await?;
+//! // Metagraph L0 client
+//! let ml0 = create_metagraph_client("http://localhost:9200", LayerType::ML0)?;
+//! let info = ml0.get_cluster_info().await?;
 //! ```
 
 mod client;
-mod currency_l1_client;
-mod data_l1_client;
 mod metagraph_client;
 mod types;
 
@@ -48,12 +45,11 @@ pub use metagraph_client::{
     create_metagraph_client, ClusterInfo, LayerType, MetagraphClient, MetagraphClientConfig,
 };
 
-// Convenience clients (backwards compatible)
-pub use currency_l1_client::CurrencyL1Client;
-pub use data_l1_client::DataL1Client;
-
 // HTTP client (for custom implementations)
 pub use client::HttpClient;
 
 // Types and errors
-pub use types::*;
+pub use types::{
+    EstimateFeeResponse, NetworkError, PendingTransaction, PostDataResponse,
+    PostTransactionResponse, RequestOptions, TransactionStatus,
+};

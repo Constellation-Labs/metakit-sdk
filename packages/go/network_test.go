@@ -6,50 +6,54 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCurrencyL1ClientRequiresL1URL(t *testing.T) {
-	config := NetworkConfig{}
-	_, err := NewCurrencyL1Client(config)
-	assert.ErrorIs(t, err, ErrL1URLRequired)
+func TestMetagraphClientRequiresBaseURL(t *testing.T) {
+	_, err := NewMetagraphClient("", LayerDL1)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "baseURL is required")
 }
 
-func TestCurrencyL1ClientCreatesWithValidConfig(t *testing.T) {
-	config := NetworkConfig{L1URL: "http://localhost:9010"}
-	client, err := NewCurrencyL1Client(config)
+func TestMetagraphClientRequiresLayer(t *testing.T) {
+	_, err := NewMetagraphClient("http://localhost:9400", "")
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "layer is required")
+}
+
+func TestMetagraphClientCreatesForDL1(t *testing.T) {
+	client, err := NewMetagraphClient("http://localhost:9400", LayerDL1)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
+	assert.Equal(t, LayerDL1, client.Layer())
 }
 
-func TestCurrencyL1ClientAcceptsOptionalTimeout(t *testing.T) {
-	config := NetworkConfig{
-		L1URL:   "http://localhost:9010",
-		Timeout: 5,
+func TestMetagraphClientCreatesForCL1(t *testing.T) {
+	client, err := NewMetagraphClient("http://localhost:9300", LayerCL1)
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+	assert.Equal(t, LayerCL1, client.Layer())
+}
+
+func TestMetagraphClientCreatesForML0(t *testing.T) {
+	client, err := NewMetagraphClient("http://localhost:9200", LayerML0)
+	assert.NoError(t, err)
+	assert.NotNil(t, client)
+	assert.Equal(t, LayerML0, client.Layer())
+}
+
+func TestMetagraphClientWithConfigTimeout(t *testing.T) {
+	config := MetagraphClientConfig{
+		BaseURL: "http://localhost:9400",
+		Layer:   LayerDL1,
+		Timeout: 5000,
 	}
-	client, err := NewCurrencyL1Client(config)
+	client, err := NewMetagraphClientWithConfig(config)
 	assert.NoError(t, err)
 	assert.NotNil(t, client)
 }
 
-func TestDataL1ClientRequiresDataL1URL(t *testing.T) {
-	config := NetworkConfig{}
-	_, err := NewDataL1Client(config)
-	assert.ErrorIs(t, err, ErrDataL1URLRequired)
-}
-
-func TestDataL1ClientCreatesWithValidConfig(t *testing.T) {
-	config := NetworkConfig{DataL1URL: "http://localhost:8080"}
-	client, err := NewDataL1Client(config)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
-}
-
-func TestDataL1ClientAcceptsOptionalTimeout(t *testing.T) {
-	config := NetworkConfig{
-		DataL1URL: "http://localhost:8080",
-		Timeout:   10,
-	}
-	client, err := NewDataL1Client(config)
-	assert.NoError(t, err)
-	assert.NotNil(t, client)
+func TestLayerTypeString(t *testing.T) {
+	assert.Equal(t, "ML0", LayerML0.String())
+	assert.Equal(t, "CL1", LayerCL1.String())
+	assert.Equal(t, "DL1", LayerDL1.String())
 }
 
 func TestNetworkErrorMessage(t *testing.T) {
@@ -71,18 +75,20 @@ func TestNetworkErrorWithResponseBody(t *testing.T) {
 	assert.Equal(t, `{"error":"invalid"}`, err.Response)
 }
 
-func TestCombinedConfigBothURLs(t *testing.T) {
-	config := NetworkConfig{
-		L1URL:     "http://localhost:9010",
-		DataL1URL: "http://localhost:8080",
-		Timeout:   30,
-	}
-
-	l1Client, err := NewCurrencyL1Client(config)
+func TestMultipleClientsForDifferentLayers(t *testing.T) {
+	cl1, err := NewMetagraphClient("http://localhost:9300", LayerCL1)
 	assert.NoError(t, err)
-	assert.NotNil(t, l1Client)
+	assert.NotNil(t, cl1)
 
-	dataClient, err := NewDataL1Client(config)
+	dl1, err := NewMetagraphClient("http://localhost:9400", LayerDL1)
 	assert.NoError(t, err)
-	assert.NotNil(t, dataClient)
+	assert.NotNil(t, dl1)
+
+	ml0, err := NewMetagraphClient("http://localhost:9200", LayerML0)
+	assert.NoError(t, err)
+	assert.NotNil(t, ml0)
+
+	assert.Equal(t, LayerCL1, cl1.Layer())
+	assert.Equal(t, LayerDL1, dl1.Layer())
+	assert.Equal(t, LayerML0, ml0.Layer())
 }

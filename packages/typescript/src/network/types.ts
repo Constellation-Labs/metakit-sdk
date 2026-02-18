@@ -7,18 +7,6 @@
 import type { CurrencyTransaction } from '../currency-types';
 
 /**
- * Network configuration for connecting to L1 nodes
- */
-export interface NetworkConfig {
-  /** Currency L1 endpoint URL (e.g., 'http://localhost:9010') */
-  l1Url?: string;
-  /** Data L1 endpoint URL (e.g., 'http://localhost:8080') */
-  dataL1Url?: string;
-  /** Request timeout in milliseconds (default: 30000) */
-  timeout?: number;
-}
-
-/**
  * HTTP request options
  */
 export interface RequestOptions {

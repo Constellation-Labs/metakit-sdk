@@ -9,20 +9,6 @@ from ..currency_types import CurrencyTransaction
 
 
 @dataclass
-class NetworkConfig:
-    """Network configuration for connecting to L1 nodes."""
-
-    l1_url: Optional[str] = None
-    """Currency L1 endpoint URL (e.g., 'http://localhost:9010')."""
-
-    data_l1_url: Optional[str] = None
-    """Data L1 endpoint URL (e.g., 'http://localhost:8080')."""
-
-    timeout: float = 30.0
-    """Request timeout in seconds (default: 30)."""
-
-
-@dataclass
 class RequestOptions:
     """HTTP request options."""
 

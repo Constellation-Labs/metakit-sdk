@@ -1,7 +1,7 @@
 /**
  * Network operations for Metagraph L1 node interactions
  *
- * This module provides clients for interacting with Constellation Network
+ * This module provides a unified client for interacting with Constellation Network
  * metagraph nodes at various layers:
  *
  * - **ML0** (Metagraph L0): State channel operations
@@ -10,18 +10,21 @@
  *
  * @example
  * ```typescript
- * // Import network module separately (optional dependency)
  * import { MetagraphClient, createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
  *
- * // Generic client for any layer
+ * // Currency L1 client
+ * const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
+ * const ref = await cl1.getLastReference(address);
+ * await cl1.postTransaction(signedTx);
+ *
+ * // Data L1 client
  * const dl1 = createMetagraphClient('http://localhost:9400', 'dl1');
+ * const fee = await dl1.estimateFee(signedData);
  * await dl1.postData(signedData);
  *
- * // Or use convenience clients
- * import { CurrencyL1Client, DataL1Client } from '@constellation-network/metagraph-sdk/network';
- *
- * const currencyClient = new CurrencyL1Client({ l1Url: 'http://localhost:9300' });
- * const dataClient = new DataL1Client({ dataL1Url: 'http://localhost:9400' });
+ * // Metagraph L0 client
+ * const ml0 = createMetagraphClient('http://localhost:9200', 'ml0');
+ * const info = await ml0.getClusterInfo();
  * ```
  *
  * @packageDocumentation
@@ -36,17 +39,12 @@ export {
   type ClusterInfo,
 } from './metagraph-client';
 
-// Convenience clients (backwards compatible)
-export { CurrencyL1Client } from './currency-l1-client';
-export { DataL1Client } from './data-l1-client';
-
 // HTTP client (for custom implementations)
 export { HttpClient } from './client';
 
 // Types and errors
 export { NetworkError } from './types';
 export type {
-  NetworkConfig,
   RequestOptions,
   TransactionStatus,
   PendingTransaction,

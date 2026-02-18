@@ -1,7 +1,7 @@
 """
 Network operations for Metagraph L1 node interactions.
 
-This module provides clients for interacting with Constellation Network
+This module provides a unified client for interacting with Constellation Network
 metagraph nodes at various layers:
 
 - **ML0** (Metagraph L0): State channel operations
@@ -10,24 +10,23 @@ metagraph nodes at various layers:
 
 Example::
 
-    # Generic client for any layer
     from constellation_sdk.network import MetagraphClient, LayerType, create_metagraph_client
 
+    # Currency L1 client
+    cl1 = create_metagraph_client('http://localhost:9300', LayerType.CL1)
+    ref = cl1.get_last_reference(address)
+    cl1.post_transaction(signed_tx)
+
+    # Data L1 client
     dl1 = create_metagraph_client('http://localhost:9400', LayerType.DL1)
-    await dl1.post_data(signed_data)
+    fee = dl1.estimate_fee(signed_data)
+    dl1.post_data(signed_data)
 
-    # Or use convenience clients
-    from constellation_sdk.network import CurrencyL1Client, DataL1Client
-
-    currency_client = CurrencyL1Client(NetworkConfig(l1_url='http://localhost:9300'))
-    data_client = DataL1Client(NetworkConfig(data_l1_url='http://localhost:9400'))
+    # Metagraph L0 client
+    ml0 = create_metagraph_client('http://localhost:9200', LayerType.ML0)
+    info = ml0.get_cluster_info()
 """
 
-# Convenience clients (backwards compatible)
-from .currency_l1_client import CurrencyL1Client
-from .data_l1_client import DataL1Client
-
-# Generic metagraph client
 from .metagraph_client import (
     ClusterInfo,
     LayerType,
@@ -35,11 +34,8 @@ from .metagraph_client import (
     MetagraphClientConfig,
     create_metagraph_client,
 )
-
-# Types and errors
 from .types import (
     EstimateFeeResponse,
-    NetworkConfig,
     NetworkError,
     PendingTransaction,
     PostDataResponse,
@@ -49,17 +45,13 @@ from .types import (
 )
 
 __all__ = [
-    # Generic client
+    # Client
     "MetagraphClient",
     "MetagraphClientConfig",
     "LayerType",
     "ClusterInfo",
     "create_metagraph_client",
-    # Convenience clients
-    "CurrencyL1Client",
-    "DataL1Client",
     # Types
-    "NetworkConfig",
     "RequestOptions",
     "TransactionStatus",
     "PendingTransaction",

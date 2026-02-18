@@ -1,8 +1,5 @@
 package io.constellationnetwork.metagraph.sdk;
 
-import java.util.List;
-import java.util.Objects;
-
 /**
  * Network types for L1 client operations.
  */
@@ -10,58 +7,6 @@ public final class NetworkTypes {
 
     private NetworkTypes() {
         // Utility class
-    }
-
-    /**
-     * Network configuration for connecting to L1 nodes.
-     */
-    public static class NetworkConfig {
-        private final String l1Url;
-        private final String dataL1Url;
-        private final int timeout;
-
-        private NetworkConfig(Builder builder) {
-            this.l1Url = builder.l1Url;
-            this.dataL1Url = builder.dataL1Url;
-            this.timeout = builder.timeout;
-        }
-
-        public String getL1Url() {
-            return l1Url;
-        }
-
-        public String getDataL1Url() {
-            return dataL1Url;
-        }
-
-        public int getTimeout() {
-            return timeout;
-        }
-
-        public static class Builder {
-            private String l1Url;
-            private String dataL1Url;
-            private int timeout = 30;
-
-            public Builder l1Url(String l1Url) {
-                this.l1Url = l1Url;
-                return this;
-            }
-
-            public Builder dataL1Url(String dataL1Url) {
-                this.dataL1Url = dataL1Url;
-                return this;
-            }
-
-            public Builder timeout(int timeout) {
-                this.timeout = timeout;
-                return this;
-            }
-
-            public NetworkConfig build() {
-                return new NetworkConfig(this);
-            }
-        }
     }
 
     /**

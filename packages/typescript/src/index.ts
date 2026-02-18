@@ -10,7 +10,10 @@
  * the separate network module:
  *
  * ```typescript
- * import { MetagraphClient } from '@constellation-network/metagraph-sdk/network';
+ * import { MetagraphClient, createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
+ *
+ * const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
+ * const dl1 = createMetagraphClient('http://localhost:9400', 'dl1');
  * ```
  *
  * @packageDocumentation
@@ -84,20 +87,9 @@ export {
   unitsToToken,
 } from './currency-transaction';
 
-// ============================================================
-// DEPRECATED: Network exports moved to separate entrypoint
-// ============================================================
-//
-// Network operations are now in a separate module to keep the
-// core SDK network-free. Import from '@constellation-network/metagraph-sdk/network'
-//
-// These re-exports are maintained for backwards compatibility
-// but will be removed in a future major version.
-//
-
-export { CurrencyL1Client, DataL1Client, HttpClient, NetworkError } from './network';
+// Network exports (from submodule)
+export { HttpClient, NetworkError } from './network';
 export type {
-  NetworkConfig,
   RequestOptions,
   TransactionStatus,
   PendingTransaction,

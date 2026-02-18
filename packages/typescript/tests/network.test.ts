@@ -2,14 +2,7 @@
  * Tests for network operations
  */
 
-import {
-  CurrencyL1Client,
-  DataL1Client,
-  NetworkError,
-  NetworkConfig,
-} from '../src';
-
-// Import from network submodule (new pattern)
+import { NetworkError } from '../src';
 import {
   MetagraphClient,
   createMetagraphClient,
@@ -17,7 +10,7 @@ import {
 } from '../src/network';
 
 describe('Network Operations', () => {
-  describe('MetagraphClient (Generic)', () => {
+  describe('MetagraphClient', () => {
     it('should require baseUrl in config', () => {
       expect(
         () => new MetagraphClient({ baseUrl: '', layer: 'dl1' })
@@ -120,48 +113,6 @@ describe('Network Operations', () => {
     });
   });
 
-  describe('CurrencyL1Client (Backwards Compatible)', () => {
-    it('should require l1Url in config', () => {
-      expect(() => new CurrencyL1Client({})).toThrow('l1Url is required');
-    });
-
-    it('should create client with valid config', () => {
-      const config: NetworkConfig = { l1Url: 'http://localhost:9010' };
-      const client = new CurrencyL1Client(config);
-      expect(client).toBeInstanceOf(CurrencyL1Client);
-    });
-
-    it('should accept optional timeout', () => {
-      const config: NetworkConfig = {
-        l1Url: 'http://localhost:9010',
-        timeout: 5000,
-      };
-      const client = new CurrencyL1Client(config);
-      expect(client).toBeInstanceOf(CurrencyL1Client);
-    });
-  });
-
-  describe('DataL1Client (Backwards Compatible)', () => {
-    it('should require dataL1Url in config', () => {
-      expect(() => new DataL1Client({})).toThrow('dataL1Url is required');
-    });
-
-    it('should create client with valid config', () => {
-      const config: NetworkConfig = { dataL1Url: 'http://localhost:8080' };
-      const client = new DataL1Client(config);
-      expect(client).toBeInstanceOf(DataL1Client);
-    });
-
-    it('should accept optional timeout', () => {
-      const config: NetworkConfig = {
-        dataL1Url: 'http://localhost:8080',
-        timeout: 10000,
-      };
-      const client = new DataL1Client(config);
-      expect(client).toBeInstanceOf(DataL1Client);
-    });
-  });
-
   describe('NetworkError', () => {
     it('should create error with message only', () => {
       const error = new NetworkError('Connection failed');
@@ -191,19 +142,18 @@ describe('Network Operations', () => {
     });
   });
 
-  describe('Combined config', () => {
-    it('should allow both l1Url and dataL1Url in same config', () => {
-      const config: NetworkConfig = {
-        l1Url: 'http://localhost:9010',
-        dataL1Url: 'http://localhost:8080',
-        timeout: 30000,
-      };
+  describe('Combined usage', () => {
+    it('should allow creating multiple clients for different layers', () => {
+      const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
+      const dl1 = createMetagraphClient('http://localhost:9400', 'dl1');
+      const ml0 = createMetagraphClient('http://localhost:9200', 'ml0');
 
-      const l1Client = new CurrencyL1Client(config);
-      const dataClient = new DataL1Client(config);
-
-      expect(l1Client).toBeInstanceOf(CurrencyL1Client);
-      expect(dataClient).toBeInstanceOf(DataL1Client);
+      expect(cl1).toBeInstanceOf(MetagraphClient);
+      expect(dl1).toBeInstanceOf(MetagraphClient);
+      expect(ml0).toBeInstanceOf(MetagraphClient);
+      expect(cl1.getLayer()).toBe('cl1');
+      expect(dl1.getLayer()).toBe('dl1');
+      expect(ml0.getLayer()).toBe('ml0');
     });
   });
 });

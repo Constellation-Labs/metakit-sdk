@@ -5,16 +5,6 @@ import (
 	"fmt"
 )
 
-// NetworkConfig holds configuration for connecting to L1 nodes
-type NetworkConfig struct {
-	// L1URL is the Currency L1 endpoint URL (e.g., "http://localhost:9010")
-	L1URL string
-	// DataL1URL is the Data L1 endpoint URL (e.g., "http://localhost:8080")
-	DataL1URL string
-	// Timeout is the request timeout in seconds (default: 30)
-	Timeout int
-}
-
 // RequestOptions holds options for individual requests
 type RequestOptions struct {
 	// Timeout is the request timeout in seconds
@@ -85,7 +75,5 @@ func NewNetworkError(message string, statusCode int, response string) *NetworkEr
 
 // Common network errors
 var (
-	ErrL1URLRequired     = errors.New("L1URL is required for CurrencyL1Client")
-	ErrDataL1URLRequired = errors.New("DataL1URL is required for DataL1Client")
-	ErrRequestTimeout    = errors.New("request timeout")
+	ErrRequestTimeout = errors.New("request timeout")
 )
