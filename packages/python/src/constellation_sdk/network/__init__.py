@@ -23,6 +23,10 @@ Example::
     data_client = DataL1Client(NetworkConfig(data_l1_url='http://localhost:9400'))
 """
 
+# Convenience clients (backwards compatible)
+from .currency_l1_client import CurrencyL1Client
+from .data_l1_client import DataL1Client
+
 # Generic metagraph client
 from .metagraph_client import (
     ClusterInfo,
@@ -31,10 +35,6 @@ from .metagraph_client import (
     MetagraphClientConfig,
     create_metagraph_client,
 )
-
-# Convenience clients (backwards compatible)
-from .currency_l1_client import CurrencyL1Client
-from .data_l1_client import DataL1Client
 
 # Types and errors
 from .types import (
