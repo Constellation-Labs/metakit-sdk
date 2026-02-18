@@ -134,9 +134,7 @@ class MetagraphClient:
         except Exception:
             return False
 
-    def get_cluster_info(
-        self, options: Optional[RequestOptions] = None
-    ) -> ClusterInfo:
+    def get_cluster_info(self, options: Optional[RequestOptions] = None) -> ClusterInfo:
         """
         Get cluster information.
 
@@ -367,9 +365,7 @@ class MetagraphClient:
                 if not k.startswith("_"):
                     if hasattr(v, "__dict__"):
                         result[k] = {
-                            kk: vv
-                            for kk, vv in v.__dict__.items()
-                            if not kk.startswith("_")
+                            kk: vv for kk, vv in v.__dict__.items() if not kk.startswith("_")
                         }
                     else:
                         result[k] = v
@@ -399,6 +395,4 @@ def create_metagraph_client(
     Returns:
         Configured MetagraphClient
     """
-    return MetagraphClient(
-        MetagraphClientConfig(base_url=base_url, layer=layer, timeout=timeout)
-    )
+    return MetagraphClient(MetagraphClientConfig(base_url=base_url, layer=layer, timeout=timeout))
