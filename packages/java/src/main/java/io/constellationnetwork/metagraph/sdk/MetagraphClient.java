@@ -160,7 +160,7 @@ public class MetagraphClient {
         if (layer == null) {
             throw new IllegalArgumentException("layer is required for MetagraphClient");
         }
-        this.client = new HttpClient(baseUrl, null);
+        this.client = new HttpClient(baseUrl, 30);
         this.layer = layer;
     }
 

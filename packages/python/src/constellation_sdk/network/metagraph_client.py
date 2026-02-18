@@ -5,7 +5,7 @@ Works with ML0 (Metagraph L0), CL1 (Currency L1), and DL1 (Data L1) nodes.
 """
 
 from enum import Enum
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, Optional, TypeVar
 
 from ..currency_types import TransactionReference
 from ..types import Signed

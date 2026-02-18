@@ -236,7 +236,10 @@ impl MetagraphClient {
     /// # Errors
     ///
     /// Returns an error if called on an unsupported layer
-    pub async fn post_data<T: Serialize>(&self, data: &Signed<T>) -> NetworkResult<PostDataResponse> {
+    pub async fn post_data<T: Serialize>(
+        &self,
+        data: &Signed<T>,
+    ) -> NetworkResult<PostDataResponse> {
         self.assert_layer(&[LayerType::DL1], "post_data")?;
         self.client.post("/data", data).await
     }
