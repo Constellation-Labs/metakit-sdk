@@ -106,7 +106,8 @@ class MetagraphClient:
             raise ValueError("base_url is required for MetagraphClient")
         if not config.layer:
             raise ValueError("layer is required for MetagraphClient")
-        self._client = HttpClient(config.base_url, config.timeout)
+        timeout = float(config.timeout) if config.timeout is not None else 30.0
+        self._client = HttpClient(config.base_url, timeout)
         self._layer = config.layer
 
     @property
