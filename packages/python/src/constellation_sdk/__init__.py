@@ -2,6 +2,13 @@
 Constellation Metagraph SDK.
 
 Python SDK for standard operations on Constellation Network metagraphs built using the metakit framework.
+
+For network operations (connecting to ML0/CL1/DL1 nodes), import from the network module:
+
+    from constellation_sdk.network import MetagraphClient, create_metagraph_client, LayerType
+
+    cl1 = create_metagraph_client('http://localhost:9300', LayerType.CL1)
+    dl1 = create_metagraph_client('http://localhost:9400', LayerType.DL1)
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -46,12 +53,9 @@ from .currency_types import (
 # Hashing
 from .hash import compute_digest, hash_bytes, hash_data
 
-# Network operations
+# Network types (for convenience - full network module has more)
 from .network import (
-    CurrencyL1Client,
-    DataL1Client,
     EstimateFeeResponse,
-    NetworkConfig,
     NetworkError,
     PendingTransaction,
     PostDataResponse,
@@ -152,10 +156,7 @@ __all__ = [
     "is_valid_dag_address",
     "token_to_units",
     "units_to_token",
-    # Network operations
-    "CurrencyL1Client",
-    "DataL1Client",
-    "NetworkConfig",
+    # Network types (clients in network submodule)
     "NetworkError",
     "RequestOptions",
     "TransactionStatus",

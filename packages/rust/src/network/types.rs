@@ -6,17 +6,6 @@ use thiserror::Error;
 
 use crate::currency_types::CurrencyTransaction;
 
-/// Network configuration for connecting to L1 nodes
-#[derive(Debug, Clone, Default)]
-pub struct NetworkConfig {
-    /// Currency L1 endpoint URL (e.g., "http://localhost:9010")
-    pub l1_url: Option<String>,
-    /// Data L1 endpoint URL (e.g., "http://localhost:8080")
-    pub data_l1_url: Option<String>,
-    /// Request timeout in seconds (default: 30)
-    pub timeout: Option<u64>,
-}
-
 /// Request options for individual requests
 #[derive(Debug, Clone, Default)]
 pub struct RequestOptions {

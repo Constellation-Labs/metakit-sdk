@@ -4,44 +4,83 @@ Tests for network operations.
 
 import pytest
 
-from constellation_sdk import (
-    CurrencyL1Client,
-    DataL1Client,
-    NetworkConfig,
+from constellation_sdk.network import (
+    LayerType,
+    MetagraphClient,
+    MetagraphClientConfig,
     NetworkError,
+    create_metagraph_client,
 )
 
 
-class TestCurrencyL1Client:
-    def test_requires_l1_url_in_config(self):
-        with pytest.raises(ValueError, match="l1_url is required"):
-            CurrencyL1Client(NetworkConfig())
+class TestMetagraphClient:
+    def test_requires_base_url_in_config(self):
+        with pytest.raises(ValueError, match="base_url is required"):
+            MetagraphClient(MetagraphClientConfig(base_url="", layer=LayerType.DL1))
 
-    def test_creates_client_with_valid_config(self):
-        config = NetworkConfig(l1_url="http://localhost:9010")
-        client = CurrencyL1Client(config)
+    def test_requires_layer_in_config(self):
+        with pytest.raises(ValueError, match="layer is required"):
+            MetagraphClient(MetagraphClientConfig(base_url="http://localhost:9400", layer=None))  # type: ignore
+
+    def test_creates_client_for_dl1(self):
+        client = MetagraphClient(
+            MetagraphClientConfig(base_url="http://localhost:9400", layer=LayerType.DL1)
+        )
         assert client is not None
+        assert client.layer == LayerType.DL1
+
+    def test_creates_client_for_cl1(self):
+        client = MetagraphClient(
+            MetagraphClientConfig(base_url="http://localhost:9300", layer=LayerType.CL1)
+        )
+        assert client is not None
+        assert client.layer == LayerType.CL1
+
+    def test_creates_client_for_ml0(self):
+        client = MetagraphClient(
+            MetagraphClientConfig(base_url="http://localhost:9200", layer=LayerType.ML0)
+        )
+        assert client is not None
+        assert client.layer == LayerType.ML0
 
     def test_accepts_optional_timeout(self):
-        config = NetworkConfig(l1_url="http://localhost:9010", timeout=5.0)
-        client = CurrencyL1Client(config)
+        client = MetagraphClient(
+            MetagraphClientConfig(
+                base_url="http://localhost:9400",
+                layer=LayerType.DL1,
+                timeout=5000,
+            )
+        )
         assert client is not None
 
 
-class TestDataL1Client:
-    def test_requires_data_l1_url_in_config(self):
-        with pytest.raises(ValueError, match="data_l1_url is required"):
-            DataL1Client(NetworkConfig())
+class TestMetagraphClientLayerGuards:
+    def test_rejects_post_data_on_cl1(self):
+        client = create_metagraph_client("http://localhost:9300", LayerType.CL1)
+        with pytest.raises(ValueError, match="post_data.*not available on CL1"):
+            client.post_data({"value": "test", "proofs": []})
 
-    def test_creates_client_with_valid_config(self):
-        config = NetworkConfig(data_l1_url="http://localhost:8080")
-        client = DataL1Client(config)
-        assert client is not None
+    def test_rejects_post_transaction_on_dl1(self):
+        client = create_metagraph_client("http://localhost:9400", LayerType.DL1)
+        mock_tx = type("MockTx", (), {"value": None, "proofs": []})()
+        with pytest.raises(ValueError, match="post_transaction.*not available on DL1"):
+            client.post_transaction(mock_tx)
+
+    def test_rejects_estimate_fee_on_cl1(self):
+        client = create_metagraph_client("http://localhost:9300", LayerType.CL1)
+        with pytest.raises(ValueError, match="estimate_fee.*not available on CL1"):
+            client.estimate_fee({"value": "test", "proofs": []})
+
+
+class TestCreateMetagraphClientHelper:
+    def test_creates_client_with_convenience_function(self):
+        client = create_metagraph_client("http://localhost:9400", LayerType.DL1)
+        assert isinstance(client, MetagraphClient)
+        assert client.layer == LayerType.DL1
 
     def test_accepts_optional_timeout(self):
-        config = NetworkConfig(data_l1_url="http://localhost:8080", timeout=10.0)
-        client = DataL1Client(config)
-        assert client is not None
+        client = create_metagraph_client("http://localhost:9400", LayerType.DL1, timeout=10000)
+        assert isinstance(client, MetagraphClient)
 
 
 class TestNetworkError:
@@ -67,16 +106,15 @@ class TestNetworkError:
         assert isinstance(error, NetworkError)
 
 
-class TestCombinedConfig:
-    def test_allows_both_urls_in_same_config(self):
-        config = NetworkConfig(
-            l1_url="http://localhost:9010",
-            data_l1_url="http://localhost:8080",
-            timeout=30.0,
-        )
+class TestCombinedUsage:
+    def test_creates_multiple_clients_for_different_layers(self):
+        cl1 = create_metagraph_client("http://localhost:9300", LayerType.CL1)
+        dl1 = create_metagraph_client("http://localhost:9400", LayerType.DL1)
+        ml0 = create_metagraph_client("http://localhost:9200", LayerType.ML0)
 
-        l1_client = CurrencyL1Client(config)
-        data_client = DataL1Client(config)
-
-        assert l1_client is not None
-        assert data_client is not None
+        assert isinstance(cl1, MetagraphClient)
+        assert isinstance(dl1, MetagraphClient)
+        assert isinstance(ml0, MetagraphClient)
+        assert cl1.layer == LayerType.CL1
+        assert dl1.layer == LayerType.DL1
+        assert ml0.layer == LayerType.ML0

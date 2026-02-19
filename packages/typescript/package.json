@@ -10,6 +10,16 @@
       "import": "./dist/esm/index.js",
       "require": "./dist/cjs/index.js",
       "types": "./dist/types/index.d.ts"
+    },
+    "./network": {
+      "import": "./dist/esm/network/index.js",
+      "require": "./dist/cjs/network/index.js",
+      "types": "./dist/types/network/index.d.ts"
+    },
+    "./json-logic": {
+      "import": "./dist/esm/json-logic/index.js",
+      "require": "./dist/cjs/json-logic/index.js",
+      "types": "./dist/types/json-logic/index.d.ts"
     }
   },
   "files": [

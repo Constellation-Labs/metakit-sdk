@@ -10,84 +10,95 @@ import static org.junit.jupiter.api.Assertions.*;
 class NetworkTest {
 
     @Nested
-    @DisplayName("CurrencyL1Client")
-    class CurrencyL1ClientTests {
+    @DisplayName("MetagraphClient")
+    class MetagraphClientTests {
 
         @Test
-        @DisplayName("requires l1Url in config")
-        void requiresL1UrlInConfig() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder().build();
+        @DisplayName("requires baseUrl in config")
+        void requiresBaseUrlInConfig() {
+            MetagraphClient.Config config = new MetagraphClient.Config.Builder()
+                    .layer(MetagraphClient.LayerType.DL1)
+                    .build();
 
             IllegalArgumentException exception = assertThrows(
                     IllegalArgumentException.class,
-                    () -> new CurrencyL1Client(config)
+                    () -> new MetagraphClient(config)
             );
 
-            assertTrue(exception.getMessage().contains("l1Url is required"));
+            assertTrue(exception.getMessage().contains("baseUrl is required"));
         }
 
         @Test
-        @DisplayName("creates client with valid config")
-        void createsClientWithValidConfig() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
-                    .l1Url("http://localhost:9010")
+        @DisplayName("requires layer in config")
+        void requiresLayerInConfig() {
+            MetagraphClient.Config config = new MetagraphClient.Config.Builder()
+                    .baseUrl("http://localhost:9400")
                     .build();
 
-            CurrencyL1Client client = new CurrencyL1Client(config);
+            IllegalArgumentException exception = assertThrows(
+                    IllegalArgumentException.class,
+                    () -> new MetagraphClient(config)
+            );
+
+            assertTrue(exception.getMessage().contains("layer is required"));
+        }
+
+        @Test
+        @DisplayName("creates client for DL1")
+        void createsClientForDL1() {
+            MetagraphClient client = new MetagraphClient("http://localhost:9400", MetagraphClient.LayerType.DL1);
             assertNotNull(client);
+            assertEquals(MetagraphClient.LayerType.DL1, client.getLayer());
         }
 
         @Test
-        @DisplayName("accepts optional timeout")
+        @DisplayName("creates client for CL1")
+        void createsClientForCL1() {
+            MetagraphClient client = new MetagraphClient("http://localhost:9300", MetagraphClient.LayerType.CL1);
+            assertNotNull(client);
+            assertEquals(MetagraphClient.LayerType.CL1, client.getLayer());
+        }
+
+        @Test
+        @DisplayName("creates client for ML0")
+        void createsClientForML0() {
+            MetagraphClient client = new MetagraphClient("http://localhost:9200", MetagraphClient.LayerType.ML0);
+            assertNotNull(client);
+            assertEquals(MetagraphClient.LayerType.ML0, client.getLayer());
+        }
+
+        @Test
+        @DisplayName("accepts optional timeout via config")
         void acceptsOptionalTimeout() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
-                    .l1Url("http://localhost:9010")
-                    .timeout(5)
+            MetagraphClient.Config config = new MetagraphClient.Config.Builder()
+                    .baseUrl("http://localhost:9400")
+                    .layer(MetagraphClient.LayerType.DL1)
+                    .timeout(5000)
                     .build();
 
-            CurrencyL1Client client = new CurrencyL1Client(config);
+            MetagraphClient client = new MetagraphClient(config);
             assertNotNull(client);
         }
     }
 
     @Nested
-    @DisplayName("DataL1Client")
-    class DataL1ClientTests {
+    @DisplayName("LayerType")
+    class LayerTypeTests {
 
         @Test
-        @DisplayName("requires dataL1Url in config")
-        void requiresDataL1UrlInConfig() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder().build();
-
-            IllegalArgumentException exception = assertThrows(
-                    IllegalArgumentException.class,
-                    () -> new DataL1Client(config)
-            );
-
-            assertTrue(exception.getMessage().contains("dataL1Url is required"));
+        @DisplayName("has correct string representation")
+        void hasCorrectStringRepresentation() {
+            assertEquals("ML0", MetagraphClient.LayerType.ML0.toString());
+            assertEquals("CL1", MetagraphClient.LayerType.CL1.toString());
+            assertEquals("DL1", MetagraphClient.LayerType.DL1.toString());
         }
 
         @Test
-        @DisplayName("creates client with valid config")
-        void createsClientWithValidConfig() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
-                    .dataL1Url("http://localhost:8080")
-                    .build();
-
-            DataL1Client client = new DataL1Client(config);
-            assertNotNull(client);
-        }
-
-        @Test
-        @DisplayName("accepts optional timeout")
-        void acceptsOptionalTimeout() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
-                    .dataL1Url("http://localhost:8080")
-                    .timeout(10)
-                    .build();
-
-            DataL1Client client = new DataL1Client(config);
-            assertNotNull(client);
+        @DisplayName("has correct value")
+        void hasCorrectValue() {
+            assertEquals("ml0", MetagraphClient.LayerType.ML0.getValue());
+            assertEquals("cl1", MetagraphClient.LayerType.CL1.getValue());
+            assertEquals("dl1", MetagraphClient.LayerType.DL1.getValue());
         }
     }
 
@@ -132,23 +143,22 @@ class NetworkTest {
     }
 
     @Nested
-    @DisplayName("Combined config")
-    class CombinedConfigTests {
+    @DisplayName("Combined usage")
+    class CombinedUsageTests {
 
         @Test
-        @DisplayName("allows both URLs in same config")
-        void allowsBothUrlsInSameConfig() {
-            NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
-                    .l1Url("http://localhost:9010")
-                    .dataL1Url("http://localhost:8080")
-                    .timeout(30)
-                    .build();
+        @DisplayName("creates multiple clients for different layers")
+        void createsMultipleClientsForDifferentLayers() {
+            MetagraphClient cl1 = new MetagraphClient("http://localhost:9300", MetagraphClient.LayerType.CL1);
+            MetagraphClient dl1 = new MetagraphClient("http://localhost:9400", MetagraphClient.LayerType.DL1);
+            MetagraphClient ml0 = new MetagraphClient("http://localhost:9200", MetagraphClient.LayerType.ML0);
 
-            CurrencyL1Client l1Client = new CurrencyL1Client(config);
-            DataL1Client dataClient = new DataL1Client(config);
-
-            assertNotNull(l1Client);
-            assertNotNull(dataClient);
+            assertNotNull(cl1);
+            assertNotNull(dl1);
+            assertNotNull(ml0);
+            assertEquals(MetagraphClient.LayerType.CL1, cl1.getLayer());
+            assertEquals(MetagraphClient.LayerType.DL1, dl1.getLayer());
+            assertEquals(MetagraphClient.LayerType.ML0, ml0.getLayer());
         }
     }
 }

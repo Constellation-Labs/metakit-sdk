@@ -2,81 +2,74 @@
 
 #[cfg(feature = "network")]
 mod network_tests {
-    use constellation_sdk::network::{CurrencyL1Client, DataL1Client, NetworkConfig, NetworkError};
+    use constellation_sdk::network::{
+        create_metagraph_client, LayerType, MetagraphClient, MetagraphClientConfig, NetworkError,
+    };
 
-    mod currency_l1_client {
+    mod metagraph_client {
         use super::*;
 
         #[test]
-        fn requires_l1_url_in_config() {
-            let config = NetworkConfig::default();
-            let result = CurrencyL1Client::new(config);
+        fn requires_base_url() {
+            let result = MetagraphClient::new("", LayerType::DL1);
             assert!(result.is_err());
-            match result {
-                Err(NetworkError::ConfigError(msg)) => {
-                    assert!(msg.contains("l1_url is required"));
-                }
-                _ => panic!("Expected ConfigError"),
-            }
         }
 
         #[test]
-        fn creates_client_with_valid_config() {
-            let config = NetworkConfig {
-                l1_url: Some("http://localhost:9010".to_string()),
-                ..Default::default()
-            };
-            let result = CurrencyL1Client::new(config);
-            assert!(result.is_ok());
+        fn creates_client_for_dl1() {
+            let client = MetagraphClient::new("http://localhost:9400", LayerType::DL1).unwrap();
+            assert_eq!(client.layer(), LayerType::DL1);
         }
 
         #[test]
-        fn accepts_optional_timeout() {
-            let config = NetworkConfig {
-                l1_url: Some("http://localhost:9010".to_string()),
-                timeout: Some(5),
-                ..Default::default()
+        fn creates_client_for_cl1() {
+            let client = MetagraphClient::new("http://localhost:9300", LayerType::CL1).unwrap();
+            assert_eq!(client.layer(), LayerType::CL1);
+        }
+
+        #[test]
+        fn creates_client_for_ml0() {
+            let client = MetagraphClient::new("http://localhost:9200", LayerType::ML0).unwrap();
+            assert_eq!(client.layer(), LayerType::ML0);
+        }
+
+        #[test]
+        fn accepts_config_with_timeout() {
+            let config = MetagraphClientConfig {
+                base_url: "http://localhost:9400".to_string(),
+                layer: LayerType::DL1,
+                timeout: Some(5000),
             };
-            let result = CurrencyL1Client::new(config);
-            assert!(result.is_ok());
+            let client = MetagraphClient::with_config(config).unwrap();
+            assert_eq!(client.layer(), LayerType::DL1);
         }
     }
 
-    mod data_l1_client {
+    mod create_metagraph_client_helper {
         use super::*;
 
         #[test]
-        fn requires_data_l1_url_in_config() {
-            let config = NetworkConfig::default();
-            let result = DataL1Client::new(config);
-            assert!(result.is_err());
-            match result {
-                Err(NetworkError::ConfigError(msg)) => {
-                    assert!(msg.contains("data_l1_url is required"));
-                }
-                _ => panic!("Expected ConfigError"),
-            }
+        fn creates_client_with_convenience_function() {
+            let client = create_metagraph_client("http://localhost:9400", LayerType::DL1).unwrap();
+            assert_eq!(client.layer(), LayerType::DL1);
+        }
+    }
+
+    mod layer_type {
+        use super::*;
+
+        #[test]
+        fn has_correct_string_representation() {
+            assert_eq!(LayerType::ML0.as_str(), "ML0");
+            assert_eq!(LayerType::CL1.as_str(), "CL1");
+            assert_eq!(LayerType::DL1.as_str(), "DL1");
         }
 
         #[test]
-        fn creates_client_with_valid_config() {
-            let config = NetworkConfig {
-                data_l1_url: Some("http://localhost:8080".to_string()),
-                ..Default::default()
-            };
-            let result = DataL1Client::new(config);
-            assert!(result.is_ok());
-        }
-
-        #[test]
-        fn accepts_optional_timeout() {
-            let config = NetworkConfig {
-                data_l1_url: Some("http://localhost:8080".to_string()),
-                timeout: Some(10),
-                ..Default::default()
-            };
-            let result = DataL1Client::new(config);
-            assert!(result.is_ok());
+        fn implements_display() {
+            assert_eq!(format!("{}", LayerType::ML0), "ML0");
+            assert_eq!(format!("{}", LayerType::CL1), "CL1");
+            assert_eq!(format!("{}", LayerType::DL1), "DL1");
         }
     }
 
@@ -108,22 +101,18 @@ mod network_tests {
         }
     }
 
-    mod combined_config {
+    mod combined_usage {
         use super::*;
 
         #[test]
-        fn allows_both_urls_in_same_config() {
-            let config = NetworkConfig {
-                l1_url: Some("http://localhost:9010".to_string()),
-                data_l1_url: Some("http://localhost:8080".to_string()),
-                timeout: Some(30),
-            };
+        fn creates_multiple_clients_for_different_layers() {
+            let cl1 = create_metagraph_client("http://localhost:9300", LayerType::CL1).unwrap();
+            let dl1 = create_metagraph_client("http://localhost:9400", LayerType::DL1).unwrap();
+            let ml0 = create_metagraph_client("http://localhost:9200", LayerType::ML0).unwrap();
 
-            let l1_client = CurrencyL1Client::new(config.clone());
-            let data_client = DataL1Client::new(config);
-
-            assert!(l1_client.is_ok());
-            assert!(data_client.is_ok());
+            assert_eq!(cl1.layer(), LayerType::CL1);
+            assert_eq!(dl1.layer(), LayerType::DL1);
+            assert_eq!(ml0.layer(), LayerType::ML0);
         }
     }
 }
