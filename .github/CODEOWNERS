@@ -1,14 +1,27 @@
 # Default owners for everything
-* @Constellation-Labs/sdk-maintainers
+* @Constellation-Labs/metakit-contributors
 
 # TypeScript SDK
-/packages/typescript/ @Constellation-Labs/sdk-maintainers
+/packages/typescript/ @Constellation-Labs/metakit-contributors
 
 # Python SDK
-/packages/python/ @Constellation-Labs/sdk-maintainers
+/packages/python/ @Constellation-Labs/metakit-contributors
+
+# Rust SDK
+/packages/rust/ @Constellation-Labs/metakit-contributors
+
+# Go SDK
+/packages/go/ @Constellation-Labs/metakit-contributors
+
+# Java SDK
+/packages/java/ @Constellation-Labs/metakit-contributors
 
 # Shared test vectors (require review from maintainers)
-/shared/ @Constellation-Labs/sdk-maintainers
+/shared/ @Constellation-Labs/metakit-contributors
 
 # CI/CD configurations
-/.github/ @Constellation-Labs/sdk-maintainers
+/.github/ @Constellation-Labs/metakit-contributors
+
+# Documentation and publishing
+/docs/ @Constellation-Labs/metakit-contributors
+/CONTRIBUTING.md @Constellation-Labs/metakit-contributors
