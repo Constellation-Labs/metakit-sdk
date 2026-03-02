@@ -37,9 +37,7 @@ describe('JSON Logic Cross-Language Compatibility', () => {
     for (const category of vectors.tests) {
       describe(category.category, () => {
         for (const testCase of category.cases) {
-          const testName = testCase.note
-            ? `${testCase.expr} (${testCase.note})`
-            : testCase.expr;
+          const testName = testCase.note ? `${testCase.expr} (${testCase.note})` : testCase.expr;
 
           it(testName, () => {
             const expr = JSON.parse(testCase.expr);

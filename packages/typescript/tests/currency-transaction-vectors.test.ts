@@ -13,9 +13,7 @@ import {
   hashCurrencyTransaction,
   encodeCurrencyTransaction,
 } from '../src/currency-transaction';
-import {
-  getPublicKeyFromPrivate,
-} from '../src/crypto';
+import { getPublicKeyFromPrivate } from '../src/crypto';
 import type { CurrencyTransaction } from '../src/currency-types';
 import { getAddress } from '../src/wallet';
 
@@ -167,7 +165,9 @@ describe('Currency Transaction Test Vectors', () => {
       const chain = testVectors.testVectors.transactionChaining.transactions;
 
       // Verify first transaction parent
-      expect(chain[0].parentHash).toBe('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+      expect(chain[0].parentHash).toBe(
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+      );
       expect(chain[0].parentOrdinal).toBe(5);
       expect(chain[0].ordinal).toBe(6);
 

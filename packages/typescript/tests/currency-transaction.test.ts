@@ -179,11 +179,7 @@ describe('Currency Transactions', () => {
         { destination: recipient3.address, amount: 30 },
       ];
 
-      const txns = createCurrencyTransactionBatch(
-        transfers,
-        keyPair.privateKey,
-        lastRef
-      );
+      const txns = createCurrencyTransactionBatch(transfers, keyPair.privateKey, lastRef);
 
       expect(txns).toHaveLength(3);
       expect(txns[0].value.amount).toBe(1000000000); // 10 * 1e8

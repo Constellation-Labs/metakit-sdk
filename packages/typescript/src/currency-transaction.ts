@@ -13,16 +13,8 @@ import {
   validateDagAddress,
   sha256Hex,
 } from './crypto';
-import {
-  encodeTransaction,
-  kryoSerialize,
-  generateSalt,
-} from './transaction-encoding';
-import type {
-  CurrencyTransaction,
-  TransactionReference,
-  TransferParams,
-} from './currency-types';
+import { encodeTransaction, kryoSerialize, generateSalt } from './transaction-encoding';
+import type { CurrencyTransaction, TransactionReference, TransferParams } from './currency-types';
 import { TOKEN_DECIMALS } from './currency-types';
 import type { VerificationResult, SignatureProof } from './types';
 
@@ -146,8 +138,7 @@ export function createCurrencyTransaction(
   const signature = ecdsaSign(digest, privateKey);
 
   // Verify signature
-  const uncompressedPublicKey =
-    publicKey.length === 128 ? '04' + publicKey : publicKey;
+  const uncompressedPublicKey = publicKey.length === 128 ? '04' + publicKey : publicKey;
   const verified = ecdsaVerify(digest, signature, uncompressedPublicKey);
   if (!verified) {
     throw new Error('Sign-Verify failed');
@@ -239,8 +230,7 @@ export function signCurrencyTransaction(
   const signature = ecdsaSign(digest, privateKey);
 
   // Verify signature
-  const uncompressedPublicKey =
-    publicKey.length === 128 ? '04' + publicKey : publicKey;
+  const uncompressedPublicKey = publicKey.length === 128 ? '04' + publicKey : publicKey;
   const verified = ecdsaVerify(digest, signature, uncompressedPublicKey);
   if (!verified) {
     throw new Error('Sign-Verify failed');
@@ -270,9 +260,7 @@ export function signCurrencyTransaction(
  * console.log('Valid:', result.isValid);
  * ```
  */
-export function verifyCurrencyTransaction(
-  transaction: CurrencyTransaction
-): VerificationResult {
+export function verifyCurrencyTransaction(transaction: CurrencyTransaction): VerificationResult {
   // Encode and hash
   const encoded = encodeTransaction(transaction);
   const serialized = kryoSerialize(encoded, false);
@@ -312,9 +300,7 @@ export function verifyCurrencyTransaction(
  * const encoded = encodeCurrencyTransaction(tx);
  * ```
  */
-export function encodeCurrencyTransaction(
-  transaction: CurrencyTransaction
-): string {
+export function encodeCurrencyTransaction(transaction: CurrencyTransaction): string {
   return encodeTransaction(transaction);
 }
 
@@ -330,9 +316,10 @@ export function encodeCurrencyTransaction(
  * console.log('Hash:', hash.value);
  * ```
  */
-export function hashCurrencyTransaction(
-  transaction: CurrencyTransaction
-): { value: string; bytes: Uint8Array } {
+export function hashCurrencyTransaction(transaction: CurrencyTransaction): {
+  value: string;
+  bytes: Uint8Array;
+} {
   const encoded = encodeTransaction(transaction);
   const serialized = kryoSerialize(encoded, false);
   const hashValue = sha256Hex(serialized);

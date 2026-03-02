@@ -44,9 +44,7 @@ export function createSignedObject<T>(
 ): Signed<T> {
   const mode = resolveMode(options);
 
-  const proof = mode === 'dataUpdate'
-    ? signDataUpdate(value, privateKey)
-    : sign(value, privateKey);
+  const proof = mode === 'dataUpdate' ? signDataUpdate(value, privateKey) : sign(value, privateKey);
 
   return {
     value,
@@ -88,9 +86,10 @@ export function addSignature<T>(
   // Inherit mode from existing signed object if no options provided
   const mode = options ? resolveMode(options) : (signed.mode ?? 'standard');
 
-  const newProof = mode === 'dataUpdate'
-    ? signDataUpdate(signed.value, privateKey)
-    : sign(signed.value, privateKey);
+  const newProof =
+    mode === 'dataUpdate'
+      ? signDataUpdate(signed.value, privateKey)
+      : sign(signed.value, privateKey);
 
   return {
     value: signed.value,

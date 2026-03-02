@@ -30,14 +30,9 @@ import { constellationDigest, ecdsaVerify } from './crypto';
  * }
  * ```
  */
-export function verify<T>(
-  signed: Signed<T>,
-  isDataUpdate: boolean = false
-): VerificationResult {
+export function verify<T>(signed: Signed<T>, isDataUpdate: boolean = false): VerificationResult {
   // Prefer mode from signed object; fall back to isDataUpdate parameter
-  const useDataUpdate = signed.mode
-    ? signed.mode === 'dataUpdate'
-    : isDataUpdate;
+  const useDataUpdate = signed.mode ? signed.mode === 'dataUpdate' : isDataUpdate;
   const bytes = toBytes(signed.value, useDataUpdate);
   const hashHex = bytesToHex(sha256(bytes));
 
@@ -78,11 +73,7 @@ export function verify<T>(
  * @param publicKeyId - Public key in hex (with or without 04 prefix)
  * @returns true if signature is valid
  */
-export function verifyHash(
-  hashHex: string,
-  signature: string,
-  publicKeyId: string
-): boolean {
+export function verifyHash(hashHex: string, signature: string, publicKeyId: string): boolean {
   try {
     const fullPublicKey = normalizePublicKey(publicKeyId);
     const digest = constellationDigest(hashHex);

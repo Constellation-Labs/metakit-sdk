@@ -140,8 +140,7 @@ export function validateDagAddress(address: string): boolean {
   if (address.length !== 40) return false;
   const parityChar = address[3];
   if (!/^[0-8]$/.test(parityChar)) return false;
-  const base58Regex =
-    /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$/;
+  const base58Regex = /^[123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz]{36}$/;
   return base58Regex.test(address.slice(4));
 }
 

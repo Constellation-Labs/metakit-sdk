@@ -113,8 +113,14 @@ export const intValue = (value: bigint | number): IntValue => ({
 export const floatValue = (value: number): FloatValue => ({ tag: 'float', value });
 export const strValue = (value: string): StrValue => ({ tag: 'string', value });
 export const arrayValue = (value: JsonLogicValue[]): ArrayValue => ({ tag: 'array', value });
-export const mapValue = (value: Record<string, JsonLogicValue>): MapValue => ({ tag: 'map', value });
-export const functionValue = (expr: JsonLogicExpression): FunctionValue => ({ tag: 'function', expr });
+export const mapValue = (value: Record<string, JsonLogicValue>): MapValue => ({
+  tag: 'map',
+  value,
+});
+export const functionValue = (expr: JsonLogicExpression): FunctionValue => ({
+  tag: 'function',
+  expr,
+});
 
 // Empty values
 export const emptyArray = (): ArrayValue => arrayValue([]);

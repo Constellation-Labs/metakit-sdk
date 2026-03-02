@@ -19,10 +19,7 @@ export interface RequestOptions {
 /**
  * Transaction status in the network
  */
-export type TransactionStatus =
-  | 'Waiting'
-  | 'InProgress'
-  | 'Accepted';
+export type TransactionStatus = 'Waiting' | 'InProgress' | 'Accepted';
 
 /**
  * Pending transaction response from L1

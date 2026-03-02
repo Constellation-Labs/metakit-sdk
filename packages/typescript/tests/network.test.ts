@@ -3,18 +3,14 @@
  */
 
 import { NetworkError } from '../src';
-import {
-  MetagraphClient,
-  createMetagraphClient,
-  type LayerType,
-} from '../src/network';
+import { MetagraphClient, createMetagraphClient, type LayerType } from '../src/network';
 
 describe('Network Operations', () => {
   describe('MetagraphClient', () => {
     it('should require baseUrl in config', () => {
-      expect(
-        () => new MetagraphClient({ baseUrl: '', layer: 'dl1' })
-      ).toThrow('baseUrl is required');
+      expect(() => new MetagraphClient({ baseUrl: '', layer: 'dl1' })).toThrow(
+        'baseUrl is required'
+      );
     });
 
     it('should require layer in config', () => {

@@ -69,10 +69,7 @@ export function encodeTransaction(tx: CurrencyTransaction): string {
  *
  * The variable-length integer encodes (msg.length + 1).
  */
-export function kryoSerialize(
-  msg: string,
-  setReferences: boolean = false
-): Uint8Array {
+export function kryoSerialize(msg: string, setReferences: boolean = false): Uint8Array {
   const prefix: number[] = [0x03];
   if (setReferences) {
     prefix.push(0x01);
@@ -83,9 +80,7 @@ export function kryoSerialize(
 
   const msgBytes = new TextEncoder().encode(msg);
 
-  const result = new Uint8Array(
-    prefix.length + lengthBytes.length + msgBytes.length
-  );
+  const result = new Uint8Array(prefix.length + lengthBytes.length + msgBytes.length);
   result.set(prefix, 0);
   result.set(lengthBytes, prefix.length);
   result.set(msgBytes, prefix.length + lengthBytes.length);

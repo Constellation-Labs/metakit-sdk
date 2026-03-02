@@ -83,9 +83,7 @@ describe('Cross-language compatibility', () => {
     for (const language of languages) {
       describe(`${language} vectors`, () => {
         it(`should verify ${language} regular data signatures`, () => {
-          const vectors = testVectors.filter(
-            (v) => v.source === language && v.type === 'TestData'
-          );
+          const vectors = testVectors.filter((v) => v.source === language && v.type === 'TestData');
           expect(vectors.length).toBeGreaterThan(0);
 
           for (const vector of vectors) {

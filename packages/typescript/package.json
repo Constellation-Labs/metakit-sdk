@@ -35,6 +35,7 @@
     "test:coverage": "jest --coverage",
     "lint": "eslint src tests",
     "format": "prettier --write src tests",
+    "format:check": "prettier --check src tests",
     "prepublishOnly": "npm run build && npm test"
   },
   "keywords": [
