@@ -10,8 +10,6 @@ TypeScript SDK for signing data and currency transactions on Constellation Netwo
 npm install @constellation-network/metagraph-sdk
 ```
 
-**Peer dependency:** This SDK wraps `@stardust-collective/dag4` for signing operations.
-
 ## Quick Start
 
 ```typescript
@@ -27,19 +25,41 @@ console.log('Address:', keyPair.address);
 
 // Sign data
 const data = { action: 'UPDATE', payload: { key: 'value' } };
-const signed = await createSignedObject(data, keyPair.privateKey);
+const signed = createSignedObject(data, keyPair.privateKey);
 
 // Verify
-const result = await verify(signed);
+const result = verify(signed);
 console.log('Valid:', result.isValid);
+```
+
+### Namespaced Imports
+
+The SDK also provides organized namespaces for cleaner imports:
+
+```typescript
+import { wallet, data, currency, network, jlvm } from '@constellation-network/metagraph-sdk';
+
+// Wallet operations
+const kp = wallet.generateKeyPair();
+
+// Data signing
+const signed = data.createSignedObject({ action: 'test' }, kp.privateKey);
+const result = data.verify(signed);
+
+// Currency transactions (shorter names)
+const tx = currency.createTransaction(params, kp.privateKey, lastRef);
+
+// JSON Logic VM
+const answer = jlvm.jsonLogic.apply({ '+': [1, 2] }, {});
 ```
 
 ## Features
 
 - **Data Transactions**: Sign and verify metagraph state updates for submission to data L1 endpoints
 - **Currency Transactions**: Create and sign metagraph token transfers (v2 format)
-- **Network Operations**: Submit transactions and query L1 nodes directly
+- **Network Operations**: Submit transactions and query metagraph nodes via `MetagraphClient` (supports ML0, CL1, DL1 layers)
 - **Multi-signature Support**: Add multiple signatures to transactions for multi-party authorization
+- **JSON Logic VM**: Evaluate JSON Logic expressions compatible with the Scala metakit implementation
 - **Cross-language Compatible**: Works seamlessly with Python, Rust, Go, and Java implementations
 
 ## API Reference
@@ -50,23 +70,27 @@ console.log('Valid:', result.isValid);
 
 #### `createSignedObject<T>(value, privateKey, options?)`
 
-Create a signed object with a single signature.
+Create a signed object with a single signature. The returned object includes a `mode` field that enables auto-verification.
 
 ```typescript
-const signed = await createSignedObject(
+// Standard signing
+const signed = createSignedObject({ action: 'test' }, privateKey);
+
+// DataUpdate signing (for L1 submission)
+const signed = createSignedObject(
   { action: 'test' },
   privateKey,
-  { isDataUpdate: true }  // For L1 submission
+  { mode: 'dataUpdate' }  // or legacy: { isDataUpdate: true }
 );
 ```
 
 #### `addSignature<T>(signed, privateKey, options?)`
 
-Add an additional signature to an existing signed object.
+Add an additional signature to an existing signed object. Inherits the signing mode from the existing object.
 
 ```typescript
-let signed = await createSignedObject(data, party1Key);
-signed = await addSignature(signed, party2Key);
+let signed = createSignedObject(data, party1Key);
+signed = addSignature(signed, party2Key);
 // signed.proofs.length === 2
 ```
 
@@ -75,16 +99,16 @@ signed = await addSignature(signed, party2Key);
 Create a signed object with multiple signatures at once.
 
 ```typescript
-const signed = await batchSign(data, [key1, key2, key3]);
+const signed = batchSign(data, [key1, key2, key3]);
 // signed.proofs.length === 3
 ```
 
 #### `verify<T>(signed, isDataUpdate?)`
 
-Verify all signatures on a signed object.
+Verify all signatures on a signed object. When the object has a `mode` field (set by `createSignedObject`/`addSignature`/`batchSign`), verification automatically uses the correct mode.
 
 ```typescript
-const result = await verify(signed);
+const result = verify(signed);
 if (result.isValid) {
   console.log('All signatures valid');
 } else {
@@ -103,16 +127,16 @@ const canonical = canonicalize({ b: 2, a: 1 });
 // '{"a":1,"b":2}'
 ```
 
-#### `toBytes<T>(data, isDataUpdate?)`
+#### `toBytes<T>(data, mode?)`
 
-Convert data to binary bytes for signing.
+Convert data to binary bytes for signing. Accepts `SigningMode` (`'standard'` | `'dataUpdate'`) or `boolean`.
 
 ```typescript
 // Regular encoding
 const bytes = toBytes(data);
 
 // DataUpdate encoding (with Constellation prefix)
-const updateBytes = toBytes(data, true);
+const updateBytes = toBytes(data, 'dataUpdate');
 ```
 
 #### `hash<T>(data)` / `hashBytes(bytes)`
@@ -130,7 +154,7 @@ console.log(hashResult.bytes);  // Uint8Array
 Sign data and return a proof.
 
 ```typescript
-const proof = await sign(data, privateKey);
+const proof = sign(data, privateKey);
 // { id: '...', signature: '...' }
 ```
 
@@ -140,7 +164,7 @@ Sign a pre-computed hash.
 
 ```typescript
 const hashResult = hash(data);
-const signature = await signHash(hashResult.value, privateKey);
+const signature = signHash(hashResult.value, privateKey);
 ```
 
 ### Wallet Utilities
@@ -173,6 +197,8 @@ const id = getPublicKeyId(privateKey);
 ## Types
 
 ```typescript
+type SigningMode = 'standard' | 'dataUpdate';
+
 interface SignatureProof {
   id: string;        // Public key (128 chars)
   signature: string; // DER signature hex
@@ -181,6 +207,7 @@ interface SignatureProof {
 interface Signed<T> {
   value: T;
   proofs: SignatureProof[];
+  mode?: SigningMode;  // Auto-detected by verify()
 }
 
 interface KeyPair {
@@ -222,6 +249,12 @@ interface TransferParams {
   amount: number;          // Amount in token units (e.g., 100.5)
   fee?: number;            // Fee in token units (defaults to 0)
 }
+
+interface TransferResult {
+  hash: string;            // Hash returned by L1 node
+  transaction: CurrencyTransaction;
+  reference: TransactionReference;  // For chaining subsequent transfers
+}
 ```
 
 ### Currency Transactions
@@ -233,7 +266,7 @@ Create a metagraph token transaction.
 ```typescript
 import { createCurrencyTransaction } from '@constellation-network/metagraph-sdk';
 
-const tx = await createCurrencyTransaction(
+const tx = createCurrencyTransaction(
   {
     destination: 'DAG...recipient',
     amount: 100.5,  // 100.5 tokens
@@ -255,7 +288,7 @@ const transfers = [
   { destination: 'DAG...3', amount: 30 },
 ];
 
-const txns = await createCurrencyTransactionBatch(
+const txns = createCurrencyTransactionBatch(
   transfers,
   privateKey,
   { hash: 'abc123...', ordinal: 5 }
@@ -267,8 +300,8 @@ const txns = await createCurrencyTransactionBatch(
 Add an additional signature to a currency transaction (for multi-sig).
 
 ```typescript
-let tx = await createCurrencyTransaction(params, key1, lastRef);
-tx = await signCurrencyTransaction(tx, key2);
+let tx = createCurrencyTransaction(params, key1, lastRef);
+tx = signCurrencyTransaction(tx, key2);
 // tx.proofs.length === 2
 ```
 
@@ -277,7 +310,7 @@ tx = await signCurrencyTransaction(tx, key2);
 Verify all signatures on a currency transaction.
 
 ```typescript
-const result = await verifyCurrencyTransaction(tx);
+const result = verifyCurrencyTransaction(tx);
 console.log('Valid:', result.isValid);
 ```
 
@@ -286,7 +319,7 @@ console.log('Valid:', result.isValid);
 Hash a currency transaction.
 
 ```typescript
-const hash = await hashCurrencyTransaction(tx);
+const hash = hashCurrencyTransaction(tx);
 console.log('Hash:', hash.value);
 ```
 
@@ -295,7 +328,7 @@ console.log('Hash:', hash.value);
 Get a transaction reference for chaining transactions.
 
 ```typescript
-const ref = await getTransactionReference(tx, 6);
+const ref = getTransactionReference(tx, 6);
 // Use ref as lastRef for next transaction
 ```
 
@@ -315,84 +348,98 @@ TOKEN_DECIMALS;  // 1e-8
 
 ### Network Operations
 
-#### `CurrencyL1Client`
-
-Client for interacting with Currency L1 nodes.
+The SDK provides a unified `MetagraphClient` that targets any metagraph layer — Currency L1 (CL1), Data L1 (DL1), or Metagraph L0 (ML0). Available methods are guarded by layer type at runtime.
 
 ```typescript
-import { CurrencyL1Client, NetworkConfig } from '@constellation-network/metagraph-sdk';
+import { MetagraphClient, createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
 
-const config: NetworkConfig = {
-  l1Url: 'http://localhost:9010',
-  timeout: 30000,  // optional, defaults to 30s
-};
+// Currency L1 — token transfers
+const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
 
-const client = new CurrencyL1Client(config);
+// Data L1 — metagraph state updates
+const dl1 = createMetagraphClient('http://localhost:9400', 'dl1');
 
+// Metagraph L0 — cluster operations
+const ml0 = createMetagraphClient('http://localhost:9200', 'ml0');
+```
+
+#### Currency Operations (CL1)
+
+**High-level transfer API:**
+
+```typescript
+// Single transfer — fetches last ref, signs, and submits automatically
+const result = await cl1.transfer(
+  { destination: 'DAG...recipient', amount: 100.5 },
+  privateKey
+);
+console.log('Submitted:', result.hash);
+
+// Chain another transfer using the returned reference
+const result2 = await cl1.transfer(
+  { destination: 'DAG...other', amount: 50 },
+  privateKey,
+  { lastRef: result.reference }
+);
+
+// Batch transfers — auto-chained sequentially
+const results = await cl1.transferBatch(
+  [
+    { destination: 'DAG...1', amount: 10 },
+    { destination: 'DAG...2', amount: 20 },
+  ],
+  privateKey
+);
+```
+
+**Low-level methods:**
+
+```typescript
 // Get last transaction reference for an address
-const lastRef = await client.getLastReference('DAG...');
+const lastRef = await cl1.getLastReference('DAG...');
 
 // Submit a signed transaction
-const result = await client.postTransaction(signedTx);
+const result = await cl1.postTransaction(signedTx);
 console.log('Transaction hash:', result.hash);
 
 // Check pending transaction status
-const pending = await client.getPendingTransaction(result.hash);
+const pending = await cl1.getPendingTransaction(result.hash);
 if (pending) {
   console.log('Status:', pending.status);  // 'Waiting' | 'InProgress' | 'Accepted'
 }
-
-// Check node health
-const isHealthy = await client.checkHealth();
 ```
 
-#### `DataL1Client`
-
-Client for interacting with Data L1 nodes (metagraphs).
+#### Data Operations (DL1)
 
 ```typescript
-import { DataL1Client, NetworkConfig } from '@constellation-network/metagraph-sdk';
-
-const config: NetworkConfig = {
-  dataL1Url: 'http://localhost:8080',
-};
-
-const client = new DataL1Client(config);
-
 // Estimate fee for data submission
-const feeInfo = await client.estimateFee(signedData);
+const feeInfo = await dl1.estimateFee(signedData);
 console.log('Fee:', feeInfo.fee, 'Address:', feeInfo.address);
 
 // Submit signed data
-const result = await client.postData(signedData);
+const result = await dl1.postData(signedData);
 console.log('Data hash:', result.hash);
-
-// Check node health
-const isHealthy = await client.checkHealth();
 ```
 
-#### Combined Configuration
-
-You can configure both L1 clients from a single config:
+#### Common Operations (All Layers)
 
 ```typescript
-const config: NetworkConfig = {
-  l1Url: 'http://localhost:9010',      // Currency L1
-  dataL1Url: 'http://localhost:8080',  // Data L1
-  timeout: 30000,
-};
+// Check node health
+const isHealthy = await cl1.checkHealth();
 
-const l1Client = new CurrencyL1Client(config);
-const dataClient = new DataL1Client(config);
+// Get cluster information
+const info = await ml0.getClusterInfo();
 ```
 
 #### Network Types
 
 ```typescript
-interface NetworkConfig {
-  l1Url?: string;       // Currency L1 endpoint
-  dataL1Url?: string;   // Data L1 endpoint
-  timeout?: number;     // Request timeout in ms
+type LayerType = 'ml0' | 'cl1' | 'dl1';
+
+interface MetagraphClientConfig {
+  baseUrl: string;    // Node URL
+  layer: LayerType;   // Target layer
+  timeout?: number;   // Request timeout in ms (default: 30000)
 }
 
 interface PostTransactionResponse {
@@ -427,7 +474,8 @@ class NetworkError extends Error {
 #### Submit DataUpdate to L1
 
 ```typescript
-import { createSignedObject, DataL1Client } from '@constellation-network/metagraph-sdk';
+import { createSignedObject } from '@constellation-network/metagraph-sdk';
+import { createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
 
 // Your metagraph data update
 const dataUpdate = {
@@ -438,13 +486,13 @@ const dataUpdate = {
 };
 
 // Sign as DataUpdate
-const signed = await createSignedObject(dataUpdate, privateKey, {
-  isDataUpdate: true
+const signed = createSignedObject(dataUpdate, privateKey, {
+  mode: 'dataUpdate'
 });
 
 // Submit to data-l1 using the client
-const client = new DataL1Client({ dataL1Url: 'http://l1-node:9300' });
-const result = await client.postData(signed);
+const dl1 = createMetagraphClient('http://l1-node:9300', 'dl1');
+const result = await dl1.postData(signed);
 console.log('Submitted with hash:', result.hash);
 ```
 
@@ -454,43 +502,60 @@ console.log('Submitted with hash:', result.hash);
 import { createSignedObject, addSignature, verify } from '@constellation-network/metagraph-sdk';
 
 // Party 1 creates and signs
-let signed = await createSignedObject(data, party1Key);
+let signed = createSignedObject(data, party1Key);
 
 // Party 2 adds signature
-signed = await addSignature(signed, party2Key);
+signed = addSignature(signed, party2Key);
 
 // Party 3 adds signature
-signed = await addSignature(signed, party3Key);
+signed = addSignature(signed, party3Key);
 
-// Verify all signatures
-const result = await verify(signed);
+// Verify all signatures — mode auto-detected
+const result = verify(signed);
 console.log(`${result.validProofs.length} valid signatures`);
 ```
 
 ### Currency Transactions
 
-#### Create and Submit Token Transaction
+#### High-Level Transfer
+
+```typescript
+import { generateKeyPair } from '@constellation-network/metagraph-sdk';
+import { createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
+
+const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
+const sender = generateKeyPair();
+
+// One-line transfer
+const result = await cl1.transfer(
+  { destination: 'DAG...recipient', amount: 100.5 },
+  sender.privateKey
+);
+console.log('Transaction hash:', result.hash);
+```
+
+#### Low-Level Transaction Creation
 
 ```typescript
 import {
   generateKeyPair,
   createCurrencyTransaction,
   verifyCurrencyTransaction,
-  CurrencyL1Client,
 } from '@constellation-network/metagraph-sdk';
+import { createMetagraphClient } from '@constellation-network/metagraph-sdk/network';
 
-// Set up L1 client
-const client = new CurrencyL1Client({ l1Url: 'http://localhost:9010' });
+// Set up CL1 client
+const cl1 = createMetagraphClient('http://localhost:9300', 'cl1');
 
 // Generate keys
 const senderKey = generateKeyPair();
 const recipientKey = generateKeyPair();
 
 // Get last transaction reference from the network
-const lastRef = await client.getLastReference(senderKey.address);
+const lastRef = await cl1.getLastReference(senderKey.address);
 
 // Create transaction
-const tx = await createCurrencyTransaction(
+const tx = createCurrencyTransaction(
   {
     destination: recipientKey.address,
     amount: 100.5,  // 100.5 tokens
@@ -501,15 +566,15 @@ const tx = await createCurrencyTransaction(
 );
 
 // Verify locally before submitting
-const result = await verifyCurrencyTransaction(tx);
+const result = verifyCurrencyTransaction(tx);
 console.log('Transaction valid:', result.isValid);
 
 // Submit to network
-const response = await client.postTransaction(tx);
+const response = await cl1.postTransaction(tx);
 console.log('Transaction hash:', response.hash);
 
 // Poll for status
-const pending = await client.getPendingTransaction(response.hash);
+const pending = await cl1.getPendingTransaction(response.hash);
 console.log('Status:', pending?.status);
 ```
 
@@ -527,16 +592,13 @@ const transfers = [
 ];
 
 // Create batch (transactions are automatically chained)
-const txns = await createCurrencyTransactionBatch(
+const txns = createCurrencyTransactionBatch(
   transfers,
   privateKey,
   lastRef
 );
 
 console.log(`Created ${txns.length} transactions`);
-// Transaction 1 uses ordinal 10
-// Transaction 2 uses ordinal 11
-// Transaction 3 uses ordinal 12
 ```
 
 #### Multi-Signature Token Transaction
@@ -549,20 +611,20 @@ import {
 } from '@constellation-network/metagraph-sdk';
 
 // Create transaction with first signature
-let tx = await createCurrencyTransaction(
+let tx = createCurrencyTransaction(
   { destination: 'DAG...', amount: 1000, fee: 0 },
   party1PrivateKey,
   lastRef
 );
 
 // Add second signature
-tx = await signCurrencyTransaction(tx, party2PrivateKey);
+tx = signCurrencyTransaction(tx, party2PrivateKey);
 
 // Add third signature
-tx = await signCurrencyTransaction(tx, party3PrivateKey);
+tx = signCurrencyTransaction(tx, party3PrivateKey);
 
 // Verify all signatures
-const result = await verifyCurrencyTransaction(tx);
+const result = verifyCurrencyTransaction(tx);
 console.log(`${result.validProofs.length} valid signatures`);
 ```
 
