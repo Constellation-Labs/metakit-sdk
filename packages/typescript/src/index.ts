@@ -27,6 +27,7 @@ export type {
   Hash,
   VerificationResult,
   SigningOptions,
+  SigningMode,
 } from './types';
 
 export { ALGORITHM, CONSTELLATION_PREFIX } from './types';
@@ -69,6 +70,7 @@ export type {
   CurrencyTransactionValue,
   CurrencyTransaction,
   TransferParams,
+  TransferResult,
 } from './currency-types';
 
 export { TOKEN_DECIMALS } from './currency-types';
@@ -97,3 +99,6 @@ export type {
   EstimateFeeResponse,
   PostDataResponse,
 } from './network';
+
+// Namespaced exports
+export { wallet, data, currency, network, jlvm } from './namespaces';
