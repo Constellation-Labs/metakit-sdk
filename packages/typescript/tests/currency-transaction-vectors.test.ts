@@ -13,7 +13,9 @@ import {
   hashCurrencyTransaction,
   encodeCurrencyTransaction,
 } from '../src/currency-transaction';
-import { keyStore } from '@stardust-collective/dag4-keystore';
+import {
+  getPublicKeyFromPrivate,
+} from '../src/crypto';
 import type { CurrencyTransaction } from '../src/currency-types';
 import { getAddress } from '../src/wallet';
 
@@ -26,23 +28,23 @@ describe('Currency Transaction Test Vectors', () => {
 
   describe('Key Derivation', () => {
     it('derives correct public key from private key', () => {
-      const publicKey = keyStore.getPublicKeyFromPrivate(basic.privateKeyHex);
-      // dag4.js may return with or without 04 prefix depending on version
+      const publicKey = getPublicKeyFromPrivate(basic.privateKeyHex);
+      // getPublicKeyFromPrivate returns with 04 prefix
       const normalizedPublicKey = publicKey.startsWith('04') ? publicKey : '04' + publicKey;
       expect(normalizedPublicKey).toBe(basic.publicKeyHex);
     });
 
     it('derives correct address from public key', () => {
-      const publicKey = keyStore.getPublicKeyFromPrivate(basic.privateKeyHex);
+      const publicKey = getPublicKeyFromPrivate(basic.privateKeyHex);
       const address = getAddress(publicKey);
       expect(address).toBe(basic.address);
     });
   });
 
   describe('Transaction Encoding', () => {
-    it('encodes transaction correctly', async () => {
+    it('encodes transaction correctly', () => {
       // Create transaction with known salt
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: basic.transaction.destination,
           amount: basic.transaction.amount / 1e8, // Convert to token units
@@ -59,12 +61,12 @@ describe('Currency Transaction Test Vectors', () => {
       expect(encoded).toBe(basic.encodedString);
     });
 
-    it('validates encoding format breakdown', async () => {
+    it('validates encoding format breakdown', () => {
       const breakdown = testVectors.testVectors.encodingBreakdown;
       const components = breakdown.components;
 
       // Create transaction with known values
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: components.destination.value,
           amount: parseInt(components.amountHex.value, 16) / 1e8,
@@ -92,9 +94,9 @@ describe('Currency Transaction Test Vectors', () => {
   });
 
   describe('Transaction Hashing', () => {
-    it('produces correct transaction hash', async () => {
+    it('produces correct transaction hash', () => {
       // Create transaction with deterministic values
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: basic.transaction.destination,
           amount: basic.transaction.amount / 1e8,
@@ -108,13 +110,13 @@ describe('Currency Transaction Test Vectors', () => {
       (tx.value as any).salt = basic.transaction.salt.toString();
       tx.proofs = [];
 
-      const hash = await hashCurrencyTransaction(tx);
+      const hash = hashCurrencyTransaction(tx);
       expect(hash.value).toBe(basic.transactionHash);
     });
   });
 
   describe('Signature Verification', () => {
-    it('verifies reference signature from Scala test vectors', async () => {
+    it('verifies reference signature from Scala test vectors', () => {
       // Scala signatures are normalized to low-S during verification
       const tx: CurrencyTransaction = {
         value: {
@@ -129,13 +131,13 @@ describe('Currency Transaction Test Vectors', () => {
         ],
       };
 
-      const result = await verifyCurrencyTransaction(tx);
+      const result = verifyCurrencyTransaction(tx);
       expect(result.isValid).toBe(true);
       expect(result.validProofs.length).toBe(1);
       expect(result.invalidProofs.length).toBe(0);
     });
 
-    it('verifies multi-signature transaction from Scala test vectors', async () => {
+    it('verifies multi-signature transaction from Scala test vectors', () => {
       // Scala signatures are normalized to low-S during verification
       const multiSig = testVectors.testVectors.multiSignature;
       expect(multiSig.transactionHash).toBe(basic.transactionHash);
@@ -148,7 +150,7 @@ describe('Currency Transaction Test Vectors', () => {
         proofs: multiSig.proofs,
       };
 
-      const result = await verifyCurrencyTransaction(tx);
+      const result = verifyCurrencyTransaction(tx);
       expect(result.isValid).toBe(true);
       expect(result.validProofs.length).toBe(2);
       expect(result.invalidProofs.length).toBe(0);

@@ -57,9 +57,9 @@ describe('Cross-language compatibility', () => {
   });
 
   describe('Signature verification', () => {
-    it('should verify signatures from all test vectors', async () => {
+    it('should verify signatures from all test vectors', () => {
       for (const vector of testVectors) {
-        const isValid = await verifyHash(
+        const isValid = verifyHash(
           vector.sha256_hash_hex,
           vector.signature_hex,
           vector.public_key_hex
@@ -68,11 +68,11 @@ describe('Cross-language compatibility', () => {
       }
     });
 
-    it('should reject tampered signatures', async () => {
+    it('should reject tampered signatures', () => {
       const vector = testVectors[0];
       // Modify the hash slightly
       const tamperedHash = vector.sha256_hash_hex.replace(/0/g, '1');
-      const isValid = await verifyHash(tamperedHash, vector.signature_hex, vector.public_key_hex);
+      const isValid = verifyHash(tamperedHash, vector.signature_hex, vector.public_key_hex);
       expect(isValid).toBe(false);
     });
   });
@@ -82,7 +82,7 @@ describe('Cross-language compatibility', () => {
 
     for (const language of languages) {
       describe(`${language} vectors`, () => {
-        it(`should verify ${language} regular data signatures`, async () => {
+        it(`should verify ${language} regular data signatures`, () => {
           const vectors = testVectors.filter(
             (v) => v.source === language && v.type === 'TestData'
           );
@@ -93,7 +93,7 @@ describe('Cross-language compatibility', () => {
             const hashResult = hashBytes(bytes);
             expect(hashResult.value).toBe(vector.sha256_hash_hex);
 
-            const isValid = await verifyHash(
+            const isValid = verifyHash(
               vector.sha256_hash_hex,
               vector.signature_hex,
               vector.public_key_hex
@@ -102,7 +102,7 @@ describe('Cross-language compatibility', () => {
           }
         });
 
-        it(`should verify ${language} DataUpdate signatures`, async () => {
+        it(`should verify ${language} DataUpdate signatures`, () => {
           const vectors = testVectors.filter(
             (v) => v.source === language && v.type === 'TestDataUpdate'
           );
@@ -113,7 +113,7 @@ describe('Cross-language compatibility', () => {
             const hashResult = hashBytes(bytes);
             expect(hashResult.value).toBe(vector.sha256_hash_hex);
 
-            const isValid = await verifyHash(
+            const isValid = verifyHash(
               vector.sha256_hash_hex,
               vector.signature_hex,
               vector.public_key_hex

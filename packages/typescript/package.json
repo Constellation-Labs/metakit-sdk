@@ -60,11 +60,10 @@
   },
   "homepage": "https://github.com/Constellation-Labs/metakit-sdk/tree/main/packages/typescript#readme",
   "dependencies": {
-    "@stardust-collective/dag4": "^2.6.0",
-    "@stardust-collective/dag4-keystore": "^2.6.0",
-    "canonicalize": "^2.1.0",
-    "js-sha256": "^0.11.1",
-    "js-sha512": "^0.9.0"
+    "@noble/curves": "^1.8.0",
+    "@noble/hashes": "^1.7.0",
+    "bs58": "^6.0.0",
+    "canonicalize": "^2.1.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.0",
@@ -76,9 +75,6 @@
     "prettier": "^3.0.0",
     "ts-jest": "^29.0.0",
     "typescript": "^5.0.0"
-  },
-  "peerDependencies": {
-    "@stardust-collective/dag4": "^2.6.0"
   },
   "engines": {
     "node": ">=18.0.0"

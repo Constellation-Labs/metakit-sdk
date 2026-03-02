@@ -4,8 +4,18 @@
  * Convenience functions for creating and managing signed objects.
  */
 
-import { Signed, SignatureProof, SigningOptions } from './types';
+import { Signed, SignatureProof, SigningOptions, SigningMode } from './types';
 import { sign, signDataUpdate } from './sign';
+
+/**
+ * Resolve the signing mode from options, supporting both legacy and new API.
+ * Priority: options.mode > options.isDataUpdate > 'standard'
+ */
+function resolveMode(options: SigningOptions): SigningMode {
+  if (options.mode) return options.mode;
+  if (options.isDataUpdate) return 'dataUpdate';
+  return 'standard';
+}
 
 /**
  * Create a signed object with a single signature
@@ -18,26 +28,30 @@ import { sign, signDataUpdate } from './sign';
  * @example
  * ```typescript
  * // Sign a regular data object
- * const signed = await createSignedObject(myData, privateKey);
+ * const signed = createSignedObject(myData, privateKey);
  *
- * // Sign as DataUpdate for L1 submission
- * const signedUpdate = await createSignedObject(myData, privateKey, { isDataUpdate: true });
+ * // Sign as DataUpdate for L1 submission (new API)
+ * const signedUpdate = createSignedObject(myData, privateKey, { mode: 'dataUpdate' });
+ *
+ * // Legacy API still works
+ * const signedLegacy = createSignedObject(myData, privateKey, { isDataUpdate: true });
  * ```
  */
-export async function createSignedObject<T>(
+export function createSignedObject<T>(
   value: T,
   privateKey: string,
   options: SigningOptions = {}
-): Promise<Signed<T>> {
-  const { isDataUpdate = false } = options;
+): Signed<T> {
+  const mode = resolveMode(options);
 
-  const proof = isDataUpdate
-    ? await signDataUpdate(value, privateKey)
-    : await sign(value, privateKey);
+  const proof = mode === 'dataUpdate'
+    ? signDataUpdate(value, privateKey)
+    : sign(value, privateKey);
 
   return {
     value,
     proofs: [proof],
+    mode,
   };
 }
 
@@ -47,37 +61,41 @@ export async function createSignedObject<T>(
  * This allows building multi-signature objects where multiple parties
  * need to sign the same data.
  *
+ * When no options are provided, inherits the mode from the existing signed object.
+ *
  * @param signed - Existing signed object
  * @param privateKey - Private key in hex format
- * @param options - Signing options (must match original signing)
+ * @param options - Signing options (if omitted, inherits mode from signed object)
  * @returns New signed object with additional proof
  *
  * @example
  * ```typescript
  * // First party signs
- * let signed = await createSignedObject(data, party1Key);
+ * let signed = createSignedObject(data, party1Key);
  *
- * // Second party adds signature
- * signed = await addSignature(signed, party2Key);
+ * // Second party adds signature (inherits mode automatically)
+ * signed = addSignature(signed, party2Key);
  *
  * // Now has 2 proofs
  * console.log(signed.proofs.length); // 2
  * ```
  */
-export async function addSignature<T>(
+export function addSignature<T>(
   signed: Signed<T>,
   privateKey: string,
-  options: SigningOptions = {}
-): Promise<Signed<T>> {
-  const { isDataUpdate = false } = options;
+  options?: SigningOptions
+): Signed<T> {
+  // Inherit mode from existing signed object if no options provided
+  const mode = options ? resolveMode(options) : (signed.mode ?? 'standard');
 
-  const newProof = isDataUpdate
-    ? await signDataUpdate(signed.value, privateKey)
-    : await sign(signed.value, privateKey);
+  const newProof = mode === 'dataUpdate'
+    ? signDataUpdate(signed.value, privateKey)
+    : sign(signed.value, privateKey);
 
   return {
     value: signed.value,
     proofs: [...signed.proofs, newProof],
+    mode,
   };
 }
 
@@ -94,27 +112,28 @@ export async function addSignature<T>(
  *
  * @example
  * ```typescript
- * const signed = await batchSign(data, [key1, key2, key3]);
+ * const signed = batchSign(data, [key1, key2, key3]);
  * console.log(signed.proofs.length); // 3
  * ```
  */
-export async function batchSign<T>(
+export function batchSign<T>(
   value: T,
   privateKeys: string[],
   options: SigningOptions = {}
-): Promise<Signed<T>> {
+): Signed<T> {
   if (privateKeys.length === 0) {
     throw new Error('At least one private key is required');
   }
 
-  const { isDataUpdate = false } = options;
+  const mode = resolveMode(options);
 
-  const proofs: SignatureProof[] = await Promise.all(
-    privateKeys.map((key) => (isDataUpdate ? signDataUpdate(value, key) : sign(value, key)))
+  const proofs: SignatureProof[] = privateKeys.map((key) =>
+    mode === 'dataUpdate' ? signDataUpdate(value, key) : sign(value, key)
   );
 
   return {
     value,
     proofs,
+    mode,
   };
 }

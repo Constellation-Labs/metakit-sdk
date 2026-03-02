@@ -4,7 +4,12 @@
  * Functions for generating and managing cryptographic keys.
  */
 
-import { dag4 } from '@stardust-collective/dag4';
+import {
+  generatePrivateKey,
+  getPublicKeyFromPrivate,
+  getCompressedPublicKey,
+  getDagAddressFromPublicKey,
+} from './crypto';
 import { KeyPair } from './types';
 
 /**
@@ -21,7 +26,7 @@ import { KeyPair } from './types';
  * ```
  */
 export function generateKeyPair(): KeyPair {
-  const privateKey = dag4.keyStore.generatePrivateKey();
+  const privateKey = generatePrivateKey();
   return keyPairFromPrivateKey(privateKey);
 }
 
@@ -37,11 +42,8 @@ export function generateKeyPair(): KeyPair {
  * ```
  */
 export function keyPairFromPrivateKey(privateKey: string): KeyPair {
-  // Get uncompressed public key (with 04 prefix)
-  const publicKey = dag4.keyStore.getPublicKeyFromPrivate(privateKey, false);
-
-  // Derive DAG address
-  const address = dag4.keyStore.getDagAddressFromPublicKey(publicKey);
+  const publicKey = getPublicKeyFromPrivate(privateKey);
+  const address = getDagAddressFromPublicKey(publicKey);
 
   return {
     privateKey,
@@ -58,7 +60,10 @@ export function keyPairFromPrivateKey(privateKey: string): KeyPair {
  * @returns Public key in hex format
  */
 export function getPublicKeyHex(privateKey: string, compressed: boolean = false): string {
-  return dag4.keyStore.getPublicKeyFromPrivate(privateKey, compressed);
+  if (compressed) {
+    return getCompressedPublicKey(privateKey);
+  }
+  return getPublicKeyFromPrivate(privateKey);
 }
 
 /**
@@ -70,8 +75,7 @@ export function getPublicKeyHex(privateKey: string, compressed: boolean = false)
  * @returns Public key ID (128 characters, no 04 prefix)
  */
 export function getPublicKeyId(privateKey: string): string {
-  const publicKey = dag4.keyStore.getPublicKeyFromPrivate(privateKey, false);
-  // Remove 04 prefix if present
+  const publicKey = getPublicKeyFromPrivate(privateKey);
   if (publicKey.length === 130 && publicKey.startsWith('04')) {
     return publicKey.substring(2);
   }
@@ -86,7 +90,7 @@ export function getPublicKeyId(privateKey: string): string {
  */
 export function getAddress(publicKey: string): string {
   const normalizedKey = normalizePublicKey(publicKey);
-  return dag4.keyStore.getDagAddressFromPublicKey(normalizedKey);
+  return getDagAddressFromPublicKey(normalizedKey);
 }
 
 /**
@@ -109,7 +113,6 @@ export function isValidPrivateKey(privateKey: string): boolean {
  */
 export function isValidPublicKey(publicKey: string): boolean {
   if (typeof publicKey !== 'string') return false;
-  // With 04 prefix: 130 chars, without: 128 chars
   if (publicKey.length !== 128 && publicKey.length !== 130) return false;
   return /^[0-9a-fA-F]+$/.test(publicKey);
 }

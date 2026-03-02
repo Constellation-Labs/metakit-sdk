@@ -55,6 +55,18 @@ export interface TransferParams {
 }
 
 /**
+ * Result of a high-level transfer operation
+ */
+export interface TransferResult {
+  /** Transaction hash returned by the L1 node */
+  hash: string;
+  /** The signed transaction that was submitted */
+  transaction: CurrencyTransaction;
+  /** Reference for chaining subsequent transactions */
+  reference: TransactionReference;
+}
+
+/**
  * Token decimals constant (1e-8)
  * Same as DAG_DECIMALS from dag4.js
  */

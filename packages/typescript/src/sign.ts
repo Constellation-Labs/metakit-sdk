@@ -1,14 +1,16 @@
 /**
  * Signing Functions
  *
- * ECDSA signing using secp256k1 curve via dag4js.
+ * ECDSA signing using secp256k1 curve via @noble/curves.
  * Implements the Constellation signature protocol.
  */
 
-import { dag4 } from '@stardust-collective/dag4';
-import { sha256 } from 'js-sha256';
+import { sha256 } from '@noble/hashes/sha256';
+import { bytesToHex } from '@noble/curves/abstract/utils';
 import { SignatureProof } from './types';
 import { canonicalize } from './canonicalize';
+import { toBytes } from './binary';
+import { constellationDigest, ecdsaSign, getPublicKeyFromPrivate } from './crypto';
 
 /**
  * Sign data using the regular Constellation protocol (non-DataUpdate)
@@ -16,7 +18,8 @@ import { canonicalize } from './canonicalize';
  * Protocol:
  * 1. Canonicalize JSON (RFC 8785)
  * 2. SHA-256 hash the canonical JSON string
- * 3. Sign using dag4.keyStore.sign
+ * 3. Compute Constellation digest (SHA-512 of hash-as-UTF-8, truncated to 32 bytes)
+ * 4. Sign with ECDSA secp256k1
  *
  * @param data - Any JSON-serializable object
  * @param privateKey - Private key in hex format
@@ -24,27 +27,17 @@ import { canonicalize } from './canonicalize';
  *
  * @example
  * ```typescript
- * const proof = await sign({ action: 'test' }, privateKeyHex);
+ * const proof = sign({ action: 'test' }, privateKeyHex);
  * console.log(proof.id);        // public key (128 chars)
  * console.log(proof.signature); // DER signature
  * ```
  */
-export async function sign<T>(data: T, privateKey: string): Promise<SignatureProof> {
-  // Step 1: Canonicalize JSON (RFC 8785)
+export function sign<T>(data: T, privateKey: string): SignatureProof {
   const canonicalJson = canonicalize(data);
-
-  // Step 2-3: UTF-8 encode and SHA-256 hash (sha256 handles UTF-8 encoding internally)
-  // Returns 64-character hex string
-  const hashHex = sha256(canonicalJson);
-
-  // Step 4-6: dag4.keyStore.sign internally:
-  //   4. Treats hashHex as UTF-8 bytes
-  //   5. SHA-512 hashes those bytes, truncates to 32 bytes
-  //   6. Signs with ECDSA secp256k1
-  const signature = await dag4.keyStore.sign(privateKey, hashHex);
-
-  // Get public key ID (without 04 prefix)
-  const publicKey = dag4.keyStore.getPublicKeyFromPrivate(privateKey, false);
+  const hashHex = bytesToHex(sha256(new TextEncoder().encode(canonicalJson)));
+  const digest = constellationDigest(hashHex);
+  const signature = ecdsaSign(digest, privateKey);
+  const publicKey = getPublicKeyFromPrivate(privateKey);
   const id = normalizePublicKeyId(publicKey);
 
   return { id, signature };
@@ -55,25 +48,21 @@ export async function sign<T>(data: T, privateKey: string): Promise<SignaturePro
  *
  * Protocol:
  * 1. Canonicalize JSON (RFC 8785)
- * 2. Base64 encode the canonical JSON
- * 3. Sign using dag4.keyStore.dataSign (adds Constellation prefix internally)
+ * 2. Encode with Constellation prefix via toBytes(data, true)
+ * 3. SHA-256 hash the encoded bytes
+ * 4. Compute Constellation digest
+ * 5. Sign with ECDSA secp256k1
  *
  * @param data - Any JSON-serializable object
  * @param privateKey - Private key in hex format
  * @returns SignatureProof
  */
-export async function signDataUpdate<T>(data: T, privateKey: string): Promise<SignatureProof> {
-  // Step 1: Canonicalize JSON
-  const canonicalJson = canonicalize(data);
-
-  // Step 2: Base64 encode for dataSign
-  const base64String = Buffer.from(canonicalJson, 'utf-8').toString('base64');
-
-  // Step 3: Sign using dag4's dataSign (handles Constellation prefix internally)
-  const signature = await dag4.keyStore.dataSign(privateKey, base64String);
-
-  // Get public key ID
-  const publicKey = dag4.keyStore.getPublicKeyFromPrivate(privateKey, false);
+export function signDataUpdate<T>(data: T, privateKey: string): SignatureProof {
+  const dataBytes = toBytes(data, true);
+  const hashHex = bytesToHex(sha256(dataBytes));
+  const digest = constellationDigest(hashHex);
+  const signature = ecdsaSign(digest, privateKey);
+  const publicKey = getPublicKeyFromPrivate(privateKey);
   const id = normalizePublicKeyId(publicKey);
 
   return { id, signature };
@@ -85,7 +74,7 @@ export async function signDataUpdate<T>(data: T, privateKey: string): Promise<Si
  * This is the low-level signing function. Use `sign()` or `signDataUpdate()`
  * for most use cases.
  *
- * Protocol (performed by dag4.keyStore.sign):
+ * Protocol:
  * 1. Treat hashHex as UTF-8 bytes (64 ASCII characters = 64 bytes)
  * 2. SHA-512 hash those bytes (produces 64 bytes)
  * 3. Truncate to first 32 bytes (for secp256k1 curve order)
@@ -98,31 +87,24 @@ export async function signDataUpdate<T>(data: T, privateKey: string): Promise<Si
  *
  * @example
  * ```typescript
- * // Compute your own hash
- * const hashHex = sha256(myData);
- * const signature = await signHash(hashHex, privateKey);
+ * const hashHex = hash(myData).value;
+ * const signature = signHash(hashHex, privateKey);
  * ```
  */
-export async function signHash(hashHex: string, privateKey: string): Promise<string> {
-  // dag4.keyStore.sign performs:
-  // 1. SHA-512 of hashHex (treating 64 hex chars as UTF-8 bytes)
-  // 2. Truncation to 32 bytes (handled internally by crypto library)
-  // 3. ECDSA signing with secp256k1
-  return dag4.keyStore.sign(privateKey, hashHex);
+export function signHash(hashHex: string, privateKey: string): string {
+  const digest = constellationDigest(hashHex);
+  return ecdsaSign(digest, privateKey);
 }
 
 /**
  * Normalize public key to ID format (without 04 prefix, 128 chars)
  */
 function normalizePublicKeyId(publicKey: string): string {
-  // If 130 chars (with 04 prefix), remove prefix
   if (publicKey.length === 130 && publicKey.startsWith('04')) {
     return publicKey.substring(2);
   }
-  // If 128 chars (without prefix), return as-is
   if (publicKey.length === 128) {
     return publicKey;
   }
-  // Otherwise return as-is and let validation catch issues
   return publicKey;
 }
