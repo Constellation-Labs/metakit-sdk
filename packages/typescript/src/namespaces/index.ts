@@ -15,7 +15,5 @@
 import * as wallet from './wallet';
 import * as data from './data';
 import * as currency from './currency';
-import * as network from './network';
-import * as jlvm from './jlvm';
 
-export { wallet, data, currency, network, jlvm };
+export { wallet, data, currency };
