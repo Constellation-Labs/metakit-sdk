@@ -5,6 +5,7 @@
  * replacing dag4-keystore's TransactionV2 and txEncode.
  */
 
+import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils';
 import type { CurrencyTransaction } from './currency-types';
 
 /** Minimum salt complexity (matching dag4.js: Number.MAX_SAFE_INTEGER - 2^48) */
@@ -14,10 +15,9 @@ const MIN_SALT = 2 ** 53 - 2 ** 48;
  * Generate a random salt for transaction uniqueness.
  */
 export function generateSalt(): string {
-  const randomBytes = new Uint8Array(6);
-  crypto.getRandomValues(randomBytes);
+  const bytes = nobleRandomBytes(6);
   let randomInt = 0;
-  for (const byte of randomBytes) {
+  for (const byte of bytes) {
     randomInt = randomInt * 256 + byte;
   }
   return String(MIN_SALT + randomInt);
