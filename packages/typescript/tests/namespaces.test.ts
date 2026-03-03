@@ -2,7 +2,8 @@
  * Tests for namespaced exports
  */
 
-import { wallet, data, currency, network, jlvm } from '../src';
+import { wallet, data, currency } from '../src';
+import * as jlvm from '../src/json-logic';
 
 describe('Namespaced exports', () => {
   describe('wallet namespace', () => {
@@ -87,15 +88,6 @@ describe('Namespaced exports', () => {
     it('should convert token amounts via namespace', () => {
       expect(currency.tokenToUnits(1)).toBe(1e8);
       expect(currency.unitsToToken(1e8)).toBe(1);
-    });
-  });
-
-  describe('network namespace', () => {
-    it('should export client classes', () => {
-      expect(typeof network.MetagraphClient).toBe('function');
-      expect(typeof network.createMetagraphClient).toBe('function');
-      expect(typeof network.HttpClient).toBe('function');
-      expect(typeof network.NetworkError).toBe('function');
     });
   });
 

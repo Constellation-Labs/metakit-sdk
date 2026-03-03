@@ -2,8 +2,12 @@
  * Tests for network operations
  */
 
-import { NetworkError } from '../src';
-import { MetagraphClient, createMetagraphClient, type LayerType } from '../src/network';
+import {
+  NetworkError,
+  MetagraphClient,
+  createMetagraphClient,
+  type LayerType,
+} from '../src/network';
 
 describe('Network Operations', () => {
   describe('MetagraphClient', () => {
