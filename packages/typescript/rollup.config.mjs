@@ -18,7 +18,7 @@ const entries = [
 export default entries.map(({ input, cjs, esm }) => ({
   input,
   output: [
-    { file: cjs, format: 'cjs', sourcemap: true, exports: 'named' },
+    { file: cjs, format: 'cjs', sourcemap: true, exports: 'named', interop: 'auto' },
     { file: esm, format: 'es', sourcemap: true },
   ],
   external,
