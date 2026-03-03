@@ -149,7 +149,7 @@ Releases are managed by maintainers. The process is:
    - TypeScript: `typescript-v1.2.3`
    - Python: `python-v1.2.3`
    - Rust: `rust-v1.2.3`
-   - Go: `go-v1.2.3`
+   - Go: `packages/go/v1.2.3`
    - Java: `java-v1.2.3`
 5. GitHub Actions automatically publishes to package registries
 

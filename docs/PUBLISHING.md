@@ -187,8 +187,8 @@ Update version in `packages/go/go.mod` if using semantic versioning.
 ### 8.2 Create and Push Tag
 
 ```bash
-git tag -a go-v0.1.0 -m "Go SDK v0.1.0"
-git push origin go-v0.1.0
+git tag -a packages/go/v0.1.0 -m "Go SDK v0.1.0"
+git push origin packages/go/v0.1.0
 ```
 
 ### 8.3 Verify on pkg.go.dev
@@ -231,7 +231,7 @@ git push origin java-v0.1.0
 ```bash
 mkdir /tmp/test-ts-sdk && cd /tmp/test-ts-sdk
 npm init -y
-npm install @constellation-network/metagraph-sdk @stardust-collective/dag4
+npm install @constellation-network/metagraph-sdk
 
 node -e "
 const { generateKeyPair } = require('@constellation-network/metagraph-sdk');
@@ -368,8 +368,8 @@ To release a new version:
    git push origin rust-vX.Y.Z
 
    # Go
-   git tag -a go-vX.Y.Z -m "Go SDK vX.Y.Z"
-   git push origin go-vX.Y.Z
+   git tag -a packages/go/vX.Y.Z -m "Go SDK vX.Y.Z"
+   git push origin packages/go/vX.Y.Z
 
    # Java
    git tag -a java-vX.Y.Z -m "Java SDK vX.Y.Z"
@@ -418,5 +418,5 @@ You can manually trigger the release workflows from the Actions tab using "Run w
 | TypeScript | `packages/typescript/package.json` | `typescript-v0.1.0` | npm: `@constellation-network/metagraph-sdk` |
 | Python | `packages/python/pyproject.toml` | `python-v0.1.0` | PyPI: `constellation-metagraph-sdk` |
 | Rust | `packages/rust/Cargo.toml` | `rust-v0.1.0` | crates.io: `constellation-metagraph-sdk` |
-| Go | (tag only) | `go-v0.1.0` | pkg.go.dev (automatic) |
+| Go | (tag only) | `packages/go/v0.1.0` | pkg.go.dev (automatic) |
 | Java | `packages/java/pom.xml` | `java-v0.1.0` | Maven Central: `io.constellationnetwork:metagraph-sdk` |

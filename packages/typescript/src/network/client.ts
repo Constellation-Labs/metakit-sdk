@@ -78,8 +78,12 @@ export class HttpClient {
 
       try {
         return JSON.parse(text) as T;
-      } catch {
-        return text as T;
+      } catch (parseError) {
+        throw new NetworkError(
+          `Invalid JSON response from ${method} ${path}: ${parseError instanceof Error ? parseError.message : 'parse failed'}`,
+          response.status,
+          text
+        );
       }
     } catch (error) {
       clearTimeout(timeoutId);

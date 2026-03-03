@@ -89,9 +89,7 @@ export class JsonLogicRuntimeError extends JsonLogicError {
 }
 
 // Result type for evaluation
-export type JsonLogicResult<T> =
-  | { ok: true; value: T }
-  | { ok: false; error: JsonLogicError };
+export type JsonLogicResult<T> = { ok: true; value: T } | { ok: false; error: JsonLogicError };
 
 export const ok = <T>(value: T): JsonLogicResult<T> => ({ ok: true, value });
 export const err = <T>(error: JsonLogicError): JsonLogicResult<T> => ({ ok: false, error });

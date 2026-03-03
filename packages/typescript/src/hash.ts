@@ -4,9 +4,11 @@
  * SHA-256 and SHA-512 hashing for the Constellation signature protocol.
  */
 
-import { sha256 } from 'js-sha256';
-import { sha512 } from 'js-sha512';
+import { sha256 } from '@noble/hashes/sha256';
+import { sha512 } from '@noble/hashes/sha512';
+import { bytesToHex } from '@noble/curves/abstract/utils';
 import { Hash } from './types';
+import type { SigningMode } from './types';
 import { toBytes } from './binary';
 
 /**
@@ -33,9 +35,8 @@ export function hash<T>(data: T): Hash {
  * @returns Hash object with hex string and raw bytes
  */
 export function hashBytes(bytes: Uint8Array): Hash {
-  const hashArray = sha256.array(bytes);
-  const hashUint8 = new Uint8Array(hashArray);
-  const hashHex = sha256.hex(bytes);
+  const hashUint8 = sha256(bytes);
+  const hashHex = bytesToHex(hashUint8);
 
   return {
     value: hashHex,
@@ -55,12 +56,12 @@ export function hashBytes(bytes: Uint8Array): Hash {
  * 6. Truncate to 32 bytes for secp256k1 signing
  *
  * @param data - Any JSON-serializable object
- * @param isDataUpdate - Whether to apply DataUpdate encoding
+ * @param mode - SigningMode ('standard' | 'dataUpdate') or boolean for backward compat
  * @returns 32-byte digest ready for ECDSA signing
  */
-export function computeDigest<T>(data: T, isDataUpdate: boolean = false): Uint8Array {
+export function computeDigest<T>(data: T, mode: SigningMode | boolean = false): Uint8Array {
   // Step 1: Serialize to binary
-  const dataBytes = toBytes(data, isDataUpdate);
+  const dataBytes = toBytes(data, mode);
 
   // Step 2: SHA-256 hash
   const sha256Hash = hashBytes(dataBytes);
@@ -69,20 +70,20 @@ export function computeDigest<T>(data: T, isDataUpdate: boolean = false): Uint8A
   const hexAsUtf8 = new TextEncoder().encode(sha256Hash.value);
 
   // Step 5: SHA-512
-  const sha512Hash = sha512.array(hexAsUtf8);
+  const sha512Hash = sha512(hexAsUtf8);
 
   // Step 6: Truncate to 32 bytes
-  return new Uint8Array(sha512Hash.slice(0, 32));
+  return sha512Hash.slice(0, 32);
 }
 
 /**
  * Compute SHA-256 hash of data with optional DataUpdate encoding
  *
  * @param data - Any JSON-serializable object
- * @param isDataUpdate - Whether to apply DataUpdate encoding
+ * @param mode - SigningMode ('standard' | 'dataUpdate') or boolean for backward compat
  * @returns Hash object
  */
-export function hashData<T>(data: T, isDataUpdate: boolean = false): Hash {
-  const bytes = toBytes(data, isDataUpdate);
+export function hashData<T>(data: T, mode: SigningMode | boolean = false): Hash {
+  const bytes = toBytes(data, mode);
   return hashBytes(bytes);
 }

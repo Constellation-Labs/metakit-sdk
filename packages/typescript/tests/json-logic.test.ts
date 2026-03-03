@@ -178,26 +178,22 @@ describe('JSON Logic VM', () => {
 
   describe('Array Operations', () => {
     it('handles map', () => {
-      expect(
-        jsonLogic.apply({ map: [[1, 2, 3], { '*': [{ var: '' }, 2] }] }, {})
-      ).toEqual([2, 4, 6]);
+      expect(jsonLogic.apply({ map: [[1, 2, 3], { '*': [{ var: '' }, 2] }] }, {})).toEqual([
+        2, 4, 6,
+      ]);
     });
 
     it('handles filter', () => {
-      expect(
-        jsonLogic.apply({ filter: [[1, 2, 3, 4], { '>': [{ var: '' }, 2] }] }, {})
-      ).toEqual([3, 4]);
+      expect(jsonLogic.apply({ filter: [[1, 2, 3, 4], { '>': [{ var: '' }, 2] }] }, {})).toEqual([
+        3, 4,
+      ]);
     });
 
     it('handles reduce', () => {
       expect(
         jsonLogic.apply(
           {
-            reduce: [
-              [1, 2, 3, 4],
-              { '+': [{ var: 'accumulator' }, { var: 'current' }] },
-              0,
-            ],
+            reduce: [[1, 2, 3, 4], { '+': [{ var: 'accumulator' }, { var: 'current' }] }, 0],
           },
           {}
         )
@@ -205,19 +201,23 @@ describe('JSON Logic VM', () => {
     });
 
     it('handles all/some/none', () => {
-      expect(
-        jsonLogic.apply({ all: [[1, 2, 3], { '>': [{ var: '' }, 0] }] }, {})
-      ).toBe(true);
-      expect(
-        jsonLogic.apply({ some: [[1, 2, 3], { '>': [{ var: '' }, 2] }] }, {})
-      ).toBe(true);
-      expect(
-        jsonLogic.apply({ none: [[1, 2, 3], { '<': [{ var: '' }, 0] }] }, {})
-      ).toBe(true);
+      expect(jsonLogic.apply({ all: [[1, 2, 3], { '>': [{ var: '' }, 0] }] }, {})).toBe(true);
+      expect(jsonLogic.apply({ some: [[1, 2, 3], { '>': [{ var: '' }, 2] }] }, {})).toBe(true);
+      expect(jsonLogic.apply({ none: [[1, 2, 3], { '<': [{ var: '' }, 0] }] }, {})).toBe(true);
     });
 
     it('handles merge', () => {
-      expect(jsonLogic.apply({ merge: [[1, 2], [3, 4]] }, {})).toEqual([1, 2, 3, 4]);
+      expect(
+        jsonLogic.apply(
+          {
+            merge: [
+              [1, 2],
+              [3, 4],
+            ],
+          },
+          {}
+        )
+      ).toEqual([1, 2, 3, 4]);
     });
 
     it('handles in', () => {
@@ -248,7 +248,19 @@ describe('JSON Logic VM', () => {
     });
 
     it('handles flatten', () => {
-      expect(jsonLogic.apply({ flatten: [[[1, 2], [3, 4]]] }, {})).toEqual([1, 2, 3, 4]);
+      expect(
+        jsonLogic.apply(
+          {
+            flatten: [
+              [
+                [1, 2],
+                [3, 4],
+              ],
+            ],
+          },
+          {}
+        )
+      ).toEqual([1, 2, 3, 4]);
     });
   });
 
@@ -342,10 +354,7 @@ describe('JSON Logic VM', () => {
 
     it('handles let bindings', () => {
       const expr = {
-        let: [
-          { doubled: { '*': [{ var: 'x' }, 2] } },
-          { '+': [{ var: 'doubled' }, 1] },
-        ],
+        let: [{ doubled: { '*': [{ var: 'x' }, 2] } }, { '+': [{ var: 'doubled' }, 1] }],
       };
 
       expect(jsonLogic.apply(expr, { x: 5 })).toBe(11);

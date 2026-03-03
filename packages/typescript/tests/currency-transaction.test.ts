@@ -44,7 +44,7 @@ describe('Currency Transactions', () => {
   });
 
   describe('Transaction Creation', () => {
-    test('createCurrencyTransaction creates valid transaction', async () => {
+    test('createCurrencyTransaction creates valid transaction', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -53,7 +53,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: keyPair2.address,
           amount: 100.5,
@@ -74,7 +74,7 @@ describe('Currency Transactions', () => {
       expect(tx.proofs[0]).toHaveProperty('signature');
     });
 
-    test('createCurrencyTransaction throws on invalid addresses', async () => {
+    test('createCurrencyTransaction throws on invalid addresses', () => {
       const keyPair = generateKeyPair();
 
       const lastRef: TransactionReference = {
@@ -82,7 +82,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      await expect(
+      expect(() =>
         createCurrencyTransaction(
           {
             destination: 'invalid',
@@ -92,10 +92,10 @@ describe('Currency Transactions', () => {
           keyPair.privateKey,
           lastRef
         )
-      ).rejects.toThrow('Invalid destination address');
+      ).toThrow('Invalid destination address');
     });
 
-    test('createCurrencyTransaction throws on same source and destination', async () => {
+    test('createCurrencyTransaction throws on same source and destination', () => {
       const keyPair = generateKeyPair();
 
       const lastRef: TransactionReference = {
@@ -103,7 +103,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      await expect(
+      expect(() =>
         createCurrencyTransaction(
           {
             destination: keyPair.address,
@@ -113,10 +113,10 @@ describe('Currency Transactions', () => {
           keyPair.privateKey,
           lastRef
         )
-      ).rejects.toThrow('Source and destination addresses cannot be the same');
+      ).toThrow('Source and destination addresses cannot be the same');
     });
 
-    test('createCurrencyTransaction throws on amount too small', async () => {
+    test('createCurrencyTransaction throws on amount too small', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -125,7 +125,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      await expect(
+      expect(() =>
         createCurrencyTransaction(
           {
             destination: keyPair2.address,
@@ -135,10 +135,10 @@ describe('Currency Transactions', () => {
           keyPair.privateKey,
           lastRef
         )
-      ).rejects.toThrow('Transfer amount must be greater than 1e-8');
+      ).toThrow('Transfer amount must be greater than 1e-8');
     });
 
-    test('createCurrencyTransaction throws on negative fee', async () => {
+    test('createCurrencyTransaction throws on negative fee', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -147,7 +147,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      await expect(
+      expect(() =>
         createCurrencyTransaction(
           {
             destination: keyPair2.address,
@@ -157,12 +157,12 @@ describe('Currency Transactions', () => {
           keyPair.privateKey,
           lastRef
         )
-      ).rejects.toThrow('Fee must be greater than or equal to zero');
+      ).toThrow('Fee must be greater than or equal to zero');
     });
   });
 
   describe('Batch Transactions', () => {
-    test('createCurrencyTransactionBatch creates multiple transactions', async () => {
+    test('createCurrencyTransactionBatch creates multiple transactions', () => {
       const keyPair = generateKeyPair();
       const recipient1 = generateKeyPair();
       const recipient2 = generateKeyPair();
@@ -179,11 +179,7 @@ describe('Currency Transactions', () => {
         { destination: recipient3.address, amount: 30 },
       ];
 
-      const txns = await createCurrencyTransactionBatch(
-        transfers,
-        keyPair.privateKey,
-        lastRef
-      );
+      const txns = createCurrencyTransactionBatch(transfers, keyPair.privateKey, lastRef);
 
       expect(txns).toHaveLength(3);
       expect(txns[0].value.amount).toBe(1000000000); // 10 * 1e8
@@ -198,7 +194,7 @@ describe('Currency Transactions', () => {
   });
 
   describe('Transaction Verification', () => {
-    test('verifyCurrencyTransaction validates correct signatures', async () => {
+    test('verifyCurrencyTransaction validates correct signatures', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -207,7 +203,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: keyPair2.address,
           amount: 100,
@@ -217,14 +213,14 @@ describe('Currency Transactions', () => {
         lastRef
       );
 
-      const result = await verifyCurrencyTransaction(tx);
+      const result = verifyCurrencyTransaction(tx);
 
       expect(result.isValid).toBe(true);
       expect(result.validProofs).toHaveLength(1);
       expect(result.invalidProofs).toHaveLength(0);
     });
 
-    test('verifyCurrencyTransaction detects invalid signatures', async () => {
+    test('verifyCurrencyTransaction detects invalid signatures', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -233,7 +229,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: keyPair2.address,
           amount: 100,
@@ -246,7 +242,7 @@ describe('Currency Transactions', () => {
       // Corrupt the signature
       tx.proofs[0].signature = 'invalid_signature';
 
-      const result = await verifyCurrencyTransaction(tx);
+      const result = verifyCurrencyTransaction(tx);
 
       expect(result.isValid).toBe(false);
       expect(result.validProofs).toHaveLength(0);
@@ -255,7 +251,7 @@ describe('Currency Transactions', () => {
   });
 
   describe('Multi-Signature Support', () => {
-    test('signCurrencyTransaction adds additional signature', async () => {
+    test('signCurrencyTransaction adds additional signature', () => {
       const keyPair1 = generateKeyPair();
       const keyPair2 = generateKeyPair();
       const recipient = generateKeyPair();
@@ -266,7 +262,7 @@ describe('Currency Transactions', () => {
       };
 
       // Create transaction with first signature
-      let tx = await createCurrencyTransaction(
+      let tx = createCurrencyTransaction(
         {
           destination: recipient.address,
           amount: 100,
@@ -279,12 +275,12 @@ describe('Currency Transactions', () => {
       expect(tx.proofs).toHaveLength(1);
 
       // Add second signature
-      tx = await signCurrencyTransaction(tx, keyPair2.privateKey);
+      tx = signCurrencyTransaction(tx, keyPair2.privateKey);
 
       expect(tx.proofs).toHaveLength(2);
 
       // Verify both signatures
-      const result = await verifyCurrencyTransaction(tx);
+      const result = verifyCurrencyTransaction(tx);
 
       expect(result.isValid).toBe(true);
       expect(result.validProofs).toHaveLength(2);
@@ -293,7 +289,7 @@ describe('Currency Transactions', () => {
   });
 
   describe('Transaction Hashing', () => {
-    test('hashCurrencyTransaction produces consistent hashes', async () => {
+    test('hashCurrencyTransaction produces consistent hashes', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -302,7 +298,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: keyPair2.address,
           amount: 100,
@@ -312,15 +308,15 @@ describe('Currency Transactions', () => {
         lastRef
       );
 
-      const hash1 = await hashCurrencyTransaction(tx);
-      const hash2 = await hashCurrencyTransaction(tx);
+      const hash1 = hashCurrencyTransaction(tx);
+      const hash2 = hashCurrencyTransaction(tx);
 
       expect(hash1.value).toBe(hash2.value);
       expect(hash1.value).toHaveLength(64); // SHA-256 hex string
       expect(hash1.bytes).toHaveLength(32); // 32 bytes
     });
 
-    test('getTransactionReference creates correct reference', async () => {
+    test('getTransactionReference creates correct reference', () => {
       const keyPair = generateKeyPair();
       const keyPair2 = generateKeyPair();
 
@@ -329,7 +325,7 @@ describe('Currency Transactions', () => {
         ordinal: 0,
       };
 
-      const tx = await createCurrencyTransaction(
+      const tx = createCurrencyTransaction(
         {
           destination: keyPair2.address,
           amount: 100,
@@ -339,7 +335,7 @@ describe('Currency Transactions', () => {
         lastRef
       );
 
-      const ref = await getTransactionReference(tx, 1);
+      const ref = getTransactionReference(tx, 1);
 
       expect(ref.ordinal).toBe(1);
       expect(ref.hash).toHaveLength(64);

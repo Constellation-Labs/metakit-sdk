@@ -13,6 +13,13 @@ export interface SignatureProof {
 }
 
 /**
+ * The signing mode determines how data is serialized before hashing.
+ * - 'standard': JSON -> canonicalize -> UTF-8 -> SHA-256
+ * - 'dataUpdate': JSON -> canonicalize -> UTF-8 -> Base64 -> Constellation prefix -> SHA-256
+ */
+export type SigningMode = 'standard' | 'dataUpdate';
+
+/**
  * A signed object wrapping a value with one or more signature proofs
  */
 export interface Signed<T> {
@@ -20,6 +27,12 @@ export interface Signed<T> {
   value: T;
   /** Array of signature proofs */
   proofs: SignatureProof[];
+  /**
+   * Signing mode used to produce these proofs.
+   * When present, verify() uses this instead of requiring an explicit isDataUpdate parameter.
+   * Optional for backward compatibility with objects deserialized from existing wire format.
+   */
+  mode?: SigningMode;
 }
 
 /**
@@ -58,10 +71,13 @@ export interface VerificationResult {
 
 /**
  * Options for signing operations
+ * @deprecated Use `{ mode: SigningMode }` instead. Will be removed in v1.0.
  */
 export interface SigningOptions {
   /** Whether to sign as a DataUpdate (with Constellation prefix) */
   isDataUpdate?: boolean;
+  /** Signing mode — preferred over isDataUpdate */
+  mode?: SigningMode;
 }
 
 /**

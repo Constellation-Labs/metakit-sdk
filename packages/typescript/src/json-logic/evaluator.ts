@@ -60,7 +60,10 @@ export const evaluate = (
 /**
  * Core expression evaluator
  */
-const evalExpr = (expr: JsonLogicExpression, ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalExpr = (
+  expr: JsonLogicExpression,
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   switch (expr.tag) {
     case 'const':
       return ok(expr.value);
@@ -142,7 +145,10 @@ const evalVar = (
 /**
  * Combine base data with optional context
  */
-const combineState = (base: JsonLogicValue, context: JsonLogicValue | undefined): JsonLogicValue => {
+const combineState = (
+  base: JsonLogicValue,
+  context: JsonLogicValue | undefined
+): JsonLogicValue => {
   if (!context || isNull(context)) return base;
 
   // Merge arrays
@@ -474,7 +480,10 @@ const evalModulo = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => 
 };
 
 // Min/Max
-const evalMinMax = (args: JsonLogicValue[], mode: 'min' | 'max'): JsonLogicResult<JsonLogicValue> => {
+const evalMinMax = (
+  args: JsonLogicValue[],
+  mode: 'min' | 'max'
+): JsonLogicResult<JsonLogicValue> => {
   if (args.length === 0) return ok(nullValue());
 
   // Flatten arrays
@@ -832,7 +841,10 @@ const evalMissingSome = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue
 // ============= Control Flow with Lazy Evaluation =============
 
 // If-else
-const evalIf = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalIf = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   // if(cond, then, else) or if(c1, t1, c2, t2, ..., else)
   for (let i = 0; i < argExprs.length - 1; i += 2) {
     const condResult = evalExpr(argExprs[i], ctx);
@@ -852,7 +864,10 @@ const evalIf = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLo
 };
 
 // And (short-circuit)
-const evalAnd = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalAnd = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   let last: JsonLogicValue = boolValue(true);
 
   for (const expr of argExprs) {
@@ -869,7 +884,10 @@ const evalAnd = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonL
 };
 
 // Or (short-circuit)
-const evalOr = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalOr = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   let last: JsonLogicValue = boolValue(false);
 
   for (const expr of argExprs) {
@@ -886,7 +904,10 @@ const evalOr = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLo
 };
 
 // Let (variable binding)
-const evalLet = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalLet = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(nullValue());
 
   // let([{name: expr, ...}, body])
@@ -911,7 +932,10 @@ const evalLet = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonL
 };
 
 // Map (iterate over array)
-const evalMapOp = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalMapOp = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(arrayValue([]));
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -935,7 +959,10 @@ const evalMapOp = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Jso
 };
 
 // Filter
-const evalFilter = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalFilter = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(arrayValue([]));
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -960,7 +987,10 @@ const evalFilter = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Js
 };
 
 // Reduce
-const evalReduce = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalReduce = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 3) return ok(nullValue());
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -992,7 +1022,10 @@ const evalReduce = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Js
 };
 
 // All
-const evalAll = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalAll = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(boolValue(true));
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -1017,7 +1050,10 @@ const evalAll = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonL
 };
 
 // Some
-const evalSome = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalSome = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(boolValue(false));
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -1041,7 +1077,10 @@ const evalSome = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Json
 };
 
 // None
-const evalNone = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalNone = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   const someResult = evalSome(argExprs, ctx);
   if (!someResult.ok) return someResult;
 
@@ -1049,7 +1088,10 @@ const evalNone = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Json
 };
 
 // Find
-const evalFind = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalFind = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(nullValue());
 
   const arrResult = evalExpr(argExprs[0], ctx);
@@ -1073,7 +1115,10 @@ const evalFind = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): Json
 };
 
 // Count (count matching items)
-const evalCount = (argExprs: JsonLogicExpression[], ctx: EvaluationContext): JsonLogicResult<JsonLogicValue> => {
+const evalCount = (
+  argExprs: JsonLogicExpression[],
+  ctx: EvaluationContext
+): JsonLogicResult<JsonLogicValue> => {
   if (argExprs.length < 2) return ok(intValue(0n));
 
   const arrResult = evalExpr(argExprs[0], ctx);

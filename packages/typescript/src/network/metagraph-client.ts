@@ -15,7 +15,14 @@ import type {
   PostDataResponse,
 } from './types';
 import { NetworkError } from './types';
-import type { TransactionReference, CurrencyTransaction } from '../currency-types';
+import type {
+  TransactionReference,
+  CurrencyTransaction,
+  TransferParams,
+  TransferResult,
+} from '../currency-types';
+import { createCurrencyTransaction, hashCurrencyTransaction } from '../currency-transaction';
+import { getPublicKeyFromPrivate, getDagAddressFromPublicKey } from '../crypto';
 import type { Signed } from '../types';
 
 /**
@@ -115,8 +122,11 @@ export class MetagraphClient {
     try {
       await this.client.get('/cluster/info', options);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      if (error instanceof NetworkError) {
+        return false;
+      }
+      throw error;
     }
   }
 
@@ -146,10 +156,7 @@ export class MetagraphClient {
    * @param options - Request options
    * @returns Transaction reference with hash and ordinal
    */
-  async getLastReference(
-    address: string,
-    options?: RequestOptions
-  ): Promise<TransactionReference> {
+  async getLastReference(address: string, options?: RequestOptions): Promise<TransactionReference> {
     this.assertLayer(['cl1', 'ml0'], 'getLastReference');
     return this.client.get<TransactionReference>(
       `/transactions/last-reference/${address}`,
@@ -171,11 +178,7 @@ export class MetagraphClient {
     options?: RequestOptions
   ): Promise<PostTransactionResponse> {
     this.assertLayer(['cl1'], 'postTransaction');
-    return this.client.post<PostTransactionResponse>(
-      '/transactions',
-      transaction,
-      options
-    );
+    return this.client.post<PostTransactionResponse>('/transactions', transaction, options);
   }
 
   /**
@@ -193,16 +196,113 @@ export class MetagraphClient {
   ): Promise<PendingTransaction | null> {
     this.assertLayer(['cl1'], 'getPendingTransaction');
     try {
-      return await this.client.get<PendingTransaction>(
-        `/transactions/${hash}`,
-        options
-      );
+      return await this.client.get<PendingTransaction>(`/transactions/${hash}`, options);
     } catch (error) {
       if (error instanceof NetworkError && error.statusCode === 404) {
         return null;
       }
       throw error;
     }
+  }
+
+  /**
+   * High-level transfer: fetch last reference, create and sign transaction, submit
+   *
+   * Available on: CL1
+   *
+   * @param params - Transfer parameters (destination, amount, optional fee)
+   * @param privateKey - Private key to sign with (hex string)
+   * @param options - Request options, with optional lastRef for chaining
+   * @returns TransferResult with hash, transaction, and reference for chaining
+   *
+   * @example
+   * ```typescript
+   * const result = await cl1.transfer(
+   *   { destination: 'DAG...', amount: 100.5 },
+   *   privateKey
+   * );
+   * console.log('Submitted:', result.hash);
+   *
+   * // Chain another transfer using the reference
+   * const result2 = await cl1.transfer(
+   *   { destination: 'DAG...2', amount: 50 },
+   *   privateKey,
+   *   { lastRef: result.reference }
+   * );
+   * ```
+   */
+  async transfer(
+    params: TransferParams,
+    privateKey: string,
+    options?: RequestOptions & { lastRef?: TransactionReference }
+  ): Promise<TransferResult> {
+    this.assertLayer(['cl1'], 'transfer');
+    const { lastRef: providedRef, ...requestOptions } = options ?? {};
+
+    // Fetch last reference if not provided
+    const sourceAddress = getSourceAddress(privateKey);
+    const lastRef = providedRef ?? (await this.getLastReference(sourceAddress, requestOptions));
+
+    // Create and sign the transaction
+    const transaction = createCurrencyTransaction(params, privateKey, lastRef);
+
+    // Submit to L1
+    const response = await this.postTransaction(transaction, requestOptions);
+
+    // Build reference for chaining
+    const txHash = hashCurrencyTransaction(transaction);
+    const reference: TransactionReference = {
+      hash: txHash.value,
+      ordinal: lastRef.ordinal + 1,
+    };
+
+    return {
+      hash: response.hash,
+      transaction,
+      reference,
+    };
+  }
+
+  /**
+   * Transfer to multiple destinations sequentially with auto-chaining
+   *
+   * Available on: CL1
+   *
+   * @param transfers - Array of transfer parameters
+   * @param privateKey - Private key to sign all transactions
+   * @param options - Request options
+   * @returns Array of TransferResults
+   *
+   * @example
+   * ```typescript
+   * const results = await cl1.transferBatch(
+   *   [
+   *     { destination: 'DAG...1', amount: 10 },
+   *     { destination: 'DAG...2', amount: 20 },
+   *   ],
+   *   privateKey
+   * );
+   * ```
+   */
+  async transferBatch(
+    transfers: TransferParams[],
+    privateKey: string,
+    options?: RequestOptions
+  ): Promise<TransferResult[]> {
+    this.assertLayer(['cl1'], 'transferBatch');
+    const results: TransferResult[] = [];
+    let lastRef: TransactionReference | undefined;
+
+    for (const params of transfers) {
+      const result = await this.transfer(params, privateKey, {
+        ...options,
+        lastRef,
+      });
+      results.push(result);
+      lastRef = result.reference;
+    }
+
+    return results;
   }
 
   // ============================================
@@ -218,16 +318,9 @@ export class MetagraphClient {
    * @param options - Request options
    * @returns Fee estimate with amount and destination address
    */
-  async estimateFee<T>(
-    data: Signed<T>,
-    options?: RequestOptions
-  ): Promise<EstimateFeeResponse> {
+  async estimateFee<T>(data: Signed<T>, options?: RequestOptions): Promise<EstimateFeeResponse> {
     this.assertLayer(['dl1'], 'estimateFee');
-    return this.client.post<EstimateFeeResponse>(
-      '/data/estimate-fee',
-      data,
-      options
-    );
+    return this.client.post<EstimateFeeResponse>('/data/estimate-fee', data, options);
   }
 
   /**
@@ -239,10 +332,7 @@ export class MetagraphClient {
    * @param options - Request options
    * @returns Response containing the data hash
    */
-  async postData<T>(
-    data: Signed<T>,
-    options?: RequestOptions
-  ): Promise<PostDataResponse> {
+  async postData<T>(data: Signed<T>, options?: RequestOptions): Promise<PostDataResponse> {
     this.assertLayer(['dl1'], 'postData');
     return this.client.post<PostDataResponse>('/data', data, options);
   }
@@ -282,7 +372,7 @@ export class MetagraphClient {
     if (!allowed.includes(this.layer)) {
       throw new Error(
         `${method}() is not available on ${this.layer.toUpperCase()} layer. ` +
-        `Available on: ${allowed.map(l => l.toUpperCase()).join(', ')}`
+          `Available on: ${allowed.map((l) => l.toUpperCase()).join(', ')}`
       );
     }
   }
@@ -301,4 +391,12 @@ export function createMetagraphClient(
   timeout?: number
 ): MetagraphClient {
   return new MetagraphClient({ baseUrl, layer, timeout });
+}
+
+/**
+ * Get source DAG address from a private key
+ */
+function getSourceAddress(privateKey: string): string {
+  const publicKey = getPublicKeyFromPrivate(privateKey);
+  return getDagAddressFromPublicKey(publicKey);
 }

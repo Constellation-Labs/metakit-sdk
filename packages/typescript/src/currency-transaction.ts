@@ -5,22 +5,18 @@
  */
 
 import {
-  TransactionV2,
-  txEncode,
-  keyStore,
-  type PostTransactionV2,
-  type TransactionPropsV2,
-  type AddressLastRefV2,
-} from '@stardust-collective/dag4-keystore';
-import type {
-  CurrencyTransaction,
-  TransactionReference,
-  TransferParams,
-} from './currency-types';
+  constellationDigest,
+  ecdsaSign,
+  ecdsaVerify,
+  getPublicKeyFromPrivate,
+  getDagAddressFromPublicKey,
+  validateDagAddress,
+  sha256Hex,
+} from './crypto';
+import { encodeTransaction, kryoSerialize, generateSalt } from './transaction-encoding';
+import type { CurrencyTransaction, TransactionReference, TransferParams } from './currency-types';
 import { TOKEN_DECIMALS } from './currency-types';
 import type { VerificationResult, SignatureProof } from './types';
-import { getAddress } from './wallet';
-import { normalizeSignatureToLowS } from './verify';
 
 /**
  * Convert token amount to smallest units
@@ -64,7 +60,7 @@ export function unitsToToken(units: number): number {
  * ```
  */
 export function isValidDagAddress(address: string): boolean {
-  return keyStore.validateDagAddress(address);
+  return validateDagAddress(address);
 }
 
 /**
@@ -79,21 +75,21 @@ export function isValidDagAddress(address: string): boolean {
  *
  * @example
  * ```typescript
- * const tx = await createCurrencyTransaction(
+ * const tx = createCurrencyTransaction(
  *   { destination: 'DAG...', amount: 100.5, fee: 0 },
  *   privateKey,
  *   { hash: 'abc123...', ordinal: 5 }
  * );
  * ```
  */
-export async function createCurrencyTransaction(
+export function createCurrencyTransaction(
   params: TransferParams,
   privateKey: string,
   lastRef: TransactionReference
-): Promise<CurrencyTransaction> {
+): CurrencyTransaction {
   // Get source address from private key
-  const publicKey = keyStore.getPublicKeyFromPrivate(privateKey);
-  const source = getAddress(publicKey);
+  const publicKey = getPublicKeyFromPrivate(privateKey);
+  const source = getDagAddressFromPublicKey(publicKey);
 
   // Validate addresses
   if (!isValidDagAddress(source)) {
@@ -118,48 +114,43 @@ export async function createCurrencyTransaction(
     throw new Error('Fee must be greater than or equal to zero');
   }
 
-  // Use dag4.js TransactionV2 to create and encode the transaction
-  const txProps: TransactionPropsV2 = {
-    fromAddress: source,
-    toAddress: params.destination,
-    amount,
-    fee,
-    lastTxRef: lastRef as AddressLastRefV2,
+  // Generate salt
+  const salt = generateSalt();
+
+  // Build transaction
+  const tx: CurrencyTransaction = {
+    value: {
+      source,
+      destination: params.destination,
+      amount,
+      fee,
+      parent: lastRef,
+      salt,
+    },
+    proofs: [],
   };
 
-  const tx = new TransactionV2(txProps);
-
-  // Get encoded transaction for hashing
-  const encodedTx = tx.getEncoded();
-
-  // Kryo serialize - v2 uses setReferences = false (matching dag4.js behavior)
-  const serializedTx = txEncode.kryoSerialize(encodedTx, false);
-
-  // Hash the serialized transaction
-  const hash = keyStore.sha256(Buffer.from(serializedTx, 'hex'));
-
-  // Sign the hash
-  const signature = await keyStore.sign(privateKey, hash);
-
-  // Get uncompressed public key
-  const uncompressedPublicKey =
-    publicKey.length === 128 ? '04' + publicKey : publicKey;
+  // Encode -> Kryo serialize -> SHA-256 -> sign
+  const encoded = encodeTransaction(tx);
+  const serialized = kryoSerialize(encoded, false);
+  const hash = sha256Hex(serialized);
+  const digest = constellationDigest(hash);
+  const signature = ecdsaSign(digest, privateKey);
 
   // Verify signature
-  const success = keyStore.verify(uncompressedPublicKey, hash, signature);
-  if (!success) {
+  const uncompressedPublicKey = publicKey.length === 128 ? '04' + publicKey : publicKey;
+  const verified = ecdsaVerify(digest, signature, uncompressedPublicKey);
+  if (!verified) {
     throw new Error('Sign-Verify failed');
   }
 
-  // Add signature proof (remove '04' prefix from public key)
-  const proof = {
+  // Add signature proof
+  tx.proofs.push({
     id: uncompressedPublicKey.substring(2),
     signature,
-  };
+  });
 
-  tx.addSignature(proof);
-
-  return tx.getPostTransaction() as CurrencyTransaction;
+  return tx;
 }
 
 /**
@@ -174,7 +165,7 @@ export async function createCurrencyTransaction(
  *
  * @example
  * ```typescript
- * const txns = await createCurrencyTransactionBatch(
+ * const txns = createCurrencyTransactionBatch(
  *   [
  *     { destination: 'DAG...1', amount: 10 },
  *     { destination: 'DAG...2', amount: 20 },
@@ -184,23 +175,19 @@ export async function createCurrencyTransaction(
  * );
  * ```
  */
-export async function createCurrencyTransactionBatch(
+export function createCurrencyTransactionBatch(
   transfers: TransferParams[],
   privateKey: string,
   lastRef: TransactionReference
-): Promise<CurrencyTransaction[]> {
+): CurrencyTransaction[] {
   const transactions: CurrencyTransaction[] = [];
   let currentRef = { ...lastRef };
 
   for (const transfer of transfers) {
-    const tx = await createCurrencyTransaction(
-      transfer,
-      privateKey,
-      currentRef
-    );
+    const tx = createCurrencyTransaction(transfer, privateKey, currentRef);
 
     // Calculate hash for next transaction's parent reference
-    const hash = await hashCurrencyTransaction(tx);
+    const hash = hashCurrencyTransaction(tx);
 
     // Update reference for next transaction
     currentRef = {
@@ -225,50 +212,40 @@ export async function createCurrencyTransactionBatch(
  *
  * @example
  * ```typescript
- * const signedTx = await signCurrencyTransaction(tx, privateKey2);
+ * const signedTx = signCurrencyTransaction(tx, privateKey2);
  * ```
  */
-export async function signCurrencyTransaction(
+export function signCurrencyTransaction(
   transaction: CurrencyTransaction,
   privateKey: string
-): Promise<CurrencyTransaction> {
-  // Reconstruct TransactionV2 from PostTransaction
-  const tx = TransactionV2.fromPostTransaction(
-    transaction as PostTransactionV2
-  );
+): CurrencyTransaction {
+  // Encode and hash
+  const encoded = encodeTransaction(transaction);
+  const serialized = kryoSerialize(encoded, false);
+  const hash = sha256Hex(serialized);
+  const digest = constellationDigest(hash);
 
-  // Restore existing proofs (fromPostTransaction doesn't copy them)
-  for (const existingProof of transaction.proofs) {
-    tx.addSignature(existingProof);
-  }
-
-  // Get encoded transaction
-  const encodedTx = tx.getEncoded();
-  // Kryo serialize - v2 uses setReferences = false (matching dag4.js behavior)
-  const serializedTx = txEncode.kryoSerialize(encodedTx, false);
-  const hash = keyStore.sha256(Buffer.from(serializedTx, 'hex'));
-
-  // Sign the hash
-  const publicKey = keyStore.getPublicKeyFromPrivate(privateKey);
-  const signature = await keyStore.sign(privateKey, hash);
+  // Sign
+  const publicKey = getPublicKeyFromPrivate(privateKey);
+  const signature = ecdsaSign(digest, privateKey);
 
   // Verify signature
-  const uncompressedPublicKey =
-    publicKey.length === 128 ? '04' + publicKey : publicKey;
-  const success = keyStore.verify(uncompressedPublicKey, hash, signature);
-  if (!success) {
+  const uncompressedPublicKey = publicKey.length === 128 ? '04' + publicKey : publicKey;
+  const verified = ecdsaVerify(digest, signature, uncompressedPublicKey);
+  if (!verified) {
     throw new Error('Sign-Verify failed');
   }
 
-  // Add new proof
-  const proof = {
+  // Create new transaction with additional proof
+  const proof: SignatureProof = {
     id: uncompressedPublicKey.substring(2),
     signature,
   };
 
-  tx.addSignature(proof);
-
-  return tx.getPostTransaction() as CurrencyTransaction;
+  return {
+    value: transaction.value,
+    proofs: [...transaction.proofs, proof],
+  };
 }
 
 /**
@@ -279,33 +256,24 @@ export async function signCurrencyTransaction(
  *
  * @example
  * ```typescript
- * const result = await verifyCurrencyTransaction(tx);
+ * const result = verifyCurrencyTransaction(tx);
  * console.log('Valid:', result.isValid);
  * ```
  */
-export async function verifyCurrencyTransaction(
-  transaction: CurrencyTransaction
-): Promise<VerificationResult> {
-  // Reconstruct TransactionV2 to get encoded form
-  const tx = TransactionV2.fromPostTransaction(
-    transaction as PostTransactionV2
-  );
-
-  // Get hash
-  const encodedTx = tx.getEncoded();
-  // Kryo serialize - v2 uses setReferences = false (matching dag4.js behavior)
-  const serializedTx = txEncode.kryoSerialize(encodedTx, false);
-  const hash = keyStore.sha256(Buffer.from(serializedTx, 'hex'));
+export function verifyCurrencyTransaction(transaction: CurrencyTransaction): VerificationResult {
+  // Encode and hash
+  const encoded = encodeTransaction(transaction);
+  const serialized = kryoSerialize(encoded, false);
+  const hash = sha256Hex(serialized);
+  const digest = constellationDigest(hash);
 
   const validProofs: SignatureProof[] = [];
   const invalidProofs: SignatureProof[] = [];
 
   // Verify each proof
   for (const proof of transaction.proofs) {
-    const publicKey = '04' + proof.id; // Add back the '04' prefix
-    // Normalize signature to low-S form for BIP 62/146 compatibility
-    const normalizedSignature = normalizeSignatureToLowS(proof.signature);
-    const isValid = keyStore.verify(publicKey, hash, normalizedSignature);
+    const publicKey = '04' + proof.id;
+    const isValid = ecdsaVerify(digest, proof.signature, publicKey);
 
     if (isValid) {
       validProofs.push(proof);
@@ -325,20 +293,15 @@ export async function verifyCurrencyTransaction(
  * Encode a currency transaction for hashing
  *
  * @param transaction - Transaction to encode
- * @returns Hex-encoded string
+ * @returns Encoded transaction string
  *
  * @example
  * ```typescript
  * const encoded = encodeCurrencyTransaction(tx);
  * ```
  */
-export function encodeCurrencyTransaction(
-  transaction: CurrencyTransaction
-): string {
-  const tx = TransactionV2.fromPostTransaction(
-    transaction as PostTransactionV2
-  );
-  return tx.getEncoded();
+export function encodeCurrencyTransaction(transaction: CurrencyTransaction): string {
+  return encodeTransaction(transaction);
 }
 
 /**
@@ -349,21 +312,21 @@ export function encodeCurrencyTransaction(
  *
  * @example
  * ```typescript
- * const hash = await hashCurrencyTransaction(tx);
+ * const hash = hashCurrencyTransaction(tx);
  * console.log('Hash:', hash.value);
  * ```
  */
-export async function hashCurrencyTransaction(
-  transaction: CurrencyTransaction
-): Promise<{ value: string; bytes: Uint8Array }> {
-  const encoded = encodeCurrencyTransaction(transaction);
-  // Kryo serialize - v2 uses setReferences = false (matching dag4.js behavior)
-  const serialized = txEncode.kryoSerialize(encoded, false);
-  const hash = keyStore.sha256(Buffer.from(serialized, 'hex'));
+export function hashCurrencyTransaction(transaction: CurrencyTransaction): {
+  value: string;
+  bytes: Uint8Array;
+} {
+  const encoded = encodeTransaction(transaction);
+  const serialized = kryoSerialize(encoded, false);
+  const hashValue = sha256Hex(serialized);
 
   return {
-    value: hash,
-    bytes: Buffer.from(hash, 'hex'),
+    value: hashValue,
+    bytes: new Uint8Array(Buffer.from(hashValue, 'hex')),
   };
 }
 
@@ -377,15 +340,15 @@ export async function hashCurrencyTransaction(
  *
  * @example
  * ```typescript
- * const ref = await getTransactionReference(tx, 6);
+ * const ref = getTransactionReference(tx, 6);
  * // Use ref as lastRef for next transaction
  * ```
  */
-export async function getTransactionReference(
+export function getTransactionReference(
   transaction: CurrencyTransaction,
   ordinal: number
-): Promise<TransactionReference> {
-  const hash = await hashCurrencyTransaction(transaction);
+): TransactionReference {
+  const hash = hashCurrencyTransaction(transaction);
   return {
     hash: hash.value,
     ordinal,

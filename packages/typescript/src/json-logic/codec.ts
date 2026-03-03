@@ -23,7 +23,10 @@ import {
  * Error thrown when parsing fails
  */
 export class JsonLogicParseError extends Error {
-  constructor(message: string, public readonly path?: string) {
+  constructor(
+    message: string,
+    public readonly path?: string
+  ) {
     super(path ? `${message} at ${path}` : message);
     this.name = 'JsonLogicParseError';
   }
@@ -316,7 +319,10 @@ export const encodeValue = (value: JsonLogicValue): unknown => {
     case 'int':
       // BigInt can't be directly serialized to JSON
       // If it fits in a safe integer, use number; otherwise use string
-      if (value.value >= BigInt(Number.MIN_SAFE_INTEGER) && value.value <= BigInt(Number.MAX_SAFE_INTEGER)) {
+      if (
+        value.value >= BigInt(Number.MIN_SAFE_INTEGER) &&
+        value.value <= BigInt(Number.MAX_SAFE_INTEGER)
+      ) {
         return Number(value.value);
       }
       // For very large integers, we lose precision but match JSON semantics
