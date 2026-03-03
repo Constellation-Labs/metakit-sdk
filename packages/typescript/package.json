@@ -52,7 +52,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Constellation-Labs/metakit-sdk.git",
+    "url": "git+https://github.com/Constellation-Labs/metakit-sdk.git",
     "directory": "packages/typescript"
   },
   "bugs": {
