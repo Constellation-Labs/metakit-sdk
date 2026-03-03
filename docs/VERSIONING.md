@@ -6,9 +6,19 @@ Each SDK package is versioned **independently** using [Semantic Versioning 2.0.0
 
 ## What Ties the Packages Together
 
-All five SDKs implement the same **signing protocol** defined by the Constellation Network's [tessellation](https://github.com/Constellation-Labs/tessellation) reference implementation. Compatibility is enforced by:
+All five SDKs implement the same **metagraph signing protocol** defined by the [metakit](https://github.com/Constellation-Labs/metakit) framework. This protocol is distinct from the tessellation (hypergraph/L0) signing protocol:
 
-1. **Shared test vectors** in `/shared/test_vectors.json` and `/shared/currency_transaction_vectors.json`, generated from the Scala/tessellation-sdk reference implementation
+| | Metakit (Metagraph) | Tessellation (Hypergraph) |
+|---|---|---|
+| Serialization | **RFC 8785 JSON Canonicalization** | JSON + Brotli compression |
+| Hashing | SHA-256 of canonical UTF-8 bytes | SHA-256 of Brotli-compressed bytes |
+| Signing | ECDSA secp256k1 | ECDSA secp256k1 (same) |
+
+The ECDSA curve and signing algorithm are identical, but the **serialization differs** — metakit uses RFC 8785 canonicalization while tessellation uses Brotli compression. Having a dedicated SDK for metagraph development keeps it lightweight and decoupled from the tessellation release lifecycle.
+
+Compatibility across the five SDKs is enforced by:
+
+1. **Shared test vectors** in `/shared/test_vectors.json` and `/shared/currency_transaction_vectors.json`, generated from the Scala metakit reference implementation
 2. **Cross-language CI** that validates all five SDKs produce identical outputs for the same inputs
 3. **Protocol version** embedded in the test vectors (currently v2 for currency transactions)
 
@@ -40,9 +50,9 @@ A signature produced by any SDK at any version will verify correctly in any othe
 |---------|-------------|---------------|
 | v2 | Current format | Kryo with `setReferences=false`, length-prefixed encoding starting with `"2"` prefix |
 
-The v2 format is the only supported format. There is no v1 in the SDK — v1 was an internal tessellation format that predates the SDK.
+The v2 format is the only supported format. There is no v1 in the SDK — v1 was an internal format that predates the SDK.
 
-If a v3 format is introduced by tessellation, the SDK will:
+If a v3 format is introduced, the SDK will:
 1. Add v3 support alongside v2 in a minor release
 2. Default to v3 in a subsequent major release
 3. Deprecate v2 with a migration period

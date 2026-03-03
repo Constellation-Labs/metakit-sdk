@@ -1,7 +1,7 @@
 /**
  * Currency transaction test vector validation
  *
- * Validates TypeScript implementation against reference test vectors from tessellation
+ * Validates TypeScript implementation against shared currency transaction test vectors
  */
 
 import { describe, expect, it } from '@jest/globals';
