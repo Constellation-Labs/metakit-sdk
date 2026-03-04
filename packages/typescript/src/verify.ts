@@ -4,8 +4,8 @@
  * Verify ECDSA signatures using secp256k1 curve via @noble/curves.
  */
 
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/curves/abstract/utils';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/curves/utils.js';
 import { Signed, SignatureProof, VerificationResult } from './types';
 import { toBytes } from './binary';
 import { constellationDigest, ecdsaVerify } from './crypto';

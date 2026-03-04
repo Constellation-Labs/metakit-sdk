@@ -4,9 +4,8 @@
  * SHA-256 and SHA-512 hashing for the Constellation signature protocol.
  */
 
-import { sha256 } from '@noble/hashes/sha256';
-import { sha512 } from '@noble/hashes/sha512';
-import { bytesToHex } from '@noble/curves/abstract/utils';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/curves/utils.js';
 import { Hash } from './types';
 import type { SigningMode } from './types';
 import { toBytes } from './binary';
