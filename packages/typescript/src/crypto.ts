@@ -5,10 +5,9 @@
  * Provides signing, verification, key generation, and DAG address derivation.
  */
 
-import { secp256k1 } from '@noble/curves/secp256k1';
-import { sha256 } from '@noble/hashes/sha256';
-import { sha512 } from '@noble/hashes/sha512';
-import { bytesToHex, hexToBytes } from '@noble/curves/abstract/utils';
+import { secp256k1 } from '@noble/curves/secp256k1.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
+import { bytesToHex, hexToBytes } from '@noble/curves/utils.js';
 import bs58 from 'bs58';
 
 /** X.509 DER encoding header for secp256k1 uncompressed public keys */
@@ -47,13 +46,17 @@ export function sha256Bytes(data: Uint8Array): Uint8Array {
  * Uses lowS=true (default) for BIP 62/146 compatibility.
  */
 export function ecdsaSign(digest: Uint8Array, privateKeyHex: string): string {
-  const sig = secp256k1.sign(digest, privateKeyHex, { lowS: true });
-  return sig.toDERHex();
+  const sigBytes = secp256k1.sign(digest, hexToBytes(privateKeyHex), {
+    lowS: true,
+    format: 'der',
+    prehash: false,
+  });
+  return bytesToHex(sigBytes);
 }
 
 /**
  * Verify a DER-encoded ECDSA signature against a 32-byte digest.
- * Normalizes high-S to low-S before verification.
+ * Accepts both high-S and low-S signatures.
  */
 export function ecdsaVerify(
   digest: Uint8Array,
@@ -61,10 +64,11 @@ export function ecdsaVerify(
   publicKeyHex: string
 ): boolean {
   try {
-    const sig = secp256k1.Signature.fromDER(signatureHex);
-    const normalizedSig = sig.hasHighS() ? sig.normalizeS() : sig;
-    const pubKeyBytes = hexToBytes(publicKeyHex);
-    return secp256k1.verify(normalizedSig.toDERRawBytes(), digest, pubKeyBytes, { lowS: false });
+    return secp256k1.verify(hexToBytes(signatureHex), digest, hexToBytes(publicKeyHex), {
+      lowS: false,
+      format: 'der',
+      prehash: false,
+    });
   } catch {
     return false;
   }
@@ -74,7 +78,7 @@ export function ecdsaVerify(
  * Generate a random 32-byte private key as hex.
  */
 export function generatePrivateKey(): string {
-  return bytesToHex(secp256k1.utils.randomPrivateKey());
+  return bytesToHex(secp256k1.utils.randomSecretKey());
 }
 
 /**
@@ -82,7 +86,7 @@ export function generatePrivateKey(): string {
  * Returns 130-character hex string.
  */
 export function getPublicKeyFromPrivate(privateKeyHex: string): string {
-  const pubKeyBytes = secp256k1.getPublicKey(privateKeyHex, false);
+  const pubKeyBytes = secp256k1.getPublicKey(hexToBytes(privateKeyHex), false);
   return bytesToHex(pubKeyBytes);
 }
 
@@ -91,7 +95,7 @@ export function getPublicKeyFromPrivate(privateKeyHex: string): string {
  * Returns 66-character hex string.
  */
 export function getCompressedPublicKey(privateKeyHex: string): string {
-  const pubKeyBytes = secp256k1.getPublicKey(privateKeyHex, true);
+  const pubKeyBytes = secp256k1.getPublicKey(hexToBytes(privateKeyHex), true);
   return bytesToHex(pubKeyBytes);
 }
 

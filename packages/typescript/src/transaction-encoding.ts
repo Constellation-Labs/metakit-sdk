@@ -5,7 +5,7 @@
  * replacing dag4-keystore's TransactionV2 and txEncode.
  */
 
-import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils';
+import { randomBytes as nobleRandomBytes } from '@noble/hashes/utils.js';
 import type { CurrencyTransaction } from './currency-types';
 
 /** Minimum salt complexity (matching dag4.js: Number.MAX_SAFE_INTEGER - 2^48) */
