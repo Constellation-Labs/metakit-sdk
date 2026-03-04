@@ -60,8 +60,8 @@
   },
   "homepage": "https://github.com/Constellation-Labs/metakit-sdk/tree/main/packages/typescript#readme",
   "dependencies": {
-    "@noble/curves": "^1.8.0",
-    "@noble/hashes": "^1.7.0",
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
     "bs58": "^6.0.0",
     "canonicalize": "^2.1.0"
   },
