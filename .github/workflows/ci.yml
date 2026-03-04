@@ -45,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        node-version: [18, 20, 22]
+        node-version: [20, 22]
     steps:
       - uses: actions/checkout@v6
 
@@ -272,7 +272,7 @@ jobs:
 
       - name: Run cross-language tests (TypeScript)
         working-directory: packages/typescript
-        run: npm test -- --testPathPattern=cross-language
+        run: npm test -- --testPathPatterns=cross-language
 
       - name: Run cross-language tests (Python)
         working-directory: packages/python

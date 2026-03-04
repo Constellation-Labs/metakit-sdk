@@ -8,5 +8,12 @@ module.exports = {
   collectCoverageFrom: ['src/**/*.ts'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],
-  verbose: true
+  verbose: true,
+  transformIgnorePatterns: [
+    'node_modules/(?!(@noble/curves|@noble/hashes|bs58|base-x)/)',
+  ],
+  transform: {
+    '\\.ts$': 'ts-jest',
+    '\\.js$': 'ts-jest',
+  },
 };

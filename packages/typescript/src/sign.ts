@@ -5,8 +5,8 @@
  * Implements the Constellation signature protocol.
  */
 
-import { sha256 } from '@noble/hashes/sha256';
-import { bytesToHex } from '@noble/curves/abstract/utils';
+import { sha256 } from '@noble/hashes/sha2.js';
+import { bytesToHex } from '@noble/curves/utils.js';
 import { SignatureProof } from './types';
 import { canonicalize } from './canonicalize';
 import { toBytes } from './binary';
