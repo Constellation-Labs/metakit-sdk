@@ -2,7 +2,7 @@ version: 2
 updates:
   # TypeScript dependencies
   - package-ecosystem: "npm"
-    directory: "/"
+    directory: "/packages/typescript"
     schedule:
       interval: "weekly"
       day: "monday"
@@ -11,21 +11,23 @@ updates:
       typescript-dev:
         patterns:
           - "@types/*"
+          - "@rollup/*"
+          - "@typescript-eslint/*"
           - "typescript"
+          - "rollup"
+          - "tslib"
           - "jest"
           - "ts-jest"
           - "eslint*"
-          - "@typescript-eslint/*"
           - "prettier"
         update-types:
           - "minor"
           - "patch"
       typescript-prod:
         patterns:
-          - "elliptic"
+          - "@noble/*"
+          - "bs58"
           - "canonicalize"
-          - "js-sha*"
-          - "@stardust-collective/*"
 
   # Python dependencies
   - package-ecosystem: "pip"
@@ -49,6 +51,7 @@ updates:
         patterns:
           - "ecdsa"
           - "rfc8785"
+          - "typing-extensions"
 
   # GitHub Actions
   - package-ecosystem: "github-actions"
