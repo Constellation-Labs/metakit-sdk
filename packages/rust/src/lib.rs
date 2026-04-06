@@ -66,21 +66,25 @@ pub mod currency_transaction;
 pub mod currency_types;
 pub mod hash;
 pub mod sign;
+pub mod sign_r1;
 pub mod signed_object;
+pub mod signed_object_r1;
 pub mod types;
 pub mod verify;
+pub mod verify_r1;
 pub mod wallet;
+pub mod wallet_r1;
 
 #[cfg(feature = "network")]
 pub mod network;
 
 // Re-export commonly used items at the crate root
 pub use types::{
-    Hash, KeyPair, Result, SdkError, SignatureProof, Signed, SigningOptions, VerificationResult,
-    ALGORITHM, CONSTELLATION_PREFIX,
+    Hash, KeyPair, Result, SdkError, SignatureProof, Signed, SigningOptions, SigningScheme,
+    VerificationResult, ALGORITHM, ALGORITHM_R1, CONSTELLATION_PREFIX,
 };
 
-// Re-export main functions
+// Re-export main functions (secp256k1)
 pub use binary::{encode_data_update, to_bytes};
 pub use canonicalize::{canonicalize, canonicalize_bytes};
 pub use codec::decode_data_update;
@@ -91,6 +95,15 @@ pub use verify::{verify, verify_hash, verify_signature};
 pub use wallet::{
     generate_key_pair, get_address, get_public_key_hex, get_public_key_id, is_valid_private_key,
     is_valid_public_key, key_pair_from_private_key,
+};
+
+// Re-export secp256r1 (P-256) functions
+pub use sign_r1::{sign_data_update_r1, sign_hash_r1, sign_r1};
+pub use signed_object_r1::{add_signature_r1, batch_sign_r1, create_signed_object_r1};
+pub use verify_r1::{verify_hash_r1, verify_r1, verify_signature_r1};
+pub use wallet_r1::{
+    generate_key_pair_r1, get_address_r1, get_public_key_hex_r1, get_public_key_id_r1,
+    id_to_public_key_r1, key_pair_from_private_key_r1,
 };
 
 // Re-export currency transaction types and functions

@@ -13,6 +13,9 @@ readme = "README.md"
 [dependencies]
 # Cryptography
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
+p256 = { version = "0.13", features = ["ecdsa", "pem"] }
+ecdsa = { version = "0.16", features = ["der", "signing", "verifying"] }
+elliptic-curve = { version = "0.13", features = ["sec1"] }
 sha2 = "0.10"
 bs58 = "0.5"
 base64 = "0.22"
