@@ -6,20 +6,24 @@ authors = ["Constellation Network"]
 description = "Rust SDK for signing data transactions on Constellation data metagraphs built with metakit"
 license = "Apache-2.0"
 repository = "https://github.com/Constellation-Labs/metakit-sdk"
-keywords = ["constellation", "metagraph", "dag", "ecdsa", "secp256k1", "signature", "blockchain"]
+keywords = ["constellation", "metagraph", "dag", "ecdsa", "secp256k1"]
 categories = ["cryptography", "api-bindings"]
 readme = "README.md"
+rust-version = "1.70"
 
 [dependencies]
-# Cryptography
+# Cryptography (core — secp256k1)
 secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
-p256 = { version = "0.13", features = ["ecdsa", "pem"] }
-ecdsa = { version = "0.16", features = ["der", "signing", "verifying"] }
-elliptic-curve = { version = "0.13", features = ["sec1"] }
 sha2 = "0.10"
 bs58 = "0.5"
 base64 = "0.22"
 hex = "0.4"
+
+# Cryptography (R1 / P-256 — gated behind the `r1` feature so consumers
+# that only need K1 don't pull the p256 dep tree).
+p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
+ecdsa = { version = "0.16", features = ["der", "signing", "verifying"], optional = true }
+elliptic-curve = { version = "0.13", features = ["sec1"], optional = true }
 
 # Serialization
 serde = { version = "1.0", features = ["derive"] }
@@ -42,7 +46,11 @@ tokio = { version = "1", features = ["rt-multi-thread"], optional = true }
 
 [features]
 default = []
-network = ["reqwest", "tokio"]
+# Enables P-256 (secp256r1) signing — TPM-native curve. Pulls in the
+# p256 / ecdsa / elliptic-curve dep tree. See `crate::r1`.
+r1 = ["dep:p256", "dep:ecdsa", "dep:elliptic-curve"]
+# Enables the optional metagraph network client.
+network = ["dep:reqwest", "dep:tokio"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full", "test-util"] }

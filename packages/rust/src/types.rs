@@ -120,12 +120,16 @@ impl From<secp256k1::Error> for SdkError {
     }
 }
 
+// p256 and elliptic_curve error conversions are gated behind the `r1`
+// feature so consumers who only need K1 don't pull the p256 dep tree.
+#[cfg(feature = "r1")]
 impl From<p256::ecdsa::Error> for SdkError {
     fn from(err: p256::ecdsa::Error) -> Self {
         SdkError::CryptoError(err.to_string())
     }
 }
 
+#[cfg(feature = "r1")]
 impl From<elliptic_curve::Error> for SdkError {
     fn from(err: elliptic_curve::Error) -> Self {
         SdkError::CryptoError(err.to_string())
