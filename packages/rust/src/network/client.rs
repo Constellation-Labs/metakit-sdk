@@ -17,14 +17,19 @@ pub struct HttpClient {
 impl HttpClient {
     /// Create a new HTTP client
     pub fn new(base_url: impl Into<String>, timeout: Option<u64>) -> NetworkResult<Self> {
+        let url = base_url.into();
+        let base_url = url.trim_end_matches('/').to_string();
+        if base_url.is_empty() {
+            return Err(NetworkError::ConfigError(
+                "base_url is required".to_string(),
+            ));
+        }
+
         let timeout_secs = timeout.unwrap_or(DEFAULT_TIMEOUT);
         let client = Client::builder()
             .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| NetworkError::http(e.to_string(), None, None))?;
-
-        let url = base_url.into();
-        let base_url = url.trim_end_matches('/').to_string();
 
         Ok(Self { client, base_url })
     }

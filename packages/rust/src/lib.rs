@@ -1,13 +1,14 @@
 //! Constellation Metagraph SDK for Rust
 //!
-//! A complete toolkit for signing and verifying data on Constellation Network metagraphs.
+//! A toolkit for signing and verifying data on Constellation Network metagraphs.
 //!
 //! # Features
 //!
-//! - **ECDSA secp256k1 signing** - Industry-standard elliptic curve signatures
-//! - **RFC 8785 canonicalization** - Deterministic JSON serialization
-//! - **Cross-language compatibility** - Interoperable with TypeScript, Python, Go implementations
-//! - **Multi-signature support** - Create and verify objects signed by multiple parties
+//! - **ECDSA secp256k1 signing** — industry-standard elliptic curve signatures
+//! - **RFC 8785 canonicalization** — deterministic JSON serialization
+//! - **Cross-language compatibility** — interoperable with TypeScript, Python, Go implementations
+//! - **Multi-signature support** — create and verify objects signed by multiple parties
+//! - **Optional secp256r1 (P-256)** — TPM-native curve, behind the `r1` cargo feature
 //!
 //! # Quick Start
 //!
@@ -19,44 +20,28 @@
 //! };
 //! use serde_json::json;
 //!
-//! // Generate a key pair
 //! let key_pair = generate_key_pair();
-//! println!("Address: {}", key_pair.address);
-//!
-//! // Create and sign data
-//! let data = json!({
-//!     "action": "transfer",
-//!     "amount": 100
-//! });
-//!
+//! let data = json!({"action": "transfer", "amount": 100});
 //! let signed = create_signed_object(&data, &key_pair.private_key, false).unwrap();
-//!
-//! // Verify the signature
 //! let result = verify(&signed, false);
 //! assert!(result.is_valid);
 //! ```
 //!
-//! # DataUpdate Signing
+//! # P-256 (R1) signing
 //!
-//! For L1 submission, use DataUpdate signing which adds the Constellation prefix:
+//! Enable the `r1` feature to access the parallel `crate::r1` namespace
+//! mirroring the K1 API:
 //!
-//! ```rust
-//! use constellation_sdk::{
-//!     wallet::generate_key_pair,
-//!     signed_object::create_signed_object,
-//!     verify::verify,
-//! };
-//! use serde_json::json;
+//! ```toml
+//! [dependencies]
+//! constellation-metagraph-sdk = { version = "0.2", features = ["r1"] }
+//! ```
 //!
-//! let key_pair = generate_key_pair();
-//! let data = json!({"id": "update-001", "value": 42});
-//!
-//! // Sign as DataUpdate
-//! let signed = create_signed_object(&data, &key_pair.private_key, true).unwrap();
-//!
-//! // Verify (must specify is_data_update = true)
-//! let result = verify(&signed, true);
-//! assert!(result.is_valid);
+//! ```ignore
+//! use constellation_sdk::r1::wallet::generate_key_pair;
+//! use constellation_sdk::r1::sign::sign_hash;
+//! let kp = generate_key_pair();
+//! let sig = sign_hash(&"00".repeat(32), &kp.private_key)?;
 //! ```
 
 pub mod binary;
@@ -71,16 +56,21 @@ pub mod types;
 pub mod verify;
 pub mod wallet;
 
+#[cfg(feature = "r1")]
+pub mod r1;
+
 #[cfg(feature = "network")]
 pub mod network;
 
-// Re-export commonly used items at the crate root
+// ─── Crate-root re-exports ──────────────────────────────────────────────
+
+// Common types
 pub use types::{
-    Hash, KeyPair, Result, SdkError, SignatureProof, Signed, SigningOptions, VerificationResult,
-    ALGORITHM, CONSTELLATION_PREFIX,
+    Hash, KeyPair, Result, SdkError, SignatureProof, Signed, SigningOptions, SigningScheme,
+    VerificationResult, ALGORITHM, ALGORITHM_R1, CONSTELLATION_PREFIX,
 };
 
-// Re-export main functions
+// secp256k1 (K1) — always present
 pub use binary::{encode_data_update, to_bytes};
 pub use canonicalize::{canonicalize, canonicalize_bytes};
 pub use codec::decode_data_update;
@@ -93,7 +83,7 @@ pub use wallet::{
     is_valid_public_key, key_pair_from_private_key,
 };
 
-// Re-export currency transaction types and functions
+// Currency transactions (K1-only API).
 pub use currency_transaction::{
     create_currency_transaction, create_currency_transaction_batch, encode_currency_transaction,
     get_transaction_reference, hash_currency_transaction, is_valid_dag_address,
