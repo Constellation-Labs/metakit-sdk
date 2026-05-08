@@ -14,7 +14,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! constellation-metagraph-sdk = { version = "0.1", features = ["r1"] }
+//! constellation-metagraph-sdk = { version = "0.2", features = ["r1"] }
 //! ```
 //!
 //! Without the feature, importing `constellation_sdk::r1` is a

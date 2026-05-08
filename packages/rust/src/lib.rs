@@ -34,7 +34,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! constellation-metagraph-sdk = { version = "0.1", features = ["r1"] }
+//! constellation-metagraph-sdk = { version = "0.2", features = ["r1"] }
 //! ```
 //!
 //! ```ignore
@@ -58,20 +58,6 @@ pub mod wallet;
 
 #[cfg(feature = "r1")]
 pub mod r1;
-
-// Compat shims that preserve the old flat module paths
-// (`constellation_sdk::sign_r1::*`, `verify_r1::*`, etc.). They
-// just re-export from `r1::*` and exist so external consumers can
-// migrate at their own pace. Gated behind the same `r1` feature
-// because they pull in the p256 dep tree transitively.
-#[cfg(feature = "r1")]
-pub mod sign_r1;
-#[cfg(feature = "r1")]
-pub mod signed_object_r1;
-#[cfg(feature = "r1")]
-pub mod verify_r1;
-#[cfg(feature = "r1")]
-pub mod wallet_r1;
 
 #[cfg(feature = "network")]
 pub mod network;
