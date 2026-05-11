@@ -63,7 +63,7 @@
     "@noble/curves": "^2.0.1",
     "@noble/hashes": "^2.0.1",
     "bs58": "^6.0.0",
-    "canonicalize": "^2.1.0"
+    "canonicalize": "^3.0.0"
   },
   "devDependencies": {
     "@rollup/plugin-node-resolve": "^16.0.3",
