@@ -1,4 +1,4 @@
-import { canonicalize } from '../src/canonicalize';
+import { canonicalize, dropNullFields } from '../src/canonicalize';
 
 describe('canonicalize', () => {
   describe('basic functionality', () => {
@@ -28,9 +28,12 @@ describe('canonicalize', () => {
       expect(result).toBe('{"text":"caf\u00e9"}');
     });
 
-    it('should handle null values', () => {
+    it('should drop null-valued object fields (server-aligned)', () => {
+      // RFC 8785 would keep `"a":null`, but the authoritative Scala server
+      // (metakit JsonBinaryCodec.dropNulls) drops null object members before
+      // canonicalizing. The client must match so signatures verify on chain.
       const result = canonicalize({ a: null, b: 1 });
-      expect(result).toBe('{"a":null,"b":1}');
+      expect(result).toBe('{"b":1}');
     });
 
     it('should handle boolean values', () => {
@@ -72,5 +75,68 @@ describe('canonicalize', () => {
       const result2 = canonicalize(data);
       expect(result1).toBe(result2);
     });
+  });
+
+  describe('null-field dropping (server alignment)', () => {
+    it('should drop a nested null object field', () => {
+      const result = canonicalize({ outer: { inner: null, keep: 2 } });
+      expect(result).toBe('{"outer":{"keep":2}}');
+    });
+
+    it('should clean null fields inside objects nested in arrays', () => {
+      // Arrays are preserved positionally, but object elements are still cleaned.
+      const result = canonicalize({ arr: [{ x: null, y: 1 }] });
+      expect(result).toBe('{"arr":[{"y":1}]}');
+    });
+
+    it('should preserve null elements inside arrays', () => {
+      const result = canonicalize({ arr: [1, null, 3] });
+      expect(result).toBe('{"arr":[1,null,3]}');
+    });
+
+    it('should preserve empty arrays and empty objects', () => {
+      const result = canonicalize({ e: [], o: {} });
+      expect(result).toBe('{"e":[],"o":{}}');
+    });
+
+    it('should drop a state-machine state metadata:null field', () => {
+      // Real-world trigger: a state-machine definition whose states carry
+      // `metadata: null`. The dropped field must not appear in the canonical.
+      const definition = {
+        name: 'order',
+        states: [
+          { id: 'created', metadata: null },
+          { id: 'shipped', metadata: { carrier: 'dhl' } },
+        ],
+      };
+      const result = canonicalize(definition);
+      // The dropped null `metadata` must be gone; the non-null one is kept.
+      expect(result).not.toContain('"metadata":null');
+      expect(result).not.toContain('null');
+      expect(result).toContain('{"id":"created"}');
+      expect(result).toBe(
+        '{"name":"order","states":[{"id":"created"},{"id":"shipped","metadata":{"carrier":"dhl"}}]}'
+      );
+    });
+  });
+});
+
+describe('dropNullFields', () => {
+  it('should drop top-level null object fields and recurse', () => {
+    const cleaned = dropNullFields({ a: null, b: 1, c: { d: null, e: 2 } });
+    expect(cleaned).toEqual({ b: 1, c: { e: 2 } });
+  });
+
+  it('should preserve arrays positionally including null elements', () => {
+    const cleaned = dropNullFields({ arr: [1, null, { x: null, y: 2 }] });
+    expect(cleaned).toEqual({ arr: [1, null, { y: 2 }] });
+  });
+
+  it('should preserve empty containers and pass primitives through', () => {
+    expect(dropNullFields({ e: [], o: {} })).toEqual({ e: [], o: {} });
+    expect(dropNullFields(null)).toBeNull();
+    expect(dropNullFields(5)).toBe(5);
+    expect(dropNullFields('s')).toBe('s');
+    expect(dropNullFields(true)).toBe(true);
   });
 });
