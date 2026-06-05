@@ -75,4 +75,48 @@ describe('binary encoding', () => {
       expect(Buffer.from(bytes1).toString('hex')).toBe(Buffer.from(bytes2).toString('hex'));
     });
   });
+
+  describe('null-field dropping in signing bytes (server alignment)', () => {
+    // The bytes produced here are exactly what gets hashed and signed. They
+    // must never contain a null object-field, or the on-chain (server) verify
+    // re-derives a different canonical and rejects the signature (HTTP 400).
+    const definition = {
+      name: 'order',
+      states: [
+        { id: 'created', metadata: null },
+        { id: 'shipped', metadata: { carrier: 'dhl' } },
+      ],
+      config: null,
+      tags: [],
+    };
+
+    it('regular signing bytes omit null object-fields but keep empty containers', () => {
+      const decoded = new TextDecoder().decode(toBytes(definition, false));
+      expect(decoded).not.toContain('null');
+      expect(decoded).not.toContain('metadata":null');
+      expect(decoded).not.toContain('"config"');
+      // Empty array preserved, and null array element (added below) preserved.
+      expect(decoded).toContain('"tags":[]');
+      expect(decoded).toBe(
+        '{"name":"order","states":[{"id":"created"},{"id":"shipped","metadata":{"carrier":"dhl"}}],"tags":[]}'
+      );
+    });
+
+    it('DataUpdate signing bytes (base64 payload) omit null object-fields', () => {
+      const bytes = toBytes(definition, true);
+      const decoded = new TextDecoder().decode(bytes);
+      const base64Part = decoded.split('\n')[2];
+      const payload = Buffer.from(base64Part, 'base64').toString('utf-8');
+      expect(payload).not.toContain('null');
+      expect(payload).not.toContain('"config"');
+      expect(payload).toBe(
+        '{"name":"order","states":[{"id":"created"},{"id":"shipped","metadata":{"carrier":"dhl"}}],"tags":[]}'
+      );
+    });
+
+    it('preserves null elements inside arrays in the signing bytes', () => {
+      const decoded = new TextDecoder().decode(toBytes({ arr: [1, null, 3] }, false));
+      expect(decoded).toBe('{"arr":[1,null,3]}');
+    });
+  });
 });

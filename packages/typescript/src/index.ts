@@ -34,7 +34,7 @@ export type {
 export { ALGORITHM, CONSTELLATION_PREFIX } from './types';
 
 // Canonicalization
-export { canonicalize } from './canonicalize';
+export { canonicalize, dropNullFields } from './canonicalize';
 
 // Binary encoding
 export { toBytes, encodeDataUpdate } from './binary';
