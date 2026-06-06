@@ -1,6 +1,6 @@
 {
   "description" : "JLVM ZK / auth-DB opcode cross-language test vectors. Scala (metakit) is the reference; Rust (jlvm-core) must reproduce every expected value byte-for-byte. Same structure and differential-runner contract as json_logic_test_vectors.json. The 'known_answer' category carries independent ground truth (circomlib poseidon, real SP1 groth16 fixture, RFC-9381 ECVRF-EDWARDS25519, EIP-197 pairing identity). bls_verify / bls_aggregate_verify are DEFERRED to Tier 3 (switching from MIRACL-SVDW to the eth2 SSWU ciphersuite). ERROR CONVENTION: a case with \"error\": true (and NO \"expected\") asserts that evaluation MUST FAIL in every implementation (the Scala reference raises a JsonLogicException or throws); all other cases carry \"expected\" and must reproduce it byte-for-byte.",
-  "version" : "1.1.0",
+  "version" : "1.2.0",
   "deferred" : [
     "bls_verify",
     "bls_aggregate_verify"
@@ -146,24 +146,52 @@
       "category" : "smt_verify",
       "cases" : [
         {
+          "note" : "inclusion proof for keyA -> valid:true, included:true, value 'alice'",
           "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"valueDigest\":\"0a50500b2a3435fe7472877eb22d48d47a228e946b0b991ab7402a8d00f6b32d\",\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a76a46f8d84ae438ebdbf05538506cce5f0b709ddff6ac5ffd7b9b3c409f5dd6\"}],\"type\":\"Inclusion\",\"value\":\"22616c69636522\"}]}",
           "data" : "{}",
           "expected" : "{\"valid\": true, \"included\": true, \"key\": \"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"value\": \"alice\"}"
         },
         {
+          "note" : "absence (Default witness: empty slot) -> valid:true, included:false, value null",
           "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"type\":\"Absence\",\"key\":\"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\",\"witness\":{\"type\":\"Default\"},\"siblings\":[{\"digest\":\"85ecc601458e07b4233f867acd1282027945e1cd8d5294341fa4655a5aa07f5d\"}]}]}",
           "data" : "{}",
           "expected" : "{\"valid\": true, \"included\": false, \"key\": \"0xcccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\", \"value\": null}"
         },
         {
+          "note" : "absence (OtherLeaf witness: a different leaf occupies the path) -> valid:true, included:false, value null",
+          "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"type\":\"Absence\",\"key\":\"0000000000000000000000000000000000000000000000000000000000100000\",\"witness\":{\"type\":\"OtherLeaf\",\"occupyingKey\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"occupyingDataDigest\":\"0a50500b2a3435fe7472877eb22d48d47a228e946b0b991ab7402a8d00f6b32d\"},\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a76a46f8d84ae438ebdbf05538506cce5f0b709ddff6ac5ffd7b9b3c409f5dd6\"}]}]}",
+          "data" : "{}",
+          "expected" : "{\"valid\": true, \"included\": false, \"key\": \"0x0000000000000000000000000000000000000000000000000000000000100000\", \"value\": null}"
+        },
+        {
+          "note" : "valid inclusion proof against a wrong (zero) root -> valid:false",
           "expr" : "{\"smt_verify\":[\"0x0000000000000000000000000000000000000000000000000000000000000000\",{\"valueDigest\":\"0a50500b2a3435fe7472877eb22d48d47a228e946b0b991ab7402a8d00f6b32d\",\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a76a46f8d84ae438ebdbf05538506cce5f0b709ddff6ac5ffd7b9b3c409f5dd6\"}],\"type\":\"Inclusion\",\"value\":\"22616c69636522\"}]}",
           "data" : "{}",
           "expected" : "{\"valid\": false, \"included\": false, \"key\": \"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"value\": null}"
         },
         {
+          "note" : "inclusion proof value bytes tampered (valueDigest untouched) -> ValueBindingFailed -> valid:false",
           "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"valueDigest\":\"0a50500b2a3435fe7472877eb22d48d47a228e946b0b991ab7402a8d00f6b32d\",\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a76a46f8d84ae438ebdbf05538506cce5f0b709ddff6ac5ffd7b9b3c409f5dd6\"}],\"type\":\"Inclusion\",\"value\":\"226d616c6c6f727922\"}]}",
           "data" : "{}",
           "expected" : "{\"valid\": false, \"included\": false, \"key\": \"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\", \"value\": null}"
+        },
+        {
+          "note" : "discriminating: a valid proof for keyB returns ITS key/value ('bob'), not keyA's",
+          "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"valueDigest\":\"1b0ed536deb39ddcf8e689b39c38e8a50a03892208f26af2a87d11c273f7b786\",\"key\":\"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\",\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a7182b0dde636567d9410b9120090c85ae24104ea1f71824758f51cf4d675ced\"}],\"type\":\"Inclusion\",\"value\":\"22626f6222\"}]}",
+          "data" : "{}",
+          "expected" : "{\"valid\": true, \"included\": true, \"key\": \"0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\", \"value\": \"bob\"}"
+        },
+        {
+          "note" : "a non-decodable proof object -> Result error",
+          "expr" : "{\"smt_verify\":[\"0x9b8baa67fec9da14b879d3b6f7f87941331f57236f8fdbfc7b609a7df7a13f0e\",{\"nope\":\"not a proof\"}]}",
+          "data" : "{}",
+          "error" : true
+        },
+        {
+          "note" : "non-hex root string -> Result error",
+          "expr" : "{\"smt_verify\":[\"not-hex\",{\"valueDigest\":\"0a50500b2a3435fe7472877eb22d48d47a228e946b0b991ab7402a8d00f6b32d\",\"key\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"siblings\":[{\"digest\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"digest\":\"a76a46f8d84ae438ebdbf05538506cce5f0b709ddff6ac5ffd7b9b3c409f5dd6\"}],\"type\":\"Inclusion\",\"value\":\"22616c69636522\"}]}",
+          "data" : "{}",
+          "error" : true
         }
       ]
     },
@@ -171,24 +199,40 @@
       "category" : "mpt_verify",
       "cases" : [
         {
+          "note" : "valid inclusion proof for a1->v-a1 -> true",
           "expr" : "{\"mpt_verify\":[\"0x8a41783cb64d21b4cb4d848ec9e72631931b933e08f29f8d2d58ad7b9eddc222\",\"0xa1\",\"v-a1\",{\"path\":\"a1\",\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"\",\"dataDigest\":\"a7798cfe9d08badb8cbbfbfff9693faaf20e3d5069f9c55e8024020305b440d2\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"3508013ae82e8173afa9cf7d3b83ae059f16a303ccee6d07e7fa767158d9b101\",\"2\":\"010f3a8bcc6f19de8fa75b4e39c113235ad034024ddd224784639ccf2c39bb04\"}}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"e5d25630e83f6b3c80365cb96eb7ed927faca5ffb5d49eff7e8110dc4ee42bb2\",\"b\":\"31660cb1bf705983b372c949fcd8a7e06e5436aeca659c86dffd080df5594a71\"}}}]}]}",
           "data" : "{}",
           "expected" : "true"
         },
         {
+          "note" : "correct key/proof but wrong claimed value -> false",
           "expr" : "{\"mpt_verify\":[\"0x8a41783cb64d21b4cb4d848ec9e72631931b933e08f29f8d2d58ad7b9eddc222\",\"0xa1\",\"WRONG\",{\"path\":\"a1\",\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"\",\"dataDigest\":\"a7798cfe9d08badb8cbbfbfff9693faaf20e3d5069f9c55e8024020305b440d2\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"3508013ae82e8173afa9cf7d3b83ae059f16a303ccee6d07e7fa767158d9b101\",\"2\":\"010f3a8bcc6f19de8fa75b4e39c113235ad034024ddd224784639ccf2c39bb04\"}}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"e5d25630e83f6b3c80365cb96eb7ed927faca5ffb5d49eff7e8110dc4ee42bb2\",\"b\":\"31660cb1bf705983b372c949fcd8a7e06e5436aeca659c86dffd080df5594a71\"}}}]}]}",
           "data" : "{}",
           "expected" : "false"
         },
         {
+          "note" : "valid proof against a wrong root -> false",
           "expr" : "{\"mpt_verify\":[\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",\"0xa1\",\"v-a1\",{\"path\":\"a1\",\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"\",\"dataDigest\":\"a7798cfe9d08badb8cbbfbfff9693faaf20e3d5069f9c55e8024020305b440d2\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"3508013ae82e8173afa9cf7d3b83ae059f16a303ccee6d07e7fa767158d9b101\",\"2\":\"010f3a8bcc6f19de8fa75b4e39c113235ad034024ddd224784639ccf2c39bb04\"}}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"e5d25630e83f6b3c80365cb96eb7ed927faca5ffb5d49eff7e8110dc4ee42bb2\",\"b\":\"31660cb1bf705983b372c949fcd8a7e06e5436aeca659c86dffd080df5594a71\"}}}]}]}",
           "data" : "{}",
           "expected" : "false"
         },
         {
+          "note" : "proof attests a1 but key b7 is queried (path mismatch) -> false",
           "expr" : "{\"mpt_verify\":[\"0x8a41783cb64d21b4cb4d848ec9e72631931b933e08f29f8d2d58ad7b9eddc222\",\"0xb7\",\"v-a1\",{\"path\":\"a1\",\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"\",\"dataDigest\":\"a7798cfe9d08badb8cbbfbfff9693faaf20e3d5069f9c55e8024020305b440d2\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"3508013ae82e8173afa9cf7d3b83ae059f16a303ccee6d07e7fa767158d9b101\",\"2\":\"010f3a8bcc6f19de8fa75b4e39c113235ad034024ddd224784639ccf2c39bb04\"}}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"e5d25630e83f6b3c80365cb96eb7ed927faca5ffb5d49eff7e8110dc4ee42bb2\",\"b\":\"31660cb1bf705983b372c949fcd8a7e06e5436aeca659c86dffd080df5594a71\"}}}]}]}",
           "data" : "{}",
           "expected" : "false"
+        },
+        {
+          "note" : "discriminating: a2->v-a2 with a2's own proof verifies -> true",
+          "expr" : "{\"mpt_verify\":[\"0x8a41783cb64d21b4cb4d848ec9e72631931b933e08f29f8d2d58ad7b9eddc222\",\"0xa2\",\"v-a2\",{\"path\":\"a2\",\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"\",\"dataDigest\":\"0a216695889e700b0b531aaa602f4235a6ee8024c6f9d3077bbb10e2af5fb9ef\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"3508013ae82e8173afa9cf7d3b83ae059f16a303ccee6d07e7fa767158d9b101\",\"2\":\"010f3a8bcc6f19de8fa75b4e39c113235ad034024ddd224784639ccf2c39bb04\"}}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"e5d25630e83f6b3c80365cb96eb7ed927faca5ffb5d49eff7e8110dc4ee42bb2\",\"b\":\"31660cb1bf705983b372c949fcd8a7e06e5436aeca659c86dffd080df5594a71\"}}}]}]}",
+          "data" : "{}",
+          "expected" : "true"
+        },
+        {
+          "note" : "a non-decodable proof object -> Result error",
+          "expr" : "{\"mpt_verify\":[\"0x8a41783cb64d21b4cb4d848ec9e72631931b933e08f29f8d2d58ad7b9eddc222\",\"0xa1\",\"v-a1\",{\"nope\":\"x\"}]}",
+          "data" : "{}",
+          "error" : true
         }
       ]
     },
@@ -196,24 +240,34 @@
       "category" : "mpt_prefix_verify",
       "cases" : [
         {
+          "note" : "the COMPLETE entry set under prefix ab verifies -> true",
           "expr" : "{\"mpt_prefix_verify\":[\"0x4878c51d01b6307cd35498833c0be581eae49bd7e03c429dc536e05bff7e7462\",\"0xab\",{\"ab12\":\"v1\",\"ab34\":\"v2\",\"ab56\":\"v3\"},{\"paths\":[\"ab12\",\"ab34\",\"ab56\"],\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"2\",\"dataDigest\":\"161078e42e8fef3ba4b9c984035baa2e431a50b31a18ac95614cc6820394af13\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"a4d1a3611ef8133767d03f2c9cc8f66efdd2a0d012e0b74f8fd4da7da8c6e78a\",\"3\":\"2a03f75e5fe9565dfba35a28371ff784e87737aa3c9ade4429b9a8b2b1778738\",\"5\":\"8f1bec5060268d5d5c653483fd54177c6dd08475879c2e58044112644bcd15b7\"}}},{\"type\":\"Extension\",\"contents\":{\"shared\":\"b\",\"childDigest\":\"a7a65b7b78337bc1fc7ac1ca41771f984d6eacc737347e3c7766c23175a6e0c4\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"5e299879df6eb946c365b3d3ba6b60c1274ad5ba09f98f726e3827aa9bb337be\",\"c\":\"4c4bc9b9f2535460a3b14e4aa56412d3a69cf7deaa063c2d506d393a13180a96\"}}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"4\",\"dataDigest\":\"576506f61f53440f1edd95d28631a17e26f50d613eef2943a030220b66c5f5b3\"}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"6\",\"dataDigest\":\"1cdaedef147c6c170b42587a1362ed8d1c55829258d11ee81b32f4ea2bed2976\"}}]}]}",
           "data" : "{}",
           "expected" : "true"
         },
         {
+          "note" : "dropping ab56 breaks completeness (claimed key-set != attested path-set) -> false",
           "expr" : "{\"mpt_prefix_verify\":[\"0x4878c51d01b6307cd35498833c0be581eae49bd7e03c429dc536e05bff7e7462\",\"0xab\",{\"ab12\":\"v1\",\"ab34\":\"v2\"},{\"paths\":[\"ab12\",\"ab34\",\"ab56\"],\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"2\",\"dataDigest\":\"161078e42e8fef3ba4b9c984035baa2e431a50b31a18ac95614cc6820394af13\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"a4d1a3611ef8133767d03f2c9cc8f66efdd2a0d012e0b74f8fd4da7da8c6e78a\",\"3\":\"2a03f75e5fe9565dfba35a28371ff784e87737aa3c9ade4429b9a8b2b1778738\",\"5\":\"8f1bec5060268d5d5c653483fd54177c6dd08475879c2e58044112644bcd15b7\"}}},{\"type\":\"Extension\",\"contents\":{\"shared\":\"b\",\"childDigest\":\"a7a65b7b78337bc1fc7ac1ca41771f984d6eacc737347e3c7766c23175a6e0c4\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"5e299879df6eb946c365b3d3ba6b60c1274ad5ba09f98f726e3827aa9bb337be\",\"c\":\"4c4bc9b9f2535460a3b14e4aa56412d3a69cf7deaa063c2d506d393a13180a96\"}}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"4\",\"dataDigest\":\"576506f61f53440f1edd95d28631a17e26f50d613eef2943a030220b66c5f5b3\"}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"6\",\"dataDigest\":\"1cdaedef147c6c170b42587a1362ed8d1c55829258d11ee81b32f4ea2bed2976\"}}]}]}",
           "data" : "{}",
           "expected" : "false"
         },
         {
+          "note" : "altering ab34's value breaks value-binding -> false",
           "expr" : "{\"mpt_prefix_verify\":[\"0x4878c51d01b6307cd35498833c0be581eae49bd7e03c429dc536e05bff7e7462\",\"0xab\",{\"ab12\":\"v1\",\"ab34\":\"WRONG\",\"ab56\":\"v3\"},{\"paths\":[\"ab12\",\"ab34\",\"ab56\"],\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"2\",\"dataDigest\":\"161078e42e8fef3ba4b9c984035baa2e431a50b31a18ac95614cc6820394af13\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"a4d1a3611ef8133767d03f2c9cc8f66efdd2a0d012e0b74f8fd4da7da8c6e78a\",\"3\":\"2a03f75e5fe9565dfba35a28371ff784e87737aa3c9ade4429b9a8b2b1778738\",\"5\":\"8f1bec5060268d5d5c653483fd54177c6dd08475879c2e58044112644bcd15b7\"}}},{\"type\":\"Extension\",\"contents\":{\"shared\":\"b\",\"childDigest\":\"a7a65b7b78337bc1fc7ac1ca41771f984d6eacc737347e3c7766c23175a6e0c4\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"5e299879df6eb946c365b3d3ba6b60c1274ad5ba09f98f726e3827aa9bb337be\",\"c\":\"4c4bc9b9f2535460a3b14e4aa56412d3a69cf7deaa063c2d506d393a13180a96\"}}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"4\",\"dataDigest\":\"576506f61f53440f1edd95d28631a17e26f50d613eef2943a030220b66c5f5b3\"}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"6\",\"dataDigest\":\"1cdaedef147c6c170b42587a1362ed8d1c55829258d11ee81b32f4ea2bed2976\"}}]}]}",
           "data" : "{}",
           "expected" : "false"
         },
         {
+          "note" : "adding an extra out-of-set entry breaks completeness -> false",
           "expr" : "{\"mpt_prefix_verify\":[\"0x4878c51d01b6307cd35498833c0be581eae49bd7e03c429dc536e05bff7e7462\",\"0xab\",{\"ab12\":\"v1\",\"ab34\":\"v2\",\"ab56\":\"v3\",\"abff\":\"ghost\"},{\"paths\":[\"ab12\",\"ab34\",\"ab56\"],\"witness\":[{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"2\",\"dataDigest\":\"161078e42e8fef3ba4b9c984035baa2e431a50b31a18ac95614cc6820394af13\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"1\":\"a4d1a3611ef8133767d03f2c9cc8f66efdd2a0d012e0b74f8fd4da7da8c6e78a\",\"3\":\"2a03f75e5fe9565dfba35a28371ff784e87737aa3c9ade4429b9a8b2b1778738\",\"5\":\"8f1bec5060268d5d5c653483fd54177c6dd08475879c2e58044112644bcd15b7\"}}},{\"type\":\"Extension\",\"contents\":{\"shared\":\"b\",\"childDigest\":\"a7a65b7b78337bc1fc7ac1ca41771f984d6eacc737347e3c7766c23175a6e0c4\"}},{\"type\":\"Branch\",\"contents\":{\"pathsDigest\":{\"a\":\"5e299879df6eb946c365b3d3ba6b60c1274ad5ba09f98f726e3827aa9bb337be\",\"c\":\"4c4bc9b9f2535460a3b14e4aa56412d3a69cf7deaa063c2d506d393a13180a96\"}}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"4\",\"dataDigest\":\"576506f61f53440f1edd95d28631a17e26f50d613eef2943a030220b66c5f5b3\"}},{\"type\":\"Leaf\",\"contents\":{\"remaining\":\"6\",\"dataDigest\":\"1cdaedef147c6c170b42587a1362ed8d1c55829258d11ee81b32f4ea2bed2976\"}}]}]}",
           "data" : "{}",
           "expected" : "false"
+        },
+        {
+          "note" : "a non-decodable batch proof object -> Result error",
+          "expr" : "{\"mpt_prefix_verify\":[\"0x4878c51d01b6307cd35498833c0be581eae49bd7e03c429dc536e05bff7e7462\",\"0xab\",{\"ab12\":\"v1\"},{\"nope\":\"x\"}]}",
+          "data" : "{}",
+          "error" : true
         }
       ]
     },
