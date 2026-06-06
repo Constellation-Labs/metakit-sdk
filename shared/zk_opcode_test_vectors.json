@@ -1,6 +1,6 @@
 {
-  "description" : "JLVM ZK / auth-DB opcode cross-language test vectors. Scala (metakit) is the reference; Rust (jlvm-core) must reproduce every expected value byte-for-byte. Same structure and differential-runner contract as json_logic_test_vectors.json. The 'known_answer' category carries independent ground truth (circomlib poseidon, real SP1 groth16 fixture, RFC-9381 ECVRF-EDWARDS25519, EIP-197 pairing identity). bls_verify / bls_aggregate_verify are DEFERRED to Tier 3 (switching from MIRACL-SVDW to the eth2 SSWU ciphersuite).",
-  "version" : "1.0.0",
+  "description" : "JLVM ZK / auth-DB opcode cross-language test vectors. Scala (metakit) is the reference; Rust (jlvm-core) must reproduce every expected value byte-for-byte. Same structure and differential-runner contract as json_logic_test_vectors.json. The 'known_answer' category carries independent ground truth (circomlib poseidon, real SP1 groth16 fixture, RFC-9381 ECVRF-EDWARDS25519, EIP-197 pairing identity). bls_verify / bls_aggregate_verify are DEFERRED to Tier 3 (switching from MIRACL-SVDW to the eth2 SSWU ciphersuite). ERROR CONVENTION: a case with \"error\": true (and NO \"expected\") asserts that evaluation MUST FAIL in every implementation (the Scala reference raises a JsonLogicException or throws); all other cases carry \"expected\" and must reproduce it byte-for-byte.",
+  "version" : "1.1.0",
   "deferred" : [
     "bls_verify",
     "bls_aggregate_verify"
@@ -23,6 +23,60 @@
           "expr" : "{\"poseidon\":[\"0x0000000000000000000000000000000000000000000000000000000000000001\",\"0x0000000000000000000000000000000000000000000000000000000000000002\",\"0x0000000000000000000000000000000000000000000000000000000000000003\"]}",
           "data" : "{}",
           "expected" : "\"0x0e7732d89e6939c0ff03d5e58dab6302f3230e269dc5b968f725df34ab36d732\""
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x0000000000000000000000000000000000000000000000000000000000000004\",\"0x0000000000000000000000000000000000000000000000000000000000000005\",\"0x0000000000000000000000000000000000000000000000000000000000000006\",\"0x0000000000000000000000000000000000000000000000000000000000000007\"]}",
+          "data" : "{}",
+          "expected" : "\"0x24890abc4055eae477a7669432a69a748389696fbd80669591c662fc196f5022\"",
+          "note" : "4-input poseidon (max width t=5 ⇒ 4 inputs is the largest supported)"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x0000000000000000000000000000000000000000000000000000000000000001\",\"0x0000000000000000000000000000000000000000000000000000000000000002\",\"0x0000000000000000000000000000000000000000000000000000000000000003\",\"0x0000000000000000000000000000000000000000000000000000000000000004\",\"0x0000000000000000000000000000000000000000000000000000000000000005\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "5-input poseidon — over max width (t=6 > MaxWidth=5): capture Scala behavior"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "non-canonical Fr (all-ones = 2^256-1 > R) — rejected by parseFr"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x30644e72e131a029b85045b68181585d2833e84879b9709143e1f593f0000001\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "non-canonical Fr (value == R exactly) — must be rejected (canonical requires < R)"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0xdeadbeef\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "wrong-width hex (4 bytes, not 32)"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "empty hex input (0 bytes, not 32)"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x000000000000000000000000000000000000000000000000000000000000001\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "odd-length hex body (63 nibbles) — even-length required"
+        },
+        {
+          "expr" : "{\"poseidon\":[\"0x000000000000000000000000000000000000000000000000000000000000000A\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "uppercase hex nibble (A) — codec is lowercase-only"
+        },
+        {
+          "expr" : "{\"poseidon\":[]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "empty input list — poseidon requires at least one element"
         }
       ]
     },
@@ -43,6 +97,48 @@
           "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0x2b1c85fe8a7f462cd732e8bc1dbe4a7d806c29140f3ce395752bb47f54ff85cc\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
           "data" : "{}",
           "expected" : "false"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0x2b1c85fe8a7f462cd732e8bc1dbe4a7d806c29140f3ce395752bb47f54ff85cc\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "tampered leaf (different leaf, correct root+siblings) ⇒ false"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0x0cc5c2f21d3b979fa5284982d35ceccb66333b93d325333dd780a6a3ced1c5f5\",170,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "wrong index: correct leaf+siblings for pos 42 but index 170 — exercises LSB left/right bits ⇒ false"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0x0cc5c2f21d3b979fa5284982d35ceccb66333b93d325333dd780a6a3ced1c5f5\",256,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "out-of-range index (== 2^depth, depth=8) — must be rejected"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0x0cc5c2f21d3b979fa5284982d35ceccb66333b93d325333dd780a6a3ced1c5f5\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0e71c6b4bb8013b16a4ea255fd6a751abf7429523f201b561c3c54eb3fa238fa\"]]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "deeper-sibling tamper (top/root-most sibling changed) ⇒ false"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "non-canonical leaf hex (all-ones > R) — rejected"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",\"0xZZ\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "malformed leaf hex (non-hex / wrong width) — rejected"
+        },
+        {
+          "expr" : "{\"pmt_verify\":[\"0x0cc5c2f21d3b979fa5284982d35ceccb66333b93d325333dd780a6a3ced1c5f5\",\"0x047e3f50a0bf1da6c86860a77474b1f6ee1a807660c2556f34e046f34155f54f\",42,[\"0x166f24e25f67126bbff81d9c8f064c913d2127f180a906dfed933ecf251a56bc\",\"0x2dee93c5a666459646ea7d22cca9e1bcfed71e6951b953611d11dda32ea09d78\",\"0x1445dc1092ecebc0a6001d45b9bd4d85705c66e435abc23436da8d39a6f37d08\",\"0x07f9d837cb17b0d36320ffe93ba52345f1b728571a568265caac97559dbc952a\",\"0x18f43331537ee2af2e3d758d50f72106467c6eea50371dd528d57eb2b856d238\",\"0x1069673dcdb12263df301a6ff584a7ec261a44cb9dc68df067a4774460b1f1e1\",\"0x2098f5fb9e239eab3ceac3f27b81e481dc3124d55ffed523a839ee8446b64864\",\"0x0000000000000000000000000000000000000000000000000000000000000000\"]]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "arg-order discriminator: root and leaf swapped ⇒ false (proves arg order matters)"
         }
       ]
     },
@@ -208,6 +304,42 @@
           "expr" : "{\"schnorr_verify\":[\"0x234403317325635150f68fd4b3403ae81e7513abee02b83478fb37c7ae1b47db0bf44b96107a81ab3b5192e1f2f920eb4fe6a382d6df663e8af2ae97cf8e3ae5\",\"0x6120646966666572656e7420616374696f6e\",\"0x18186954bd891097c44985153dfbbee526e9bfa9798037c42e0e23ca023d5c942a9cb437b23ce7ff0d0a1dccabd0ec7619d7d045b3134a98f7d7eb34b3fd9a470ba9e88831ee2663248a9087524a7034a9eef889e7d912f2cfe8798045071663\"]}",
           "data" : "{}",
           "expected" : "false"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x234403317325635150f68fd4b3403ae81e7513abee02b83478fb37c7ae1b47db0bf44b96107a81ab3b5192e1f2f920eb4fe6a382d6df663e8af2ae97cf8e3ae5\",\"0x617574686f72697a65207472616e73666572\",\"0x18186954bd891097c44985153dfbbee526e9bfa9798037c42e0e23ca023d5c942a9cb437b23ce7ff0d0a1dccabd0ec7619d7d045b3134a98f7d7eb34b3fd9a470ba9e88831ee2663248a9087524a7034a9eef889e7d912f2cfe8798045071662\"]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "tampered s (last proof byte flipped; R stays on-curve) ⇒ well-formed but wrong ⇒ false"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x234403317325635150f68fd4b3403ae81e7513abee02b83478fb37c7ae1b47db0bf44b96107a81ab3b5192e1f2f920eb4fe6a382d6df663e8af2ae97cf8e3ae5\",\"0x617574686f72697a65207472616e73666572\",\"0x19186954bd891097c44985153dfbbee526e9bfa9798037c42e0e23ca023d5c942a9cb437b23ce7ff0d0a1dccabd0ec7619d7d045b3134a98f7d7eb34b3fd9a470ba9e88831ee2663248a9087524a7034a9eef889e7d912f2cfe8798045071663\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "tampered R (first byte of R flipped — moves R off-curve) — capture Scala behavior"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x00000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000001\",\"0x617574686f72697a65207472616e73666572\",\"0x18186954bd891097c44985153dfbbee526e9bfa9798037c42e0e23ca023d5c942a9cb437b23ce7ff0d0a1dccabd0ec7619d7d045b3134a98f7d7eb34b3fd9a470ba9e88831ee2663248a9087524a7034a9eef889e7d912f2cfe8798045071663\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "off-curve pk (1,1) not on y^2=x^3+3 — capture Scala behavior (error or false?)"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000\",\"0x617574686f72697a65207472616e73666572\",\"0x18186954bd891097c44985153dfbbee526e9bfa9798037c42e0e23ca023d5c942a9cb437b23ce7ff0d0a1dccabd0ec7619d7d045b3134a98f7d7eb34b3fd9a470ba9e88831ee2663248a9087524a7034a9eef889e7d912f2cfe8798045071663\"]}",
+          "data" : "{}",
+          "expected" : "false",
+          "note" : "point-at-infinity pk (0,0) — on-curve by convention; capture Scala behavior"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x234403317325635150f68fd4b3403ae81e7513abee02b83478fb37c7ae1b47db0bf44b96107a81ab3b5192e1f2f920eb4fe6a382d6df663e8af2ae97cf8e3ae5\",\"0x617574686f72697a65207472616e73666572\",\"0xdead\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "wrong-width proof (2 bytes, not 96)"
+        },
+        {
+          "expr" : "{\"schnorr_verify\":[\"0x234403317325635150f68fd4b3403ae81e7513abee02b83478fb37c7ae1b47db0bf44b96107a81ab3b5192e1f2f920eb4fe6a382d6df663e8af2ae97cf8e3ae5\",\"0x617574686f72697a65207472616e73666572\",\"0x18186954BD891097C44985153DFBBEE526E9BFA9798037C42E0E23CA023D5C942A9CB437B23CE7FF0D0A1DCCABD0EC7619D7D045B3134A98F7D7EB34B3FD9A470BA9E88831EE2663248A9087524A7034A9EEF889E7D912F2CFE8798045071663\"]}",
+          "data" : "{}",
+          "error" : true,
+          "note" : "non-lowercase (uppercase) proof hex — codec is lowercase-only"
         }
       ]
     },
