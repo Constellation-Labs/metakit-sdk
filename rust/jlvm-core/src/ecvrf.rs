@@ -1,19 +1,21 @@
-//! `ecvrf_verify`: ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381 suite 0x03).
+//! `ecvrf_verify`: ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381).
 //!
 //! Byte-for-byte PORT of the Scala
-//! `io.constellationnetwork.metagraph_sdk.crypto.vrf.MiraclEcVrf25519`, which is
-//! itself byte-identical to tessellation-nakamoto's elisabeth-based
-//! `EcVrf25519` and to the RFC 9381 Appendix B.1 known-answer vectors.
+//! `io.constellationnetwork.metagraph_sdk.crypto.vrf.MiraclEcVrf25519`. Both
+//! conform to the published RFC 9381 ECVRF-EDWARDS25519-SHA512-TAI ciphersuite
+//! and are anchored on the OFFICIAL RFC 9381 Appendix B.3 test vectors
+//! (Examples 16, 17, 18): the generated proofs (pi) match those vectors
+//! byte-for-byte.
 //!
 //! No third-party Rust VRF crate matches this exact ciphersuite: the public
 //! crates implement either the batch-friendly ELL2 variant (suite 0x04) or an
-//! older draft without the draft-10 `zero_string` (0x00) suffix in
-//! hash_to_curve / hash_points / proof_to_hash. So we port the Scala directly,
-//! using `curve25519-dalek` only for the group/scalar arithmetic and the
-//! RFC 8032 little-endian point codec (`CompressedEdwardsY`). Every domain
-//! separator, suffix, truncation and rejection rule is reproduced from the
-//! Scala line-for-line; the RFC 9381 vector (pk `3d40..`, alpha `72`, beta
-//! `eb44..`) is the anchor and is asserted in the unit tests.
+//! older draft without the `zero_string` (0x00) suffix in hash_to_curve /
+//! hash_points / proof_to_hash. So we port the Scala directly, using
+//! `curve25519-dalek` only for the group/scalar arithmetic and the RFC 8032
+//! little-endian point codec (`CompressedEdwardsY`). Every domain separator,
+//! suffix, truncation and rejection rule is reproduced from the Scala
+//! line-for-line; the RFC 9381 Appendix B.3 vectors are the anchor and are
+//! asserted byte-for-byte (both verify AND generate) in the unit tests.
 //!
 //! Suite parameters (mirroring the Scala object constants):
 //!   - suite_string = 0x03
@@ -22,8 +24,9 @@
 //!   - Hash = SHA-512
 //!   - hash_to_curve = try_and_increment (RFC 9381 §5.4.1.1)
 //!   - nonce = ECVRF_nonce_generation_RFC8032 (§5.4.2.2)
-//!   - draft-10 zero_string (0x00) suffix in hash_to_curve / hash_points /
-//!     proof_to_hash
+//!   - challenge = ECVRF_challenge_generation (§5.4.3): hashes FIVE points with
+//!     the public key Y first: suite||0x02||Y||H||Gamma||U||V||0x00
+//!   - zero_string (0x00) suffix in hash_to_curve / hash_points / proof_to_hash
 //!
 //! Proof format: 80 bytes = Gamma(32) || c(16) || s(32), all LE.
 
@@ -83,9 +86,9 @@ pub fn vrf_verify(public_key: &[u8], message: &[u8], proof: &[u8]) -> bool {
     let u_point = basepoint_mul(&s) - point_mul(&y_point, &c);
     // V = [s]*H - [c]*Gamma
     let v_point = point_mul(&h_point, &s) - point_mul(&gamma_point, &c);
-    // c' = ECVRF_hash_points(H, Gamma, U, V); valid iff c == c' on the first 16
-    // little-endian bytes.
-    let c_prime = hash_points(&h_point, &gamma_point, &u_point, &v_point);
+    // c' = ECVRF_challenge_generation(Y, H, Gamma, U, V) (RFC 9381 §5.4.3);
+    // valid iff c == c' on the first 16 little-endian bytes.
+    let c_prime = hash_points(&y_point, &h_point, &gamma_point, &u_point, &v_point);
     scalar_equals_16(&c, &c_prime)
 }
 
@@ -106,6 +109,59 @@ pub fn vrf_proof_to_hash(proof: &[u8]) -> Option<Vec<u8>> {
     hasher.update(point_to_bytes(&cofactor_gamma));
     hasher.update([0x00u8]);
     Some(hasher.finalize().to_vec())
+}
+
+/// Derive the Ed25519 public key from a 32-byte secret seed.
+///
+/// Mirrors `MiraclEcVrf25519.getVerificationKey`.
+pub fn get_verification_key(secret_key: &[u8]) -> Option<[u8; POINT_BYTES]> {
+    if secret_key.len() != 32 {
+        return None;
+    }
+    let hashed_sk = Sha512::digest(secret_key);
+    let x = clamped_scalar(&hashed_sk[0..32]);
+    Some(point_to_bytes(&basepoint_mul(&x)))
+}
+
+/// Generate an 80-byte VRF proof (Gamma || c || s) for a 32-byte secret seed.
+///
+/// Mirrors `MiraclEcVrf25519.vrfProof` and conforms to RFC 9381 §5.4.3
+/// (5-point ECVRF_challenge_generation with the public key Y hashed first).
+/// Returns `None` only on a bad key length or a hash-to-curve failure.
+pub fn vrf_prove(secret_key: &[u8], message: &[u8]) -> Option<[u8; PROOF_BYTES]> {
+    if secret_key.len() != 32 {
+        return None;
+    }
+    // 1. Derive x (secret scalar) and Y (public key) per RFC 8032 §5.1.5.
+    let hashed_sk = Sha512::digest(secret_key);
+    let x = clamped_scalar(&hashed_sk[0..32]);
+    let y_point = basepoint_mul(&x);
+    let y_bytes = point_to_bytes(&y_point);
+
+    // 2. H = ECVRF_hash_to_curve(suite_string, Y, alpha_string).
+    let h_point = hash_to_curve(&y_bytes, message)?;
+    let h_bytes = point_to_bytes(&h_point);
+
+    // 3. Gamma = [x]*H.
+    let gamma_point = point_mul(&h_point, &x);
+
+    // 4. k = ECVRF_nonce_generation_RFC8032(SK, h_string).
+    let k = nonce_generation(&hashed_sk, &h_bytes);
+
+    // 5. c = ECVRF_challenge_generation(Y, H, Gamma, [k]*B, [k]*H) (§5.4.3).
+    let k_b = basepoint_mul(&k);
+    let k_h = point_mul(&h_point, &k);
+    let c = hash_points(&y_point, &h_point, &gamma_point, &k_b, &k_h);
+
+    // 6. s = (k + c*x) mod L.
+    let s = k + c * x;
+
+    // 7. pi = point_to_string(Gamma) || int_to_string(c, 16) || int_to_string(s, 32).
+    let mut proof = [0u8; PROOF_BYTES];
+    proof[0..POINT_BYTES].copy_from_slice(&point_to_bytes(&gamma_point));
+    proof[POINT_BYTES..POINT_BYTES + C_BYTES].copy_from_slice(&scalar_to_le_bytes(&c)[0..C_BYTES]);
+    proof[POINT_BYTES + C_BYTES..PROOF_BYTES].copy_from_slice(&scalar_to_le_bytes(&s));
+    Some(proof)
 }
 
 // ===========================================================================
@@ -202,9 +258,41 @@ fn scalar_from_c16(le16: &[u8]) -> Scalar {
         .expect("16-byte LE challenge is always < L")
 }
 
-// NOTE: the proving-side `reduce_wide_le` (k = SHA-512(...) mod L) and
-// `nonce_generation` are intentionally omitted -- verification never derives the
-// nonce. This module is a verifier-only port of `MiraclEcVrf25519`.
+/// Serialize a scalar as 32 little-endian bytes (curve25519-dalek's canonical
+/// encoding). Mirrors the Scala `scalarToLeBytes(_, 32)`.
+fn scalar_to_le_bytes(s: &Scalar) -> [u8; SCALAR_BYTES] {
+    s.to_bytes()
+}
+
+/// RFC 8032 clamp on the low 32 bytes of SHA-512(seed), reduced mod L. Mirrors
+/// the Scala `clampedScalar`: clear bottom 3 bits, clear top bit, set
+/// second-highest bit, then reduce mod L.
+fn clamped_scalar(low32: &[u8]) -> Scalar {
+    let mut pruned = [0u8; 32];
+    pruned.copy_from_slice(&low32[..32]);
+    pruned[0] &= 0xf8;
+    pruned[31] &= 0x7f;
+    pruned[31] |= 0x40;
+    Scalar::from_bytes_mod_order(pruned)
+}
+
+/// k = string_to_int(SHA-512(...)) mod L from a 64-byte little-endian input.
+/// Mirrors the Scala `reduceWideLe`.
+fn reduce_wide_le(wide64: &[u8]) -> Scalar {
+    let mut buf = [0u8; 64];
+    buf.copy_from_slice(&wide64[..64]);
+    Scalar::from_bytes_mod_order_wide(&buf)
+}
+
+/// k = ECVRF_nonce_generation_RFC8032(SK, h_string) (RFC 9381 §5.4.2.2):
+/// SHA-512(hashed_sk[32..64] || h_string) mod L. Mirrors the Scala
+/// `nonceGeneration`.
+fn nonce_generation(hashed_sk: &[u8], h_bytes: &[u8]) -> Scalar {
+    let mut hasher = Sha512::new();
+    hasher.update(&hashed_sk[32..64]);
+    hasher.update(h_bytes);
+    reduce_wide_le(&hasher.finalize())
+}
 
 // ===========================================================================
 // ECVRF helpers (mirror the Scala exactly).
@@ -239,20 +327,25 @@ fn hash_to_curve(public_key: &[u8], alpha: &[u8]) -> Option<EdwardsPoint> {
     None
 }
 
-/// c = SHA-512(suite || 0x02 || P1 || P2 || P3 || P4 || 0x00)[0..15] as a LE int.
+/// ECVRF_challenge_generation (RFC 9381 §5.4.3): hashes FIVE points with the
+/// public key Y first.
+///
+/// c = SHA-512(suite || 0x02 || Y || H || Gamma || U || V || 0x00)[0..15] as a LE int.
 fn hash_points(
-    p1: &EdwardsPoint,
-    p2: &EdwardsPoint,
-    p3: &EdwardsPoint,
-    p4: &EdwardsPoint,
+    y: &EdwardsPoint,
+    h: &EdwardsPoint,
+    gamma: &EdwardsPoint,
+    u: &EdwardsPoint,
+    v: &EdwardsPoint,
 ) -> Scalar {
     let mut hasher = Sha512::new();
     hasher.update([SUITE_STRING]);
     hasher.update([0x02u8]);
-    hasher.update(point_to_bytes(p1));
-    hasher.update(point_to_bytes(p2));
-    hasher.update(point_to_bytes(p3));
-    hasher.update(point_to_bytes(p4));
+    hasher.update(point_to_bytes(y));
+    hasher.update(point_to_bytes(h));
+    hasher.update(point_to_bytes(gamma));
+    hasher.update(point_to_bytes(u));
+    hasher.update(point_to_bytes(v));
     hasher.update([0x00u8]);
     let hash = hasher.finalize();
     // First 16 bytes as a little-endian integer (< 2^128 < L).
@@ -283,71 +376,119 @@ mod tests {
             .collect()
     }
 
-    /// RFC 9381 Appendix B.1, ECVRF-EDWARDS25519-SHA512-TAI test vector 2
-    /// (also the strengthened shared vector). This is the hard anchor.
-    #[test]
-    fn rfc9381_tai_vector2() {
-        let pk = hx("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
-        let alpha = hx("72");
-        let proof = hx("f3141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed593f7eaf3eb2f1a968cba3f6e23b386aeeaab7b1ea44a256e811892e13eeae7c9f6ea8992557453eac11c4d5476b1f35a08");
+    fn hex_of(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// Full RFC 9381 Appendix B.3 (ECVRF-EDWARDS25519-SHA512-TAI) conformance for
+    /// one example: derive the public key, GENERATE the proof and confirm it is
+    /// byte-identical to the published pi (the hard proof of RFC conformance),
+    /// verify the published pi, and confirm proof_to_hash(pi) == the published
+    /// beta.
+    fn check_rfc_example(
+        sk_hex: &str,
+        pk_hex: &str,
+        alpha_hex: &str,
+        pi_hex: &str,
+        beta_hex: &str,
+    ) {
+        let sk = hx(sk_hex);
+        let pk = hx(pk_hex);
+        let alpha = hx(alpha_hex);
+        let pi = hx(pi_hex);
+
+        // Public key derivation.
+        let vk = get_verification_key(&sk).expect("key derivation");
+        assert_eq!(hex_of(&vk), pk_hex, "verification key must match RFC PK");
+
+        // GENERATE: produced pi must equal the official published pi byte-for-byte.
+        let produced = vrf_prove(&sk, &alpha).expect("prove");
+        assert_eq!(
+            hex_of(&produced),
+            pi_hex,
+            "generated pi must be byte-identical to the RFC 9381 published pi"
+        );
+
+        // VERIFY the published pi.
         assert!(
-            vrf_verify(&pk, &alpha, &proof),
-            "RFC 9381 TAI vector 2 must verify"
+            vrf_verify(&pk, &alpha, &pi),
+            "RFC 9381 published pi must verify"
         );
-        let beta = vrf_proof_to_hash(&proof).expect("valid proof yields beta");
+
+        // beta = proof_to_hash(pi).
+        let beta = vrf_proof_to_hash(&pi).expect("valid proof yields beta");
         assert_eq!(
             hex_of(&beta),
-            "eb4440665d3891d668e7e0fcaf587f1b4bd7fbfe99d0eb2211ccec90496310eb5e33821bc613efb94db5e5b54c70a848a0bef4553a41befc57663b56373a5031"
+            beta_hex,
+            "beta must match RFC 9381 published beta"
         );
     }
 
-    /// RFC 9381 Appendix B.1 test vector 1 (empty message).
+    /// RFC 9381 Appendix B.3 Example 16 (empty message).
     #[test]
-    fn rfc9381_tai_vector1() {
-        let pk = hx("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a");
-        let alpha: Vec<u8> = vec![];
-        let proof = hx("8657106690b5526245a92b003bb079ccd1a92130477671f6fc01ad16f26f723f5e8bd1839b414219e8626d393787a192241fc442e6569e96c462f62b8079b9ed83ff2ee21c90c7c398802fdeebea4001");
-        assert!(vrf_verify(&pk, &alpha, &proof));
-        let beta = vrf_proof_to_hash(&proof).unwrap();
-        assert_eq!(
-            hex_of(&beta),
-            "90cf1df3b703cce59e2a35b925d411164068269d7b2d29f3301c03dd757876ff66b71dda49d2de59d03450451af026798e8f81cd2e333de5cdf4f3e140fdd8ae"
+    fn rfc9381_tai_example16() {
+        check_rfc_example(
+            "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+            "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a",
+            "",
+            "8657106690b5526245a92b003bb079ccd1a92130477671f6fc01ad16f26f723f26f8a57ccaed74ee1b190bed1f479d9727d2d0f9b005a6e456a35d4fb0daab1268a1b0db10836d9826a528ca76567805",
+            "90cf1df3b703cce59e2a35b925d411164068269d7b2d29f3301c03dd757876ff66b71dda49d2de59d03450451af026798e8f81cd2e333de5cdf4f3e140fdd8ae",
         );
     }
 
-    /// RFC 9381 Appendix B.1 test vector 3 (two-byte message).
+    /// RFC 9381 Appendix B.3 Example 17 (one-byte message). The hard anchor.
     #[test]
-    fn rfc9381_tai_vector3() {
-        let pk = hx("fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025");
-        let alpha = hx("af82");
-        let proof = hx("9bc0f79119cc5604bf02d23b4caede71393cedfbb191434dd016d30177ccbf80e29dc513c01c3a980e0e545bcd848222d08a6c3e3665ff5a4cab13a643bef812e284c6b2ee063a2cb4f456794723ad0a");
-        assert!(vrf_verify(&pk, &alpha, &proof));
-        let beta = vrf_proof_to_hash(&proof).unwrap();
-        assert_eq!(
-            hex_of(&beta),
-            "645427e5d00c62a23fb703732fa5d892940935942101e456ecca7bb217c61c452118fec1219202a0edcf038bb6373241578be7217ba85a2687f7a0310b2df19f"
+    fn rfc9381_tai_example17() {
+        check_rfc_example(
+            "4ccd089b28ff96da9db6c346ec114e0f5b8a319f35aba624da8cf6ed4fb8a6fb",
+            "3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c",
+            "72",
+            "f3141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed5933bf0864a62558b3ed7f2fea45c92a465301b3bbf5e3e54ddf2d935be3b67926da3ef39226bbc355bdc9850112c8f4b02",
+            "eb4440665d3891d668e7e0fcaf587f1b4bd7fbfe99d0eb2211ccec90496310eb5e33821bc613efb94db5e5b54c70a848a0bef4553a41befc57663b56373a5031",
         );
     }
 
-    /// Tampered gamma (first proof byte flipped) ⇒ invalid.
+    /// RFC 9381 Appendix B.3 Example 18 (two-byte message).
+    #[test]
+    fn rfc9381_tai_example18() {
+        check_rfc_example(
+            "c5aa8df43f9f837bedb7442f31dcb7b166d38535076f094b85ce3a2e0b4458f7",
+            "fc51cd8e6218a1a38da47ed00230f0580816ed13ba3303ac5deb911548908025",
+            "af82",
+            "9bc0f79119cc5604bf02d23b4caede71393cedfbb191434dd016d30177ccbf8096bb474e53895c362d8628ee9f9ea3c0e52c7a5c691b6c18c9979866568add7a2d41b00b05081ed0f58ee5e31b3a970e",
+            "645427e5d00c62a23fb703732fa5d892940935942101e456ecca7bb217c61c452118fec1219202a0edcf038bb6373241578be7217ba85a2687f7a0310b2df19f",
+        );
+    }
+
+    /// Tampered gamma (first proof byte flipped) ⇒ invalid. Derived from the
+    /// official RFC 9381 Example 17 pi.
     #[test]
     fn tampered_gamma_invalid() {
         let pk = hx("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
         let alpha = hx("72");
-        let proof = hx("0c141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed593f7eaf3eb2f1a968cba3f6e23b386aeeaab7b1ea44a256e811892e13eeae7c9f6ea8992557453eac11c4d5476b1f35a08");
+        let proof = hx("0c141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed5933bf0864a62558b3ed7f2fea45c92a465301b3bbf5e3e54ddf2d935be3b67926da3ef39226bbc355bdc9850112c8f4b02");
         assert!(!vrf_verify(&pk, &alpha, &proof));
     }
 
-    /// Tampered scalar s (last proof byte flipped) ⇒ invalid.
+    /// Tampered scalar s (last proof byte flipped) ⇒ invalid. Derived from the
+    /// official RFC 9381 Example 17 pi.
     #[test]
     fn tampered_s_invalid() {
         let pk = hx("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c");
         let alpha = hx("72");
-        let proof = hx("f3141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed593f7eaf3eb2f1a968cba3f6e23b386aeeaab7b1ea44a256e811892e13eeae7c9f6ea8992557453eac11c4d5476b1f35a09");
+        let proof = hx("f3141cd382dc42909d19ec5110469e4feae18300e94f304590abdced48aed5933bf0864a62558b3ed7f2fea45c92a465301b3bbf5e3e54ddf2d935be3b67926da3ef39226bbc355bdc9850112c8f4b03");
         assert!(!vrf_verify(&pk, &alpha, &proof));
     }
 
-    fn hex_of(b: &[u8]) -> String {
-        b.iter().map(|x| format!("{x:02x}")).collect()
+    /// Roundtrip on a non-RFC key: prove then verify.
+    #[test]
+    fn prove_then_verify_roundtrip() {
+        let sk = hx("0123456789abcdeffedcba98765432100123456789abcdeffedcba9876543210");
+        let msg = hx("48656c6c6f2c20565246210a"); // "Hello, VRF!\n"
+        let vk = get_verification_key(&sk).unwrap();
+        let pi = vrf_prove(&sk, &msg).unwrap();
+        assert!(vrf_verify(&vk, &msg, &pi));
+        // Wrong message must fail.
+        assert!(!vrf_verify(&vk, &hx("00"), &pi));
     }
 }
