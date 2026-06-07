@@ -20,6 +20,7 @@ jobs:
       go: ${{ steps.filter.outputs.go }}
       java: ${{ steps.filter.outputs.java }}
       shared: ${{ steps.filter.outputs.shared }}
+      jlvm_core: ${{ steps.filter.outputs.jlvm_core }}
     steps:
       - uses: actions/checkout@v6
       - uses: dorny/paths-filter@v3
@@ -38,6 +39,9 @@ jobs:
               - 'packages/java/**'
             shared:
               - 'shared/**'
+            jlvm_core:
+              - 'rust/jlvm-core/**'
+              - 'rust/poseidon-bn254/**'
 
   typescript:
     needs: changes
@@ -219,6 +223,44 @@ jobs:
         working-directory: packages/java
         run: mvn test
 
+  jlvm-core:
+    needs: changes
+    if: ${{ needs.changes.outputs.jlvm_core == 'true' || needs.changes.outputs.shared == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/jlvm-core/target/
+          key: ${{ runner.os }}-cargo-jlvm-${{ hashFiles('rust/jlvm-core/Cargo.lock') }}
+
+      # jlvm-core lives outside packages/ and is not exercised by the `rust` job
+      # (which tests packages/rust, the signing SDK). Guard so this is a no-op on
+      # refs/pushes where the crate isn't present yet (e.g. dev before the ZK
+      # stack lands), then becomes a real gate once it is.
+      - name: Format, lint, and test jlvm-core (+ poseidon-bn254)
+        run: |
+          if [ ! -f rust/jlvm-core/Cargo.toml ]; then
+            echo "rust/jlvm-core not present on this ref; skipping"
+            exit 0
+          fi
+          ( cd rust/jlvm-core && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
+          if [ -f rust/poseidon-bn254/Cargo.toml ]; then
+            ( cd rust/poseidon-bn254 && cargo test )
+          fi
+
   cross-language:
     needs: [typescript, python, rust, go, java]
     if: always() && !cancelled()
@@ -291,7 +333,7 @@ jobs:
         run: mvn test -Dtest=CrossLanguageTest
 
   all-checks-pass:
-    needs: [typescript, python, rust, go, java, cross-language]
+    needs: [typescript, python, rust, go, java, jlvm-core, cross-language]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -302,6 +344,7 @@ jobs:
                 "${{ needs.rust.result }}" == "failure" ||
                 "${{ needs.go.result }}" == "failure" ||
                 "${{ needs.java.result }}" == "failure" ||
+                "${{ needs.jlvm-core.result }}" == "failure" ||
                 "${{ needs.cross-language.result }}" == "failure" ]]; then
             echo "One or more jobs failed"
             exit 1
