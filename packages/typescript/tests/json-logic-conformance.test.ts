@@ -96,21 +96,17 @@ describe('missing / missing_some (Rust eval.rs semantics)', () => {
 
   it('missing sees callback context overlays', () => {
     // Inside `let`, bound names are present.
-    expect(
-      jsonLogic.apply({ let: [{ bound: 1 }, { missing: ['bound', 'unbound'] }] }, {})
-    ).toEqual(['unbound']);
+    expect(jsonLogic.apply({ let: [{ bound: 1 }, { missing: ['bound', 'unbound'] }] }, {})).toEqual(
+      ['unbound']
+    );
   });
 
   it('missing_some returns [] when the minimum is met', () => {
-    expect(
-      jsonLogic.apply({ missing_some: [1, ['a', 'b', 'c']] }, { a: 1 })
-    ).toEqual([]);
+    expect(jsonLogic.apply({ missing_some: [1, ['a', 'b', 'c']] }, { a: 1 })).toEqual([]);
   });
 
   it('missing_some returns all missing keys when below the minimum', () => {
-    expect(
-      jsonLogic.apply({ missing_some: [2, ['a', 'b', 'c']] }, { a: 1 })
-    ).toEqual(['b', 'c']);
+    expect(jsonLogic.apply({ missing_some: [2, ['a', 'b', 'c']] }, { a: 1 })).toEqual(['b', 'c']);
   });
 
   it('missing_some single-array form behaves like min=1', () => {
@@ -149,15 +145,15 @@ describe('Callback scoping (outer data visible inside callbacks)', () => {
 
   it('all/some/none/find/count callbacks see outer scope', () => {
     const data = { items: [1, 2, 3], limit: 2 };
-    expect(
-      jsonLogic.apply({ all: [{ var: 'items' }, { '<=': [{ var: '' }, 3] }] }, data)
-    ).toBe(true);
+    expect(jsonLogic.apply({ all: [{ var: 'items' }, { '<=': [{ var: '' }, 3] }] }, data)).toBe(
+      true
+    );
     expect(
       jsonLogic.apply({ some: [{ var: 'items' }, { '>': [{ var: '' }, { var: 'limit' }] }] }, data)
     ).toBe(true);
-    expect(
-      jsonLogic.apply({ none: [{ var: 'items' }, { '>': [{ var: '' }, 99] }] }, data)
-    ).toBe(true);
+    expect(jsonLogic.apply({ none: [{ var: 'items' }, { '>': [{ var: '' }, 99] }] }, data)).toBe(
+      true
+    );
     expect(
       jsonLogic.apply({ find: [{ var: 'items' }, { '>': [{ var: '' }, { var: 'limit' }] }] }, data)
     ).toBe(3);
@@ -255,9 +251,7 @@ describe('Object-form let key ordering (UTF-16 code units)', () => {
     // U+1F4A9 (surrogates D83D DCA9) sorts BEFORE U+FB03 in UTF-16 code-unit
     // order even though its code point is larger. So the binding for "\u{1F4A9}"
     // (=1) is evaluated first and "ﬃ" (= \u{1F4A9} + 1 = 2) second.
-    const expr = JSON.parse(
-      '{"let": [{"ﬃ": {"+": [{"var": "💩"}, 1]}, "💩": 1}, {"var": "ﬃ"}]}'
-    );
+    const expr = JSON.parse('{"let": [{"ﬃ": {"+": [{"var": "💩"}, 1]}, "💩": 1}, {"var": "ﬃ"}]}');
     expect(jsonLogic.apply(expr, {})).toBe(2);
   });
 

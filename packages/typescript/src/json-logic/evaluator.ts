@@ -565,9 +565,7 @@ class Evaluator {
     // (non-2-arity pairs are simply "not strictly equal"). `!==` is the exact
     // negation of `===`, matching Rust (see the SPEC DIVERGENCE note there).
     const eq =
-      values.length === 2 &&
-      values[0].tag !== 'function' &&
-      strictEquals(values[0], values[1]);
+      values.length === 2 && values[0].tag !== 'function' && strictEquals(values[0], values[1]);
     return boolValue(negate ? !eq : eq);
   }
 

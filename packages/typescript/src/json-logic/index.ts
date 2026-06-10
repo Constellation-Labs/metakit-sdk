@@ -87,13 +87,7 @@ export {
   parseBigInt,
 } from './numeric';
 
-export {
-  type Coerced,
-  coerceToPrimitive,
-  compareCoerced,
-  looseEquals,
-  toNumber,
-} from './coercion';
+export { type Coerced, coerceToPrimitive, compareCoerced, looseEquals, toNumber } from './coercion';
 
 export {
   // Expression constructors

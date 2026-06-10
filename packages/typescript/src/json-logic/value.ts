@@ -249,9 +249,7 @@ export const toString = (v: JsonLogicValue): string => {
     case 'array':
       return `[${v.value.map(toString).join(', ')}]`;
     case 'map':
-      return `{${[...v.value.entries()]
-        .map(([k, val]) => `"${k}": ${toString(val)}`)
-        .join(', ')}}`;
+      return `{${[...v.value.entries()].map(([k, val]) => `"${k}": ${toString(val)}`).join(', ')}}`;
     case 'function':
       return '<function>';
   }

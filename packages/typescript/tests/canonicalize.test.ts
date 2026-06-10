@@ -126,7 +126,7 @@ describe('RFC 8785 conformance (vendored serializer)', () => {
     // From RFC 8785 section 3.2.3: the surrogate-pair key (U+1F600, UTF-16
     // D83D DE00) sorts BEFORE U+FB33 because comparison is on UTF-16 code
     // units (0xD83D < 0xFB33), even though its code point is higher.
-    const result = canonicalize({ '\u{1F600}': 2, 'דּ': 1 });
+    const result = canonicalize({ '\u{1F600}': 2, דּ: 1 });
     expect(result).toBe('{"\u{1F600}":2,"דּ":1}');
   });
 
@@ -136,11 +136,11 @@ describe('RFC 8785 conformance (vendored serializer)', () => {
     Object.assign(input, {
       '€': 'Euro Sign',
       '\r': 'Carriage Return',
-      'דּ': 'Hebrew Letter Dalet With Dagesh',
+      דּ: 'Hebrew Letter Dalet With Dagesh',
       '1': 'One',
       '\u{1F600}': 'Emoji: Grinning Face',
       '\u0080': 'Control',
-      'ö': 'Latin Small Letter O With Diaeresis',
+      ö: 'Latin Small Letter O With Diaeresis',
     });
     const result = canonicalize(input);
     expect(result).toBe(
