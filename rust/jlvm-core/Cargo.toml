@@ -44,6 +44,17 @@ sha2 = "0.10"
 # ark-bn254 / ark-ec deps from Tier-1.
 curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
+# --- ZK / crypto opcodes (Tier 3b) ------------------------------------------
+# BLS12-381 signatures for `bls_verify` / `bls_aggregate_verify`. `blst` is
+# supranational/blst, the eth2 reference BLS library; its `min_pk` module is
+# exactly the minimal-pubkey-size ProofOfPossession variant (48B G1 pubkeys,
+# 96B G2 signatures, signature DST BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_)
+# that the Scala `Bls12381` (BouncyCastle 1.85 BLS12_381ProofOfPossession) and
+# the published ethereum/bls12-381-tests v0.1.2 vectors use. Matching that
+# library + DST is what makes the Rust opcodes byte-identical to the Scala
+# reference (which already reproduces the published vectors).
+blst = "0.3.16"
+
 [dev-dependencies]
 serde_json = "1.0"
 

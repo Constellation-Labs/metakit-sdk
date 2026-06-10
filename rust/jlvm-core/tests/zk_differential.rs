@@ -26,9 +26,24 @@
 //! reproduced by Rust because Rust ERRORS, that too is surfaced as a parity bug
 //! rather than silently swallowed. The whole point is to EXPOSE divergence.
 //!
-//! EVERY Tier-1, Tier-2a and Tier-2b vector MUST pass. Categories not yet
-//! implemented in the Rust core (groth16 and the bls ops) are skipped with a
-//! report line, so the harness stays green as later waves land.
+//!   - TIER-3a (SP1 Groth16-BN254): `groth16_verify` -- the hardcoded SP1
+//!     v6.1.0 circuit VK + selector + public-input assembly + four-pairing
+//!     Groth16 check. The REAL SP1 proof (`sp1-groth16-premium` fixture) is a
+//!     HARD ANCHOR that MUST verify `true`; tamper / wrong-input cases MUST
+//!     verify `false`; wrong-width vkey cases MUST error.
+//!   - TIER-3b (BLS12-381 signatures): `bls_verify`, `bls_aggregate_verify` --
+//!     the eth2 / IETF ProofOfPossession ciphersuite (minimal-pubkey-size, DST
+//!     `BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_`, 48B G1 pubkeys / 96B G2
+//!     signatures), backed by `blst`. The 5 published ethereum/bls12-381-tests
+//!     v0.1.2 known-answer cases (`verify_valid_case_e8a50c445c855360`,
+//!     `verify_valid_case_195246ee3bd3b6ec`, `verify_wrong_pubkey`,
+//!     `fast_aggregate_verify_valid`, `fast_aggregate_verify_extra_pubkey`) are
+//!     HARD ANCHORS / independent ground truth: since the Scala reference already
+//!     reproduces them, Rust matching them too PROVES Scala<->Rust BLS
+//!     byte-identity. Wrong-width pk/sig cases MUST error; bad / non-canonical /
+//!     wrong-subgroup points MUST verify `false`.
+//!
+//! EVERY Tier-1, Tier-2a, Tier-2b, Tier-3a and Tier-3b vector MUST pass.
 
 use jlvm_core::canonical::canonicalize_string;
 use jlvm_core::value::{decode_value, encode_value};
@@ -57,6 +72,27 @@ const TIER2B_CATEGORIES: &[&str] = &["bn254_add", "bn254_mul", "bn254_pairing", 
 
 /// Tier-2b opcode tags (for any `known_answer` cross-check that lands later).
 const TIER2B_OPS: &[&str] = &["bn254_add", "bn254_mul", "bn254_pairing", "ecvrf_verify"];
+
+/// The Tier-3a SP1 Groth16-BN254 verifier category this Rust JLVM implements
+/// and must pass. The real-SP1-proof case (circuit v6.1.0, `sp1-groth16-premium`
+/// fixture) is a HARD ANCHOR: it MUST verify `true`; the tamper / wrong-input
+/// cases MUST verify `false`; and the wrong-width vkey cases MUST error.
+const TIER3A_CATEGORIES: &[&str] = &["groth16_verify"];
+
+/// Tier-3a opcode tags. The `known_answer` groth16_verify case (the same real
+/// SP1 fixture) is an independent anchor and must also pass.
+const TIER3A_OPS: &[&str] = &["groth16_verify"];
+
+/// The Tier-3b BLS12-381 signature categories this Rust JLVM implements and must
+/// pass: single `bls_verify` and same-message `bls_aggregate_verify`
+/// (fastAggregateVerify) over the eth2 / IETF ProofOfPossession ciphersuite.
+const TIER3B_CATEGORIES: &[&str] = &["bls_verify", "bls_aggregate_verify"];
+
+/// Tier-3b opcode tags. The `known_answer` bls cases are the 5 PUBLISHED
+/// ethereum/bls12-381-tests v0.1.2 vectors -- independent ground truth that, by
+/// matching the already-eth2-conformant Scala reference, proves Scala<->Rust BLS
+/// byte-identity. They MUST pass.
+const TIER3B_OPS: &[&str] = &["bls_verify", "bls_aggregate_verify"];
 
 /// The single top-level operator tag of an expression, if it is an
 /// `{"op": ...}` object. Used to pull Tier-1 ops out of the `known_answer` mix.
@@ -356,4 +392,81 @@ fn tier2a_zk_differential_against_shared_vectors() {
 fn tier2b_zk_differential_against_shared_vectors() {
     let r = run_differential(TIER2B_CATEGORIES, TIER2B_OPS);
     report_and_assert("Tier-2b", TIER2B_CATEGORIES, &r);
+}
+
+#[test]
+fn tier3a_zk_differential_against_shared_vectors() {
+    let r = run_differential(TIER3A_CATEGORIES, TIER3A_OPS);
+    report_and_assert("Tier-3a", TIER3A_CATEGORIES, &r);
+    // Sanity: the real SP1 proof + the 5 tamper cases + the 2 wrong-width vkey
+    // error cases = 8 groth16_verify cases, plus the known_answer anchor (= 9).
+    assert!(
+        r.total >= 8,
+        "expected the full groth16_verify category (>= 8 cases), got {}",
+        r.total
+    );
+    assert_eq!(
+        r.error_pass, r.error_cases,
+        "every wrong-width-vkey groth16_verify error case must error in Rust"
+    );
+}
+
+#[test]
+fn tier3b_zk_differential_against_shared_vectors() {
+    let r = run_differential(TIER3B_CATEGORIES, TIER3B_OPS);
+    report_and_assert("Tier-3b", TIER3B_CATEGORIES, &r);
+    // The bls_verify + bls_aggregate_verify categories (6 + 5 = 11 cases) PLUS
+    // the 5 PUBLISHED ethereum/bls12-381-tests v0.1.2 known-answer anchors that
+    // top-op into these tags = 16 BLS vectors total.
+    assert_eq!(
+        r.total, 16,
+        "expected all 16 BLS vectors (11 category + 5 published known-answer), got {}",
+        r.total
+    );
+    // The wrong-width pk/sig cases (2 in bls_verify + 2 in bls_aggregate_verify)
+    // MUST error in Rust, mirroring the Scala HexBytes width check.
+    assert_eq!(
+        r.error_pass, r.error_cases,
+        "every wrong-width BLS error case must error in Rust"
+    );
+    assert!(
+        r.error_cases >= 4,
+        "expected at least 4 wrong-width BLS error cases, got {}",
+        r.error_cases
+    );
+
+    // Hard gate: every one of the 5 PUBLISHED known-answer vectors (independent
+    // ground truth) MUST be present and pass. Locate them by their note tags and
+    // re-run the exact opcode, asserting the published boolean directly.
+    let published = [
+        ("verify_valid_case_e8a50c445c855360", true),
+        ("verify_valid_case_195246ee3bd3b6ec", true),
+        ("verify_wrong_pubkey", false),
+        ("fast_aggregate_verify_valid", true),
+        ("fast_aggregate_verify_extra_pubkey", false),
+    ];
+    let cases = load_cases();
+    for (tag, want) in published {
+        let case = cases
+            .iter()
+            .find(|c| c.note.as_deref().is_some_and(|n| n.contains(tag)))
+            .unwrap_or_else(|| panic!("published BLS known-answer vector `{tag}` is MISSING"));
+        let expr_json: serde_json::Value =
+            serde_json::from_str(&case.expr).expect("published expr is valid JSON");
+        let data_json: serde_json::Value =
+            serde_json::from_str(&case.data).expect("published data is valid JSON");
+        let data = decode_value(&data_json);
+        let expr = decode_expression(&expr_json).expect("published expr decodes");
+        let result = evaluate(&expr, &data).expect("published BLS vector must evaluate, not error");
+        match result {
+            jlvm_core::value::Value::Bool(got) => assert_eq!(
+                got, want,
+                "PUBLISHED ethereum/bls12-381-tests vector `{tag}` MUST verify to {want}, got {got}"
+            ),
+            other => panic!(
+                "PUBLISHED BLS vector `{tag}` must evaluate to a Bool, got {:?}",
+                encode_value(&other)
+            ),
+        }
+    }
 }
