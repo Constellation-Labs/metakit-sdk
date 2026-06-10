@@ -121,6 +121,80 @@ describe('canonicalize', () => {
   });
 });
 
+describe('RFC 8785 conformance (vendored serializer)', () => {
+  it('sorts object keys by UTF-16 code units, not code points', () => {
+    // From RFC 8785 section 3.2.3: the surrogate-pair key (U+1F600, UTF-16
+    // D83D DE00) sorts BEFORE U+FB33 because comparison is on UTF-16 code
+    // units (0xD83D < 0xFB33), even though its code point is higher.
+    const result = canonicalize({ '\u{1F600}': 2, דּ: 1 });
+    expect(result).toBe('{"\u{1F600}":2,"דּ":1}');
+  });
+
+  it('orders the RFC 8785 section 3.2.3 sample keys correctly', () => {
+    const input: Record<string, unknown> = {};
+    // Insertion deliberately scrambled.
+    Object.assign(input, {
+      '€': 'Euro Sign',
+      '\r': 'Carriage Return',
+      דּ: 'Hebrew Letter Dalet With Dagesh',
+      '1': 'One',
+      '\u{1F600}': 'Emoji: Grinning Face',
+      '\u0080': 'Control',
+      ö: 'Latin Small Letter O With Diaeresis',
+    });
+    const result = canonicalize(input);
+    expect(result).toBe(
+      '{"\\r":"Carriage Return","1":"One","\u0080":"Control",' +
+        '"ö":"Latin Small Letter O With Diaeresis","€":"Euro Sign",' +
+        '"\u{1F600}":"Emoji: Grinning Face","\uFB33":"Hebrew Letter Dalet With Dagesh"}'
+    );
+  });
+
+  it('serializes numbers with ECMAScript shortest representation', () => {
+    expect(canonicalize([1, 1.5, 0.1, 1e21, 1e-7, 100, 1000000000000000000000.5])).toBe(
+      '[1,1.5,0.1,1e+21,1e-7,100,1e+21]'
+    );
+  });
+
+  it('serializes -0 as 0', () => {
+    expect(canonicalize([-0])).toBe('[0]');
+    expect(canonicalize([0])).toBe('[0]');
+  });
+
+  it('throws on NaN and Infinity', () => {
+    expect(() => canonicalize([NaN])).toThrow();
+    expect(() => canonicalize([Infinity])).toThrow();
+    expect(() => canonicalize([-Infinity])).toThrow();
+  });
+
+  it('uses the JCS escaping set for control characters', () => {
+    expect(canonicalize(['\u0000\u0001\b\t\n\f\r"\\'])).toBe(
+      '["\\u0000\\u0001\\b\\t\\n\\f\\r\\"\\\\"]'
+    );
+  });
+
+  it('omits undefined object members and nullifies undefined array elements', () => {
+    expect(canonicalize({ a: 1, b: undefined })).toBe('{"a":1}');
+    expect(canonicalize([1, undefined, 3])).toBe('[1,null,3]');
+  });
+
+  it('handles top-level primitives', () => {
+    expect(canonicalize('hello')).toBe('"hello"');
+    expect(canonicalize(42)).toBe('42');
+    expect(canonicalize(true)).toBe('true');
+    expect(canonicalize(null)).toBe('null');
+  });
+
+  it('preserves a "__proto__" member through drop-nulls and canonicalization', () => {
+    // JSON.parse stores "__proto__" as an ordinary own property; the
+    // canonical bytes must include it (the Scala server keeps it too), and
+    // processing it must not mutate Object.prototype.
+    const data = JSON.parse('{"__proto__": {"a": 1}, "b": 2, "constructor": 3}');
+    expect(canonicalize(data)).toBe('{"__proto__":{"a":1},"b":2,"constructor":3}');
+    expect(({} as Record<string, unknown>).a).toBeUndefined();
+  });
+});
+
 describe('dropNullFields', () => {
   it('should drop top-level null object fields and recurse', () => {
     const cleaned = dropNullFields({ a: null, b: 1, c: { d: null, e: 2 } });

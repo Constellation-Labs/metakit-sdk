@@ -58,7 +58,11 @@ describe('JSON Logic VM', () => {
     it('handles min/max', () => {
       expect(jsonLogic.apply({ min: [1, 2, 3] }, {})).toBe(1);
       expect(jsonLogic.apply({ max: [1, 2, 3] }, {})).toBe(3);
-      expect(jsonLogic.apply({ min: [[1, 2], [3]] }, {})).toBe(1);
+      // Single array argument is unwrapped (Scala/Rust semantics).
+      expect(jsonLogic.apply({ min: [[1, 2, 3]] }, {})).toBe(1);
+      // Nested arrays are NOT flattened: a multi-element array is not a number
+      // (matches Rust op_minmax / Scala promoteToNumeric, which error here).
+      expect(() => jsonLogic.apply({ min: [[1, 2], [3]] }, {})).toThrow();
     });
 
     it('handles abs/round/floor/ceil', () => {
@@ -100,7 +104,9 @@ describe('JSON Logic VM', () => {
     it('handles chained comparisons', () => {
       expect(jsonLogic.apply({ '<': [1, 2, 3] }, {})).toBe(true);
       expect(jsonLogic.apply({ '<': [1, 3, 2] }, {})).toBe(false);
-      expect(jsonLogic.apply({ '<=': [1, 2, 2, 3] }, {})).toBe(true);
+      expect(jsonLogic.apply({ '<=': [1, 2, 3] }, {})).toBe(true);
+      // Only 2- or 3-arg comparisons exist in the Scala/Rust semantics.
+      expect(() => jsonLogic.apply({ '<=': [1, 2, 2, 3] }, {})).toThrow();
     });
   });
 
@@ -240,7 +246,8 @@ describe('JSON Logic VM', () => {
 
     it('handles reverse', () => {
       expect(jsonLogic.apply({ reverse: [[1, 2, 3]] }, {})).toEqual([3, 2, 1]);
-      expect(jsonLogic.apply({ reverse: 'hello' }, {})).toBe('olleh');
+      // reverse is array-only in the Scala/Rust semantics (no string reversal).
+      expect(() => jsonLogic.apply({ reverse: 'hello' }, {})).toThrow();
     });
 
     it('handles unique', () => {

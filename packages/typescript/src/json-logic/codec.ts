@@ -2,7 +2,12 @@
  * JSON Logic Codec
  *
  * Parse JSON to expressions and encode expressions to JSON.
- * Matches the Scala metakit serialization format.
+ * Mirrors rust/jlvm-core/src/expression.rs (`decodeJsonLogicExpr`) and the
+ * Scala metakit serialization format.
+ *
+ * Security note: parsed objects are stored as `Map`s (never plain JS objects
+ * keyed by attacker-controlled strings), so keys like "__proto__" or
+ * "constructor" cannot pollute prototypes.
  */
 
 import { isKnownOperator } from './operators';
@@ -18,6 +23,7 @@ import {
   nullValue,
   strValue,
 } from './value';
+import { Ratio } from './ratio';
 
 /**
  * Error thrown when parsing fails
@@ -33,6 +39,29 @@ export class JsonLogicParseError extends Error {
 }
 
 /**
+ * Number -> Value following circe / Rust `number_to_value`: integral numbers
+ * become IntValue (exact, unbounded), everything else FloatValue (exact decimal
+ * from the shortest-round-trip string form). `bigint` inputs are accepted for
+ * beyond-2^53 integers.
+ */
+const parseNumber = (n: number | bigint): JsonLogicValue => {
+  if (typeof n === 'bigint') {
+    return intValue(n);
+  }
+  if (!Number.isFinite(n)) {
+    throw new JsonLogicParseError(`Cannot parse non-finite number: ${n}`);
+  }
+  const r = Ratio.parseDecimal(String(n));
+  if (r === null) {
+    throw new JsonLogicParseError(`Cannot parse number: ${n}`);
+  }
+  if (r.isInteger()) {
+    return intValue(r.numerator);
+  }
+  return floatValue(r);
+};
+
+/**
  * Parse a JSON value to a JsonLogicValue (runtime value, not expression)
  */
 export const parseValue = (json: unknown): JsonLogicValue => {
@@ -44,12 +73,8 @@ export const parseValue = (json: unknown): JsonLogicValue => {
     return boolValue(json);
   }
 
-  if (typeof json === 'number') {
-    // Check if it's an integer
-    if (Number.isInteger(json) && Number.isSafeInteger(json)) {
-      return intValue(BigInt(json));
-    }
-    return floatValue(json);
+  if (typeof json === 'number' || typeof json === 'bigint') {
+    return parseNumber(json);
   }
 
   if (typeof json === 'string') {
@@ -61,9 +86,9 @@ export const parseValue = (json: unknown): JsonLogicValue => {
   }
 
   if (typeof json === 'object') {
-    const result: Record<string, JsonLogicValue> = {};
+    const result = new Map<string, JsonLogicValue>();
     for (const [key, val] of Object.entries(json)) {
-      result[key] = parseValue(val);
+      result.set(key, parseValue(val));
     }
     return mapValue(result);
   }
@@ -79,7 +104,7 @@ export const parseValue = (json: unknown): JsonLogicValue => {
  * - Arrays -> either ArrayExpression or array-syntax operator
  * - Objects with single operator key -> ApplyExpression
  * - Objects with "var" key -> VarExpression
- * - Other objects -> MapExpression or ConstExpression(MapValue)
+ * - Other objects -> MapExpression
  */
 export const parseExpression = (json: unknown): JsonLogicExpression => {
   // Null
@@ -92,12 +117,9 @@ export const parseExpression = (json: unknown): JsonLogicExpression => {
     return constExpr(boolValue(json));
   }
 
-  // Number
-  if (typeof json === 'number') {
-    if (Number.isInteger(json) && Number.isSafeInteger(json)) {
-      return constExpr(intValue(BigInt(json)));
-    }
-    return constExpr(floatValue(json));
+  // Number (bigint accepted for beyond-2^53 integers)
+  if (typeof json === 'number' || typeof json === 'bigint') {
+    return constExpr(parseNumber(json));
   }
 
   // String
@@ -185,14 +207,16 @@ const parseVarFromArray = (args: unknown[]): JsonLogicExpression => {
  * - {"var": ...} -> VarExpression
  * - {"op": args} -> ApplyExpression (single known operator key)
  * - {"": ...} -> VarExpression (empty string = root var)
- * - Other -> MapExpression
+ * - Other -> MapExpression (insertion-ordered entries; mirrors Rust, which
+ *   keeps the MapExpression form even when all values are constants — this is
+ *   required for object-form `let` bindings)
  */
 const parseObjectExpression = (obj: Record<string, unknown>): JsonLogicExpression => {
   const keys = Object.keys(obj);
 
   // Empty object -> ConstExpression(MapValue)
   if (keys.length === 0) {
-    return constExpr(mapValue({}));
+    return constExpr(mapValue(new Map()));
   }
 
   // Single key
@@ -200,13 +224,8 @@ const parseObjectExpression = (obj: Record<string, unknown>): JsonLogicExpressio
     const key = keys[0];
     const value = obj[key];
 
-    // Empty string key -> var to root
-    if (key === '') {
-      return parseVarExpression(value);
-    }
-
-    // var operator
-    if (key === 'var') {
+    // Empty string key or var operator -> VarExpression
+    if (key === '' || key === 'var') {
       return parseVarExpression(value);
     }
 
@@ -217,34 +236,12 @@ const parseObjectExpression = (obj: Record<string, unknown>): JsonLogicExpressio
     }
   }
 
-  // Not an operator - parse as MapExpression or ConstExpression(MapValue)
-  // If all values are simple values (no expressions), use ConstExpression
-  // Otherwise use MapExpression
-  const entries: Record<string, JsonLogicExpression> = {};
-  let hasExpressions = false;
-
+  // Not an operator - parse as MapExpression (element-wise evaluation).
+  const entries: Array<[string, JsonLogicExpression]> = [];
   for (const [k, v] of Object.entries(obj)) {
-    const expr = parseExpression(v);
-    entries[k] = expr;
-
-    // Check if this is more than a simple const
-    if (expr.tag !== 'const') {
-      hasExpressions = true;
-    }
+    entries.push([k, parseExpression(v)]);
   }
-
-  if (hasExpressions) {
-    return mapExpr(entries);
-  }
-
-  // All values are consts - collapse to ConstExpression(MapValue)
-  const constEntries: Record<string, JsonLogicValue> = {};
-  for (const [k, expr] of Object.entries(entries)) {
-    if (expr.tag === 'const') {
-      constEntries[k] = expr.value;
-    }
-  }
-  return constExpr(mapValue(constEntries));
+  return mapExpr(entries);
 };
 
 /**
@@ -309,6 +306,11 @@ const parseVarExpression = (value: unknown): JsonLogicExpression => {
 
 /**
  * Encode a JsonLogicValue to JSON
+ *
+ * IntValue encodes as a JS number while it is exactly representable
+ * (|v| <= Number.MAX_SAFE_INTEGER) and as a `bigint` beyond that, preserving
+ * full precision (consensus-critical for token amounts). FloatValue encodes
+ * to the nearest double — the same f64 boundary the Rust/Scala encoders use.
  */
 export const encodeValue = (value: JsonLogicValue): unknown => {
   switch (value.tag) {
@@ -317,29 +319,24 @@ export const encodeValue = (value: JsonLogicValue): unknown => {
     case 'bool':
       return value.value;
     case 'int':
-      // BigInt can't be directly serialized to JSON
-      // If it fits in a safe integer, use number; otherwise use string
       if (
         value.value >= BigInt(Number.MIN_SAFE_INTEGER) &&
         value.value <= BigInt(Number.MAX_SAFE_INTEGER)
       ) {
         return Number(value.value);
       }
-      // For very large integers, we lose precision but match JSON semantics
-      return Number(value.value);
-    case 'float':
+      // Preserve exactness for big integers rather than silently rounding.
       return value.value;
+    case 'float':
+      return value.value.toNumber();
     case 'string':
       return value.value;
     case 'array':
       return value.value.map(encodeValue);
-    case 'map': {
-      const result: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(value.value)) {
-        result[k] = encodeValue(v);
-      }
-      return result;
-    }
+    case 'map':
+      // Object.fromEntries uses CreateDataProperty semantics, so keys like
+      // "__proto__" become plain own properties (no prototype pollution).
+      return Object.fromEntries([...value.value.entries()].map(([k, v]) => [k, encodeValue(v)]));
     case 'function':
       return null; // Functions can't be serialized
   }
@@ -365,13 +362,8 @@ export const encodeExpression = (expr: JsonLogicExpression): unknown => {
     case 'array':
       return expr.elements.map(encodeExpression);
 
-    case 'map': {
-      const result: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(expr.entries)) {
-        result[k] = encodeExpression(v);
-      }
-      return result;
-    }
+    case 'map':
+      return Object.fromEntries(expr.entries.map(([k, v]) => [k, encodeExpression(v)]));
 
     case 'apply':
       if (expr.args.length === 1) {
