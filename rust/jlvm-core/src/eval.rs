@@ -1,9 +1,9 @@
 //! The evaluator. Mirrors `JsonLogicRuntime.evaluate` + `JsonLogicSemantics`.
 //!
-//! Uses ordinary recursion (Rust's native stack is large; the conformance programs are
-//! shallow). The control-flow operators `if` and `let` are handled specially, matching
-//! the Scala runtime; everything else first evaluates its (non-callback) arguments and
-//! then dispatches to the corresponding handler.
+//! Uses ordinary recursion with an explicit depth guard (see [`MAX_EVAL_DEPTH`]). The
+//! control-flow operators `if` and `let` are handled specially, matching the Scala
+//! runtime; everything else first evaluates its (non-callback) arguments and then
+//! dispatches to the corresponding handler.
 
 use crate::coercion::{coerce_to_primitive, compare_coerced};
 use crate::expression::{Expression, VarKey};
@@ -15,14 +15,28 @@ use crate::ratio::Ratio;
 use crate::value::Value;
 use num_bigint::BigInt;
 use num_traits::Signed;
+use std::cell::Cell;
 use std::cmp::Ordering;
 
 const MAX_SAFE_EXPONENT: i64 = 999;
 
+/// Maximum expression-recursion depth, enforced identically by the un-metered
+/// evaluator and the gas-metered one (`gas_eval`). One unit is consumed per
+/// `eval` call: nested operator arguments, `if`/`let` children, and callback
+/// runs (map/filter/reduce/...) all count. Exceeding the limit returns a normal
+/// `Err` ("Recursion depth limit exceeded"), never a stack overflow / abort.
+///
+/// This guard is deliberately INDEPENDENT of serde_json's parse-depth limit
+/// (128): expressions can be built programmatically, and callback bodies add
+/// evaluation recursion that JSON parsing never sees. 256 comfortably exceeds
+/// any legitimate conformance program while staying far below native stack
+/// exhaustion.
+pub const MAX_EVAL_DEPTH: u32 = 256;
+
 /// Evaluate an expression against `data` and an optional context. The top-level entry
 /// point uses `data` as the variable root and `ctx = None`.
 pub fn evaluate(expr: &Expression, data: &Value) -> Result<Value, String> {
-    let ev = Evaluator { vars: data };
+    let ev = Evaluator::new(data);
     ev.eval(expr, None)
 }
 
@@ -32,10 +46,33 @@ pub fn evaluate(expr: &Expression, data: &Value) -> Result<Value, String> {
 /// collection ops, whose per-element runs must charge the shared gas counter).
 pub(crate) struct Evaluator<'a> {
     pub(crate) vars: &'a Value,
+    /// Current `eval` recursion depth (guarded by [`MAX_EVAL_DEPTH`]).
+    depth: Cell<u32>,
 }
 
 impl<'a> Evaluator<'a> {
+    pub(crate) fn new(vars: &'a Value) -> Self {
+        Evaluator {
+            vars,
+            depth: Cell::new(0),
+        }
+    }
+
+    /// Depth-guarded recursion entry: every recursive evaluation step goes
+    /// through here, so the counter tracks true evaluation depth (including
+    /// callback runs), independent of how the expression was constructed.
     fn eval(&self, expr: &Expression, ctx: Option<&Value>) -> Result<Value, String> {
+        let depth = self.depth.get();
+        if depth >= MAX_EVAL_DEPTH {
+            return Err(format!("Recursion depth limit exceeded ({MAX_EVAL_DEPTH})"));
+        }
+        self.depth.set(depth + 1);
+        let result = self.eval_node(expr, ctx);
+        self.depth.set(depth);
+        result
+    }
+
+    fn eval_node(&self, expr: &Expression, ctx: Option<&Value>) -> Result<Value, String> {
         match expr {
             Expression::Const(v) => Ok(v.clone()),
             Expression::Array(elems) => {
@@ -783,12 +820,20 @@ impl<'a> Evaluator<'a> {
         };
         let units: Vec<u16> = s.encode_utf16().collect();
         let str_len = units.len() as i64;
-        let raw_start = if start < 0 { str_len + start } else { start };
+        // Saturating index arithmetic: `start`/`length` are attacker-controlled
+        // i64s (e.g. i64::MIN / i64::MAX), so unchecked `+` would panic in debug
+        // and wrap in release. Saturation followed by the clamps below yields the
+        // same indices as exact (unbounded) arithmetic would.
+        let raw_start = if start < 0 {
+            str_len.saturating_add(start)
+        } else {
+            start
+        };
         let start_idx = raw_start.max(0).min(str_len);
         let end_idx = if length >= 0 {
-            (start_idx + length).min(str_len)
+            start_idx.saturating_add(length).min(str_len)
         } else {
-            (str_len + length).max(0)
+            str_len.saturating_add(length).max(0)
         };
         let sub = if start_idx >= str_len || end_idx <= start_idx {
             String::new()
@@ -1058,15 +1103,29 @@ impl<'a> Evaluator<'a> {
             [Value::Array(arr), Value::Int(start)] => {
                 let s = bigint_to_i64(start).ok_or("slice start out of range")?;
                 let len = arr.len() as i64;
-                let start_idx = if s < 0 { (len + s).max(0) } else { s.min(len) };
+                // Saturating arithmetic: see op_substr (same i64-extreme hazard).
+                let start_idx = if s < 0 {
+                    len.saturating_add(s).max(0)
+                } else {
+                    s.min(len)
+                };
                 Ok(Value::Array(arr[start_idx as usize..].to_vec()))
             }
             [Value::Array(arr), Value::Int(start), Value::Int(end)] => {
                 let s = bigint_to_i64(start).ok_or("slice start out of range")?;
                 let e = bigint_to_i64(end).ok_or("slice end out of range")?;
                 let len = arr.len() as i64;
-                let start_idx = if s < 0 { (len + s).max(0) } else { s.min(len) };
-                let end_idx = if e < 0 { (len + e).max(0) } else { e.min(len) };
+                // Saturating arithmetic: see op_substr (same i64-extreme hazard).
+                let start_idx = if s < 0 {
+                    len.saturating_add(s).max(0)
+                } else {
+                    s.min(len)
+                };
+                let end_idx = if e < 0 {
+                    len.saturating_add(e).max(0)
+                } else {
+                    e.min(len)
+                };
                 if end_idx <= start_idx {
                     Ok(Value::Array(Vec::new()))
                 } else {

@@ -118,9 +118,10 @@ pub fn evaluate_with_gas_config(
     config: &GasConfig,
 ) -> Result<(Value, GasUsed), GasError> {
     let metered = Metered {
-        inner: Evaluator { vars: data },
+        inner: Evaluator::new(data),
         config,
         remaining: Cell::new(gas_limit),
+        rec_depth: Cell::new(0),
     };
     let (value, _depth) = metered.eval_gas_aware(expr, None, 0)?;
     Ok((value, gas_limit - metered.remaining.get()))
@@ -130,6 +131,11 @@ struct Metered<'a> {
     inner: Evaluator<'a>,
     config: &'a GasConfig,
     remaining: Cell<u64>,
+    /// Current `eval` recursion depth, guarded by [`crate::eval::MAX_EVAL_DEPTH`]
+    /// IDENTICALLY to the un-metered evaluator. Distinct from both the gas
+    /// metric depth and `sem_depth` (which only advances at callback
+    /// boundaries) — this counts every recursive `eval` step.
+    rec_depth: Cell<u32>,
 }
 
 /// An evaluated value together with its metric depth (see module docs).
@@ -162,8 +168,24 @@ impl<'a> Metered<'a> {
 
     /// The runtime: expression traversal at semantics depth `sem_depth`
     /// (`GasAwareSemantics.currentDepth`, advanced only across callback
-    /// boundaries). Mirrors `JsonLogicRuntime.evaluate`.
+    /// boundaries). Mirrors `JsonLogicRuntime.evaluate`. Depth-guarded by
+    /// [`crate::eval::MAX_EVAL_DEPTH`], identically to the un-metered
+    /// evaluator (a normal `GasError::Eval`, distinct from gas exhaustion).
     fn eval(&self, expr: &Expression, ctx: Option<&Value>, sem_depth: u32) -> Outcome {
+        let depth = self.rec_depth.get();
+        if depth >= crate::eval::MAX_EVAL_DEPTH {
+            return Err(GasError::Eval(format!(
+                "Recursion depth limit exceeded ({})",
+                crate::eval::MAX_EVAL_DEPTH
+            )));
+        }
+        self.rec_depth.set(depth + 1);
+        let result = self.eval_node(expr, ctx, sem_depth);
+        self.rec_depth.set(depth);
+        result
+    }
+
+    fn eval_node(&self, expr: &Expression, ctx: Option<&Value>, sem_depth: u32) -> Outcome {
         match expr {
             Expression::Const(v) => Ok((v.clone(), 0)),
             Expression::Array(elems) => {

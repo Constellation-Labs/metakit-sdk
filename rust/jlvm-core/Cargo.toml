@@ -58,6 +58,12 @@ blst = "0.3.16"
 [dev-dependencies]
 serde_json = "1.0"
 
+# Deterministic-VM hardening: a silent two's-complement wrap in release builds
+# would be a consensus/parity hazard, so integer overflow must panic (and be
+# caught as an error) in release exactly as it does in debug.
+[profile.release]
+overflow-checks = true
+
 [lib]
 name = "jlvm_core"
 path = "src/lib.rs"

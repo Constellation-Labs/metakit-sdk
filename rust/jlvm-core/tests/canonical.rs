@@ -7,11 +7,17 @@
 //!     RFC 8785 objects with integers and strings, produced by the Scala/other SDKs).
 //!   * UTF-16 code-unit key ordering and JCS string escaping.
 
-use jlvm_core::canonical::canonicalize_string;
+use jlvm_core::canonical::canonicalize_string as canonicalize_string_result;
 use jlvm_core::ratio::Ratio;
 use jlvm_core::value::{decode_value, Value};
 use num_bigint::BigInt;
 use std::path::PathBuf;
+
+/// Test shim: the canonicalizer is fallible (NaN/Infinity at the f64 boundary
+/// -> Err); every vector in this file is canonicalizable.
+fn canonicalize_string(v: &Value) -> String {
+    canonicalize_string_result(v).expect("canonicalizable test value")
+}
 
 fn int(n: i64) -> Value {
     Value::Int(BigInt::from(n))
@@ -78,6 +84,18 @@ fn string_escaping_matches_jcs() {
         canonicalize_string(&v),
         "\"a\\\"b\\\\c\\n\\t\\r\\b\\f\\u0001\""
     );
+}
+
+#[test]
+fn non_finite_f64_boundary_is_err_not_abort() {
+    // Int(10^999) (reachable via {"pow":[10,999]}) overflows the f64 boundary;
+    // the canonicalizer must return a normal Err, not panic/abort.
+    let huge = Value::Int(BigInt::from(10).pow(999));
+    let err = canonicalize_string_result(&huge).unwrap_err();
+    assert!(err.contains("NaN/Infinity"), "unexpected error: {err}");
+    // Nested inside containers too (no panic mid-encode).
+    let nested = Value::Map(vec![("x".into(), Value::Array(vec![huge]))]);
+    assert!(canonicalize_string_result(&nested).is_err());
 }
 
 #[test]

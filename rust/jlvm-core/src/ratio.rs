@@ -79,22 +79,44 @@ impl Ratio {
         Ratio::from_i64(0)
     }
 
+    /// Maximum permitted magnitude of the effective decimal scale (fractional
+    /// digits minus exponent) accepted by [`Ratio::from_decimal`] /
+    /// [`Ratio::parse_decimal`].
+    ///
+    /// SECURITY: a `Ratio` materializes `10^|scale|` as a full `BigInt`, so an
+    /// attacker-controlled exponent like `"1e-2000000000"` would eagerly allocate
+    /// a multi-GB integer (memory bomb) and `scale as u32` would silently
+    /// truncate beyond 2^32. We bound the effective scale to a generous but safe
+    /// 10_000 (a 10_000-digit power of ten is ~4 KB) and reject anything beyond.
+    ///
+    /// CROSS-LANG: Scala's `BigDecimal(s)` stores such strings compactly without
+    /// expansion, so the Scala and TS evaluators MUST adopt the SAME bound for
+    /// string -> number coercion or programs like `{"+":["1e-2000000000"]}` will
+    /// diverge (Rust: error; Scala today: exact tiny value).
+    pub const MAX_DECIMAL_SCALE: i64 = 10_000;
+
     /// Exact conversion from a terminating decimal `unscaled * 10^(-scale)`.
-    /// Mirrors `Ratio.fromBigDecimal`: no precision loss.
-    pub fn from_decimal(unscaled: BigInt, scale: i64) -> Ratio {
+    /// Mirrors `Ratio.fromBigDecimal`: no precision loss. Returns `None` when
+    /// `|scale|` exceeds [`Ratio::MAX_DECIMAL_SCALE`] (see the bound's docs).
+    pub fn from_decimal(unscaled: BigInt, scale: i64) -> Option<Ratio> {
+        if scale.unsigned_abs() > Ratio::MAX_DECIMAL_SCALE as u64 {
+            return None;
+        }
         if scale >= 0 {
-            Ratio::new(unscaled, BigInt::from(10).pow(scale as u32))
+            Some(Ratio::new(unscaled, BigInt::from(10).pow(scale as u32)))
         } else {
-            Ratio::new(
-                unscaled * BigInt::from(10).pow((-scale) as u32),
+            Some(Ratio::new(
+                unscaled * BigInt::from(10).pow(scale.unsigned_abs() as u32),
                 BigInt::one(),
-            )
+            ))
         }
     }
 
     /// Parse a decimal string (possibly with a sign, fraction, and `e` exponent) into
     /// an exact Ratio. This is the analogue of `Ratio.fromBigDecimal(BigDecimal(s))`,
-    /// used for string -> number coercion. Returns None on malformed input.
+    /// used for string -> number coercion. Returns None on malformed input or when
+    /// the effective decimal scale exceeds [`Ratio::MAX_DECIMAL_SCALE`] (callers
+    /// surface that as a normal evaluation error).
     pub fn parse_decimal(s: &str) -> Option<Ratio> {
         let s = s.trim();
         if s.is_empty() {
@@ -142,8 +164,8 @@ impl Ratio {
         };
         let unscaled = if sign < 0 { -unscaled } else { unscaled };
         // scale = number of fractional digits - exponent
-        let scale = frac_part.len() as i64 - exp;
-        Some(Ratio::from_decimal(unscaled, scale))
+        let scale = (frac_part.len() as i64).checked_sub(exp)?;
+        Ratio::from_decimal(unscaled, scale)
     }
 
     pub fn is_integer(&self) -> bool {
@@ -425,6 +447,31 @@ mod tests {
         assert_eq!(Ratio::parse_decimal("1e3").unwrap(), r(1000, 1));
         assert_eq!(Ratio::parse_decimal("1.5e-2").unwrap(), r(15, 1000));
         assert!(Ratio::parse_decimal("abc").is_none());
+    }
+
+    #[test]
+    fn parse_decimal_bounds_effective_scale() {
+        // Memory-bomb guard: rejected fast, without materializing 10^2_000_000_000.
+        assert!(Ratio::parse_decimal("1e-2000000000").is_none());
+        assert!(Ratio::parse_decimal("1e2000000000").is_none());
+        // Beyond 2^32 (the old `scale as u32` truncation hazard).
+        assert!(Ratio::parse_decimal("1e-9000000000").is_none());
+        // Exactly at the documented bound: accepted.
+        assert!(Ratio::parse_decimal("1e-10000").is_some());
+        assert!(Ratio::parse_decimal("1e10000").is_some());
+        // One past the bound on either side: rejected.
+        assert!(Ratio::parse_decimal("1e-10001").is_none());
+        assert!(Ratio::parse_decimal("1e10001").is_none());
+        // i64-overflow on `frac_digits - exp` is caught, not wrapped.
+        assert!(Ratio::parse_decimal("0.1e-9223372036854775807").is_none());
+    }
+
+    #[test]
+    fn from_decimal_bounds_scale() {
+        assert!(Ratio::from_decimal(BigInt::one(), 10_001).is_none());
+        assert!(Ratio::from_decimal(BigInt::one(), -10_001).is_none());
+        let r = Ratio::from_decimal(BigInt::from(15), 3).unwrap();
+        assert_eq!(r, Ratio::new(BigInt::from(3), BigInt::from(200)));
     }
 
     #[test]
