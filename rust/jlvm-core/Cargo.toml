@@ -30,7 +30,19 @@ ark-bn254 = "0.4"
 ark-ec = "0.4"
 ark-ff = "0.4"
 # SHA-256 for the Schnorr challenge c = SHA256(R || pk || msg) mod r.
+# SHA-512 for the ECVRF (RFC 9381) hashes (hash_to_curve / hash_points /
+# proof_to_hash / nonce / key derivation).
 sha2 = "0.10"
+
+# --- ZK / crypto opcodes (Tier 2b) ------------------------------------------
+# Edwards25519 group + scalar arithmetic for `ecvrf_verify`
+# (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381 suite 0x03). `CompressedEdwardsY` is
+# exactly the RFC 8032 little-endian point encoding the ciphersuite requires, so
+# this PORTS the Scala `MiraclEcVrf25519` line-for-line; no third-party VRF crate
+# matches this exact draft-10 TAI ciphersuite + beta/decoding quirks. The BN254
+# G2 point + optimal-ate pairing for `bn254_pairing` reuse the existing
+# ark-bn254 / ark-ec deps from Tier-1.
+curve25519-dalek = { version = "4", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 serde_json = "1.0"

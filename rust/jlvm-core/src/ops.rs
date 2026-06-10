@@ -76,6 +76,15 @@ pub const KNOWN_OPERATORS: &[&str] = &[
     "poseidon",
     "pmt_verify",
     "schnorr_verify",
+    // Auth-DB ZK verifiers (Tier 2a) -- mirrors JsonLogicOp SmtVerifyOp / MptVerifyOp / MptPrefixVerifyOp
+    "smt_verify",
+    "mpt_verify",
+    "mpt_prefix_verify",
+    // BN254 curve ops + ECVRF (Tier 2b) -- mirrors JsonLogicOp Bn254AddOp / Bn254MulOp / Bn254PairingOp / EcVrfVerifyOp
+    "bn254_add",
+    "bn254_mul",
+    "bn254_pairing",
+    "ecvrf_verify",
 ];
 
 pub fn is_known_operator(tag: &str) -> bool {

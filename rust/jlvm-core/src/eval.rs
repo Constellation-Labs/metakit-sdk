@@ -316,6 +316,21 @@ impl<'a> Evaluator<'a> {
             "poseidon" => crate::crypto::poseidon(&values),
             "pmt_verify" => crate::crypto::pmt_verify(&values),
             "schnorr_verify" => crate::crypto::schnorr_verify(&values),
+            // Auth-DB ZK verifiers (Tier 2a). Pure ports of the Scala AuthDbOps
+            // F-handlers over the SMT / MPT primitives; their JSON proofs are
+            // already-parsed JLVM values, bridged to circe-JSON for hashing /
+            // decoding. Byte-matching `AuthDbOps`.
+            "smt_verify" => crate::auth_db::smt_verify(&values),
+            "mpt_verify" => crate::auth_db::mpt_verify(&values),
+            "mpt_prefix_verify" => crate::auth_db::mpt_prefix_verify(&values),
+            // BN254 (alt_bn128) curve ops + ECVRF (Tier 2b). Pure ports of the
+            // Scala CryptoOps bn254Add / bn254Mul / bn254Pairing / ecVrfVerify
+            // over Bn254.scala + MiraclEcVrf25519. EIP-196/197 encoding;
+            // ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381). Byte-matching CryptoOps.
+            "bn254_add" => crate::crypto::bn254_add(&values),
+            "bn254_mul" => crate::crypto::bn254_mul(&values),
+            "bn254_pairing" => crate::crypto::bn254_pairing(&values),
+            "ecvrf_verify" => crate::crypto::ecvrf_verify(&values),
             other => Err(format!("Unsupported operator: {}", other)),
         }
     }
