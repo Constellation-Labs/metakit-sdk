@@ -1,0 +1,31 @@
+[package]
+name = "jlvm-core"
+version = "0.1.0"
+edition = "2021"
+authors = ["Constellation Network"]
+description = "Rust recreation of the metakit JSON Logic VM (JLVM), byte-compatible with the Scala evaluator. Foundation for a future zk-JLVM."
+license = "Apache-2.0"
+repository = "https://github.com/Constellation-Labs/metakit-sdk"
+
+[dependencies]
+# Exact-rational arithmetic (the JLVM "float" is an exact Ratio, matching Scala's numerics.Ratio).
+num-bigint = "0.4"
+num-integer = "0.1"
+num-traits = "0.2"
+# ECMAScript-compliant shortest-double serializer. This mirrors the Scala
+# JsonCanonicalizer's DoubleSerializerImpl (Ryu with ecmaMode = true).
+ryu-js = "1.0"
+# JSON parsing for decoding expr/data and the conformance vectors.
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+serde_json = "1.0"
+
+[lib]
+name = "jlvm_core"
+path = "src/lib.rs"
+
+[[test]]
+name = "differential"
+path = "tests/differential.rs"
