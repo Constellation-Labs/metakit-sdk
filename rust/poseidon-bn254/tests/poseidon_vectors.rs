@@ -21,7 +21,10 @@ fn hard_acceptance_gate_poseidon_1_2() {
     let expected = hexf("115cc0f5e7d690413df64c6b9662e9cf2a3617f2743245519e19607a4417189a");
     let got = hash(&[BigUint::from(1u8), BigUint::from(2u8)]);
     println!("poseidon([1,2]) = {}", to_hex(&got));
-    assert_eq!(got, expected, "HARD ACCEPTANCE GATE FAILED: poseidon([1,2]) mismatch");
+    assert_eq!(
+        got, expected,
+        "HARD ACCEPTANCE GATE FAILED: poseidon([1,2]) mismatch"
+    );
 }
 
 #[test]
@@ -95,15 +98,25 @@ fn order_matters() {
 #[test]
 fn emit_sample_hashes() {
     println!("--- Poseidon sample hashes (hex) for cross-check vs Scala ---");
-    println!("poseidon([1])       = {}", to_hex(&hash(&[BigUint::from(1u8)])));
-    println!("poseidon([7])       = {}", to_hex(&hash(&[BigUint::from(7u8)])));
+    println!(
+        "poseidon([1])       = {}",
+        to_hex(&hash(&[BigUint::from(1u8)]))
+    );
+    println!(
+        "poseidon([7])       = {}",
+        to_hex(&hash(&[BigUint::from(7u8)]))
+    );
     println!(
         "poseidon([1,2])     = {}",
         to_hex(&hash(&[BigUint::from(1u8), BigUint::from(2u8)]))
     );
     println!(
         "poseidon([3,4,5])   = {}",
-        to_hex(&hash(&[BigUint::from(3u8), BigUint::from(4u8), BigUint::from(5u8)]))
+        to_hex(&hash(&[
+            BigUint::from(3u8),
+            BigUint::from(4u8),
+            BigUint::from(5u8)
+        ]))
     );
     println!(
         "poseidon([1,2,3,4]) = {}",

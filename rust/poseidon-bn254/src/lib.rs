@@ -76,7 +76,11 @@ struct Params {
 fn params(t: usize) -> &'static Params {
     // One cache slot per supported width (MIN_WIDTH..=MAX_WIDTH).
     static CACHE: OnceLock<Vec<OnceLock<Params>>> = OnceLock::new();
-    let cache = CACHE.get_or_init(|| (0..=constants::MAX_WIDTH).map(|_| OnceLock::new()).collect());
+    let cache = CACHE.get_or_init(|| {
+        (0..=constants::MAX_WIDTH)
+            .map(|_| OnceLock::new())
+            .collect()
+    });
     assert!(
         (constants::MIN_WIDTH..=constants::MAX_WIDTH).contains(&t),
         "Poseidon width t={t} unsupported (bundled t in {}..={})",
@@ -84,13 +88,22 @@ fn params(t: usize) -> &'static Params {
         constants::MAX_WIDTH
     );
     cache[t].get_or_init(|| {
-        let c: Vec<BigUint> = constants::round_constants_str(t).iter().map(|s| fr(s)).collect();
+        let c: Vec<BigUint> = constants::round_constants_str(t)
+            .iter()
+            .map(|s| fr(s))
+            .collect();
         let m: Vec<Vec<BigUint>> = constants::mds_matrix_str(t)
             .iter()
             .map(|row| row.iter().map(|s| fr(s)).collect())
             .collect();
         let rp = constants::PARTIAL_ROUNDS[t];
-        Params { c, m, rf: constants::FULL_ROUNDS, rp, t }
+        Params {
+            c,
+            m,
+            rf: constants::FULL_ROUNDS,
+            rp,
+            t,
+        }
     })
 }
 
@@ -109,7 +122,10 @@ pub const MAX_INPUTS: usize = constants::MAX_WIDTH - 1;
 /// Panics if `inputs` is empty, longer than [`MAX_INPUTS`], or contains a
 /// non-canonical element (mirroring Scala's `require`s, which reject `>= R`).
 pub fn hash(inputs: &[BigUint]) -> BigUint {
-    assert!(!inputs.is_empty(), "Poseidon hash requires at least one input");
+    assert!(
+        !inputs.is_empty(),
+        "Poseidon hash requires at least one input"
+    );
     let t = inputs.len() + 1;
     assert!(
         t <= constants::MAX_WIDTH,

@@ -35,19 +35,37 @@ fn emit_required_roots() {
     let root_after = tree.root();
 
     println!("--- REQUIRED Poseidon Merkle roots (hex) for cross-check vs Scala ---");
-    println!("(a) empty depth-8 root                          = {}", to_hex(&empty_root));
-    println!("    leaf = poseidon([7])                        = {}", to_hex(&leaf7));
-    println!("(b) depth-8 root after insert(pos=3, poseidon([7])) = {}", to_hex(&root_after));
+    println!(
+        "(a) empty depth-8 root                          = {}",
+        to_hex(&empty_root)
+    );
+    println!(
+        "    leaf = poseidon([7])                        = {}",
+        to_hex(&leaf7)
+    );
+    println!(
+        "(b) depth-8 root after insert(pos=3, poseidon([7])) = {}",
+        to_hex(&root_after)
+    );
 
     // Internal consistency: inclusion verifies; tampered path fails; absence flips.
     let incl = tree.inclusion_proof(&pos(3));
-    assert!(verify_inclusion(&leaf7, &incl, &root_after), "inclusion must verify");
+    assert!(
+        verify_inclusion(&leaf7, &incl, &root_after),
+        "inclusion must verify"
+    );
     assert_eq!(incl.siblings.len(), DEPTH);
 
     // absence at pos 3 fails (now occupied); absence at an unset pos verifies.
-    assert!(!verify_absence(&incl, &root_after), "absence at occupied pos must fail");
+    assert!(
+        !verify_absence(&incl, &root_after),
+        "absence at occupied pos must fail"
+    );
     let abs = tree.absence_proof(&pos(100));
-    assert!(verify_absence(&abs, &root_after), "absence at unset pos must verify");
+    assert!(
+        verify_absence(&abs, &root_after),
+        "absence at unset pos must verify"
+    );
 }
 
 // ---- zero hashes / empty tree ----------------------------------------------------------------
@@ -96,17 +114,25 @@ fn single_inserted_leaf_inclusion_verifies() {
 #[test]
 fn many_leaves_each_inclusion_verifies() {
     let mut t = PoseidonMerkleTree::empty(DEPTH);
-    let entries: Vec<(BigUint, BigUint)> =
-        (0u64..20).map(|i| (pos(i * 11 % 256), commitment(i + 1))).collect();
+    let entries: Vec<(BigUint, BigUint)> = (0u64..20)
+        .map(|i| (pos(i * 11 % 256), commitment(i + 1)))
+        .collect();
     for (p, l) in &entries {
         t.insert(p, l);
     }
     let root = t.root();
     // Use the final-state leaf (last write wins on a position) for verification.
-    for p in entries.iter().map(|(p, _)| p.clone()).collect::<std::collections::BTreeSet<_>>() {
+    for p in entries
+        .iter()
+        .map(|(p, _)| p.clone())
+        .collect::<std::collections::BTreeSet<_>>()
+    {
         let leaf = t.leaf_at(&p);
         let proof = t.inclusion_proof(&p);
-        assert!(verify_inclusion(&leaf, &proof, &root), "pos {p} inclusion failed");
+        assert!(
+            verify_inclusion(&leaf, &proof, &root),
+            "pos {p} inclusion failed"
+        );
     }
 }
 
@@ -144,7 +170,10 @@ fn tampered_sibling_rejected() {
     for tamper_at in 0..DEPTH {
         let mut proof = t.inclusion_proof(&p);
         proof.siblings[tamper_at] = poseidon_bn254::reduce(&(&proof.siblings[tamper_at] + 1u32));
-        assert!(!verify_inclusion(&leaf, &proof, &t.root()), "tamper at {tamper_at} not caught");
+        assert!(
+            !verify_inclusion(&leaf, &proof, &t.root()),
+            "tamper at {tamper_at} not caught"
+        );
     }
 }
 
@@ -216,8 +245,9 @@ fn clearing_position_restores_absence() {
 
 #[test]
 fn root_independent_of_insertion_order() {
-    let entries: Vec<(BigUint, BigUint)> =
-        (0u64..16).map(|i| (pos((i * 17 + 3) % 256), commitment(i + 1))).collect();
+    let entries: Vec<(BigUint, BigUint)> = (0u64..16)
+        .map(|i| (pos((i * 17 + 3) % 256), commitment(i + 1)))
+        .collect();
     let mut forward = PoseidonMerkleTree::empty(DEPTH);
     for (p, l) in &entries {
         forward.insert(p, l);

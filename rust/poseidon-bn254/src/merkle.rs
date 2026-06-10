@@ -193,7 +193,10 @@ impl PoseidonMerkleTree {
         }
         // Collected bottom-first; reverse to root-first (top-down) ordering.
         bottom_up.reverse();
-        PoseidonMerkleProof { position: position.clone(), siblings: bottom_up }
+        PoseidonMerkleProof {
+            position: position.clone(),
+            siblings: bottom_up,
+        }
     }
 
     /// An INCLUSION proof for `leaf_at(position)`. Identical in shape to [`proof`](Self::proof).
@@ -229,9 +232,15 @@ impl PoseidonMerkleTree {
 ///   - bit==0 => path node is the LEFT child:  `parent = compress(current, sibling)`,
 ///   - bit==1 => path node is the RIGHT child: `parent = compress(sibling, current)`.
 pub fn compute_root(leaf: &BigUint, proof: &PoseidonMerkleProof) -> BigUint {
-    assert!(is_canonical(leaf), "leaf is not a canonical BN254 field element: {leaf}");
+    assert!(
+        is_canonical(leaf),
+        "leaf is not a canonical BN254 field element: {leaf}"
+    );
     for (i, s) in proof.siblings.iter().enumerate() {
-        assert!(is_canonical(s), "sibling[{i}] is not a canonical BN254 field element: {s}");
+        assert!(
+            is_canonical(s),
+            "sibling[{i}] is not a canonical BN254 field element: {s}"
+        );
     }
     let depth = proof.depth();
     assert!(
