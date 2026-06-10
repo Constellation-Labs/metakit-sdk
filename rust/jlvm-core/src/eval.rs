@@ -331,6 +331,17 @@ impl<'a> Evaluator<'a> {
             "bn254_mul" => crate::crypto::bn254_mul(&values),
             "bn254_pairing" => crate::crypto::bn254_pairing(&values),
             "ecvrf_verify" => crate::crypto::ecvrf_verify(&values),
+            // SP1 Groth16-BN254 verifier (Tier 3a). Pure port of the Scala
+            // CryptoOps.groth16Verify over Sp1Groth16Verifier + Groth16Verifier
+            // (SP1 groth16 circuit v6.1.0). Byte-matching CryptoOps.
+            "groth16_verify" => crate::crypto::groth16_verify(&values),
+            // BLS12-381 signatures (Tier 3b). Pure port of the Scala
+            // CryptoOps.blsVerify / blsAggregateVerify over Bls12381
+            // (BouncyCastle 1.85 BLS12_381ProofOfPossession), backed by blst's
+            // min_pk module. Eth2 / IETF PoP ciphersuite (minimal-pubkey-size,
+            // DST BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_). Byte-matching.
+            "bls_verify" => crate::crypto::bls_verify(&values),
+            "bls_aggregate_verify" => crate::crypto::bls_aggregate_verify(&values),
             other => Err(format!("Unsupported operator: {}", other)),
         }
     }
