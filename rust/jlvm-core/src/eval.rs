@@ -614,10 +614,12 @@ impl<'a> Evaluator<'a> {
                 let base_num = promote_to_numeric(base)?;
                 let exp_num = promote_to_numeric(exp)?;
                 let e = match exp_num.to_ratio().to_bigint_exact() {
-                    None => return Err(format!(
+                    None => {
+                        return Err(format!(
                         "Exponent must be an integer for deterministic exponentiation, got {:?}",
                         exp_num.to_value()
-                    )),
+                    ))
+                    }
                     Some(e) => e,
                 };
                 if e.abs() > BigInt::from(MAX_SAFE_EXPONENT) {
