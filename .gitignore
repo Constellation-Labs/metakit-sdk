@@ -67,7 +67,6 @@ Cargo.lock
 **/*.rs.bk
 
 # Go
-bin/
 pkg/
 *.exe
 *.exe~
