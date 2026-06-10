@@ -103,9 +103,11 @@ pub fn decode_value(json: &serde_json::Value) -> Value {
         serde_json::Value::Number(n) => number_to_value(n),
         serde_json::Value::String(s) => Value::Str(s.clone()),
         serde_json::Value::Array(arr) => Value::Array(arr.iter().map(decode_value).collect()),
-        serde_json::Value::Object(obj) => {
-            Value::Map(obj.iter().map(|(k, v)| (k.clone(), decode_value(v))).collect())
-        }
+        serde_json::Value::Object(obj) => Value::Map(
+            obj.iter()
+                .map(|(k, v)| (k.clone(), decode_value(v)))
+                .collect(),
+        ),
     }
 }
 
@@ -148,9 +150,7 @@ pub fn encode_value(v: &Value) -> serde_json::Value {
             serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
         }
         Value::Str(s) => serde_json::Value::String(s.clone()),
-        Value::Array(arr) => {
-            serde_json::Value::Array(arr.iter().map(encode_value).collect())
-        }
+        Value::Array(arr) => serde_json::Value::Array(arr.iter().map(encode_value).collect()),
         Value::Map(m) => {
             let mut obj = serde_json::Map::new();
             for (k, val) in m {

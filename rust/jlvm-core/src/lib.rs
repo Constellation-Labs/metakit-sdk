@@ -20,8 +20,11 @@
 
 pub mod canonical;
 pub mod coercion;
+pub mod crypto;
 pub mod eval;
 pub mod expression;
+pub mod gas;
+pub mod hex_bytes;
 pub mod numeric;
 pub mod ops;
 pub mod ratio;

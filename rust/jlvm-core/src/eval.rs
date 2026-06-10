@@ -206,7 +206,12 @@ impl<'a> Evaluator<'a> {
                     }
                     _ => return Err(format!("let binding must be [name, expr], got: {:?}", pair)),
                 },
-                other => return Err(format!("let binding must be [name, expr], got: {:?}", other)),
+                other => {
+                    return Err(format!(
+                        "let binding must be [name, expr], got: {:?}",
+                        other
+                    ))
+                }
             }
         }
         let result_ctx = self.let_ctx(ctx, &acc).unwrap_or(Value::Map(acc));
@@ -296,6 +301,11 @@ impl<'a> Evaluator<'a> {
             "exists" => self.op_exists(values),
             "missing" => self.op_missing(values, ctx),
             "missing_some" => self.op_missing_some(values, ctx),
+            // ZK / crypto (Tier 1). These are pure precompiles over already-parsed
+            // hex args; they delegate to `crate::crypto`, byte-matching Scala CryptoOps.
+            "poseidon" => crate::crypto::poseidon(&values),
+            "pmt_verify" => crate::crypto::pmt_verify(&values),
+            "schnorr_verify" => crate::crypto::schnorr_verify(&values),
             other => Err(format!("Unsupported operator: {}", other)),
         }
     }
@@ -456,13 +466,19 @@ impl<'a> Evaluator<'a> {
         if list.is_empty() {
             return Err("min/max: list cannot be empty".into());
         }
-        let numerics: Vec<Numeric> =
-            list.iter().map(promote_to_numeric).collect::<Result<Vec<_>, _>>()?;
+        let numerics: Vec<Numeric> = list
+            .iter()
+            .map(promote_to_numeric)
+            .collect::<Result<Vec<_>, _>>()?;
         let has_float = numerics.iter().any(|n| n.is_float());
         let mut acc = numerics[0].to_ratio();
         for n in &numerics[1..] {
             let r = n.to_ratio();
-            acc = if is_max { acc.max_ratio(&r) } else { acc.min_ratio(&r) };
+            acc = if is_max {
+                acc.max_ratio(&r)
+            } else {
+                acc.min_ratio(&r)
+            };
         }
         if !has_float && acc.is_integer() {
             Ok(Value::Int(acc.numerator))
@@ -588,18 +604,21 @@ impl<'a> Evaluator<'a> {
                 let e = bigint_to_u32(exp).ok_or("exponent out of range")?;
                 Ok(Value::Int(base.pow(e)))
             }
-            [Value::Int(_), Value::Int(exp)] if exp > &BigInt::from(MAX_SAFE_EXPONENT) => Err(
-                format!("Exponent {} exceeds maximum safe value {}", exp, MAX_SAFE_EXPONENT),
-            ),
+            [Value::Int(_), Value::Int(exp)] if exp > &BigInt::from(MAX_SAFE_EXPONENT) => {
+                Err(format!(
+                    "Exponent {} exceeds maximum safe value {}",
+                    exp, MAX_SAFE_EXPONENT
+                ))
+            }
             [base, exp] => {
                 let base_num = promote_to_numeric(base)?;
                 let exp_num = promote_to_numeric(exp)?;
                 let e = match exp_num.to_ratio().to_bigint_exact() {
                     None => {
                         return Err(format!(
-                            "Exponent must be an integer for deterministic exponentiation, got {:?}",
-                            exp_num.to_value()
-                        ))
+                        "Exponent must be an integer for deterministic exponentiation, got {:?}",
+                        exp_num.to_value()
+                    ))
                     }
                     Some(e) => e,
                 };
@@ -617,7 +636,8 @@ impl<'a> Evaluator<'a> {
                 let powed = if !e.is_negative() {
                     br.pow(bigint_to_u32(&e).ok_or("exponent out of range")?)
                 } else {
-                    br.inverse().pow(bigint_to_u32(&(-e.clone())).ok_or("exponent out of range")?)
+                    br.inverse()
+                        .pow(bigint_to_u32(&(-e.clone())).ok_or("exponent out of range")?)
                 };
                 let result = if !base_num.is_float() && !e.is_negative() && powed.is_integer() {
                     Value::Int(powed.numerator)
@@ -664,9 +684,7 @@ impl<'a> Evaluator<'a> {
                 let needle = stringify_primitive(to_find);
                 Ok(Value::Bool(s.contains(&needle)))
             }
-            [to_find, Value::Array(arr)] => {
-                Ok(Value::Bool(arr.iter().any(|x| x.deep_eq(to_find))))
-            }
+            [to_find, Value::Array(arr)] => Ok(Value::Bool(arr.iter().any(|x| x.deep_eq(to_find)))),
             _ => Err(format!("Unexpected input to `in` got {:?}", values)),
         }
     }
@@ -679,7 +697,10 @@ impl<'a> Evaluator<'a> {
                 let all = to_find.iter().all(|x| arr.iter().any(|y| y.deep_eq(x)));
                 Ok(Value::Bool(all))
             }
-            _ => Err(format!("Unexpected input to `intersect`: expected two arrays, got {:?}", values)),
+            _ => Err(format!(
+                "Unexpected input to `intersect`: expected two arrays, got {:?}",
+                values
+            )),
         }
     }
 
@@ -829,9 +850,11 @@ impl<'a> Evaluator<'a> {
     fn op_some(&self, values: Vec<Value>) -> Result<Value, String> {
         let (arr, expr, threshold): (&[Value], &Expression, i64) = match values.as_slice() {
             [Value::Array(arr), Value::Function(expr)] => (arr, expr, 1),
-            [Value::Array(arr), Value::Function(expr), Value::Int(min)] => {
-                (arr, expr, bigint_to_i64(min).ok_or("some threshold out of range")?)
-            }
+            [Value::Array(arr), Value::Function(expr), Value::Int(min)] => (
+                arr,
+                expr,
+                bigint_to_i64(min).ok_or("some threshold out of range")?,
+            ),
             _ => return Err(format!("Unexpected input to some, got {:?}", values)),
         };
         let mut count = 0i64;
@@ -886,9 +909,9 @@ impl<'a> Evaluator<'a> {
         match values.as_slice() {
             [] => Ok(Value::Null),
             [Value::Null] => Ok(Value::Null),
-            [Value::Map(m)] => {
-                Ok(Value::Array(m.iter().map(|(k, _)| Value::Str(k.clone())).collect()))
-            }
+            [Value::Map(m)] => Ok(Value::Array(
+                m.iter().map(|(k, _)| Value::Str(k.clone())).collect(),
+            )),
             _ => Err(format!("Unexpected input for `keys` got {:?}", values)),
         }
     }
@@ -898,9 +921,11 @@ impl<'a> Evaluator<'a> {
         // vectors also use [Map, Str, default]; we honor a 3rd default arg to match the
         // observed reference behavior (TS supports it).
         match values.as_slice() {
-            [Value::Map(m), Value::Str(k)] => {
-                Ok(m.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone()).unwrap_or(Value::Null))
-            }
+            [Value::Map(m), Value::Str(k)] => Ok(m
+                .iter()
+                .find(|(key, _)| key == k)
+                .map(|(_, v)| v.clone())
+                .unwrap_or(Value::Null)),
             [Value::Map(m), Value::Str(k), default] => Ok(m
                 .iter()
                 .find(|(key, _)| key == k)
@@ -949,7 +974,10 @@ impl<'a> Evaluator<'a> {
                     return Err("Split separator cannot be empty".into());
                 }
                 // Scala uses split(quote(sep), -1): literal separator, keep trailing empties.
-                let parts: Vec<Value> = s.split(sep.as_str()).map(|p| Value::Str(p.to_string())).collect();
+                let parts: Vec<Value> = s
+                    .split(sep.as_str())
+                    .map(|p| Value::Str(p.to_string()))
+                    .collect();
                 Ok(Value::Array(parts))
             }
             _ => Err(format!("Unexpected input to split, got {:?}", values)),
@@ -997,7 +1025,9 @@ impl<'a> Evaluator<'a> {
                 if end_idx <= start_idx {
                     Ok(Value::Array(Vec::new()))
                 } else {
-                    Ok(Value::Array(arr[start_idx as usize..end_idx as usize].to_vec()))
+                    Ok(Value::Array(
+                        arr[start_idx as usize..end_idx as usize].to_vec(),
+                    ))
                 }
             }
             _ => Err(format!("Unexpected input to slice, got {:?}", values)),
@@ -1059,9 +1089,7 @@ impl<'a> Evaluator<'a> {
 
     fn op_has(&self, values: Vec<Value>) -> Result<Value, String> {
         match values.as_slice() {
-            [Value::Map(m), Value::Str(key)] => {
-                Ok(Value::Bool(m.iter().any(|(k, _)| k == key)))
-            }
+            [Value::Map(m), Value::Str(key)] => Ok(Value::Bool(m.iter().any(|(k, _)| k == key))),
             _ => Err(format!("Unexpected input to has, got {:?}", values)),
         }
     }
@@ -1112,10 +1140,16 @@ impl<'a> Evaluator<'a> {
     fn op_missing_some(&self, values: Vec<Value>, ctx: Option<&Value>) -> Result<Value, String> {
         let (min_required, arr): (i64, &[Value]) = match values.as_slice() {
             [Value::Array(arr)] => (1, arr),
-            [Value::Int(min), Value::Array(arr)] if min > &BigInt::from(0) => {
-                (bigint_to_i64(min).ok_or("missing_some min out of range")?, arr)
+            [Value::Int(min), Value::Array(arr)] if min > &BigInt::from(0) => (
+                bigint_to_i64(min).ok_or("missing_some min out of range")?,
+                arr,
+            ),
+            _ => {
+                return Err(format!(
+                    "Unexpected input for `missing_some' got {:?}",
+                    values
+                ))
             }
-            _ => return Err(format!("Unexpected input for `missing_some' got {:?}", values)),
         };
         let mut missing = Vec::new();
         for field in arr {
@@ -1133,7 +1167,11 @@ impl<'a> Evaluator<'a> {
 
     /// Returns Some(field) if the field (a key name) is missing from the data, else None.
     /// Mirrors `isFieldMissing`.
-    fn field_if_missing(&self, field: &Value, ctx: Option<&Value>) -> Result<Option<Value>, String> {
+    fn field_if_missing(
+        &self,
+        field: &Value,
+        ctx: Option<&Value>,
+    ) -> Result<Option<Value>, String> {
         let key = match field {
             Value::Str(k) => k.clone(),
             Value::Int(k) => k.to_string(),
@@ -1152,7 +1190,10 @@ impl<'a> Evaluator<'a> {
 // --- free helpers -----------------------------------------------------------
 
 fn is_primitive(v: &Value) -> bool {
-    matches!(v, Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_))
+    matches!(
+        v,
+        Value::Bool(_) | Value::Int(_) | Value::Float(_) | Value::Str(_)
+    )
 }
 
 fn stringify_primitive(v: &Value) -> String {
@@ -1186,7 +1227,11 @@ fn get_child(parent: &Value, segment: &str) -> Value {
             Ok(idx) if idx >= 0 && (idx as usize) < elems.len() => elems[idx as usize].clone(),
             _ => Value::Null,
         },
-        Value::Map(m) => m.iter().find(|(k, _)| k == segment).map(|(_, v)| v.clone()).unwrap_or(Value::Null),
+        Value::Map(m) => m
+            .iter()
+            .find(|(k, _)| k == segment)
+            .map(|(_, v)| v.clone())
+            .unwrap_or(Value::Null),
         _ => Value::Null,
     }
 }

@@ -54,10 +54,16 @@ fn decode_array_expression(arr: &[serde_json::Value]) -> Result<Expression, Stri
                 .iter()
                 .map(decode_expression)
                 .collect::<Result<Vec<_>, _>>()?;
-            return Ok(Expression::Apply { op: first.clone(), args });
+            return Ok(Expression::Apply {
+                op: first.clone(),
+                args,
+            });
         }
     }
-    let elems = arr.iter().map(decode_expression).collect::<Result<Vec<_>, _>>()?;
+    let elems = arr
+        .iter()
+        .map(decode_expression)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Expression::Array(elems))
 }
 
@@ -83,7 +89,10 @@ fn decode_object_expression(
         }
         if is_known_operator(key) {
             let args = decode_operator_args(value)?;
-            return Ok(Expression::Apply { op: key.clone(), args });
+            return Ok(Expression::Apply {
+                op: key.clone(),
+                args,
+            });
         }
     }
     // Otherwise: a MapExpression (values are sub-expressions). If every value decodes
@@ -100,21 +109,24 @@ fn decode_object_expression(
 /// args; anything else is a single arg.
 fn decode_operator_args(value: &serde_json::Value) -> Result<Vec<Expression>, String> {
     match value {
-        serde_json::Value::Array(arr) => {
-            arr.iter().map(decode_expression).collect::<Result<Vec<_>, _>>()
-        }
+        serde_json::Value::Array(arr) => arr
+            .iter()
+            .map(decode_expression)
+            .collect::<Result<Vec<_>, _>>(),
         other => Ok(vec![decode_expression(other)?]),
     }
 }
 
 fn decode_var_object(value: &serde_json::Value) -> Result<Expression, String> {
     match value {
-        serde_json::Value::String(s) => {
-            Ok(Expression::Var { key: VarKey::Path(s.clone()), default: None })
-        }
-        serde_json::Value::Number(n) => {
-            Ok(Expression::Var { key: VarKey::Path(n.to_string()), default: None })
-        }
+        serde_json::Value::String(s) => Ok(Expression::Var {
+            key: VarKey::Path(s.clone()),
+            default: None,
+        }),
+        serde_json::Value::Number(n) => Ok(Expression::Var {
+            key: VarKey::Path(n.to_string()),
+            default: None,
+        }),
         serde_json::Value::Array(arr) => {
             if arr.is_empty() {
                 return Err("`var` array cannot be empty".into());
@@ -125,7 +137,10 @@ fn decode_var_object(value: &serde_json::Value) -> Result<Expression, String> {
         }
         other => {
             // Nested expression as a dynamic path.
-            Ok(Expression::Var { key: VarKey::Expr(Box::new(decode_expression(other)?)), default: None })
+            Ok(Expression::Var {
+                key: VarKey::Expr(Box::new(decode_expression(other)?)),
+                default: None,
+            })
         }
     }
 }

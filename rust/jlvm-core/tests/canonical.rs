@@ -74,7 +74,10 @@ fn string_escaping_matches_jcs() {
     let v = Value::Str("a\"b\\c\n\t\r\u{0008}\u{000C}\u{0001}".into());
     // C0 controls without a short escape use lowercase \u00XX, matching Scala's
     // `\\u${c.toInt}%04x`. Short escapes: \" \\ \n \t \r \b \f.
-    assert_eq!(canonicalize_string(&v), "\"a\\\"b\\\\c\\n\\t\\r\\b\\f\\u0001\"");
+    assert_eq!(
+        canonicalize_string(&v),
+        "\"a\\\"b\\\\c\\n\\t\\r\\b\\f\\u0001\""
+    );
 }
 
 #[test]
@@ -89,9 +92,15 @@ fn matches_shared_canonical_vectors() {
     let mut checked = 0;
     for entry in &arr {
         let data = decode_value(&entry["data"]);
-        let expected = entry["canonical_json"].as_str().expect("canonical_json string");
+        let expected = entry["canonical_json"]
+            .as_str()
+            .expect("canonical_json string");
         let got = canonicalize_string(&data);
-        assert_eq!(got, expected, "canonicalization mismatch for {:?}", entry["data"]);
+        assert_eq!(
+            got, expected,
+            "canonicalization mismatch for {:?}",
+            entry["data"]
+        );
         checked += 1;
     }
     assert!(checked > 0, "no canonical vectors checked");

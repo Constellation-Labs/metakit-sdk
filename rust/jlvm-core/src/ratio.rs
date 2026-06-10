@@ -52,14 +52,23 @@ impl Ratio {
         let nn = &n / &g;
         let dd = &d / &g;
         if dd.is_negative() {
-            Ratio { numerator: -nn, denominator: -dd }
+            Ratio {
+                numerator: -nn,
+                denominator: -dd,
+            }
         } else {
-            Ratio { numerator: nn, denominator: dd }
+            Ratio {
+                numerator: nn,
+                denominator: dd,
+            }
         }
     }
 
     pub fn from_bigint(n: BigInt) -> Ratio {
-        Ratio { numerator: n, denominator: BigInt::one() }
+        Ratio {
+            numerator: n,
+            denominator: BigInt::one(),
+        }
     }
 
     pub fn from_i64(n: i64) -> Ratio {
@@ -76,7 +85,10 @@ impl Ratio {
         if scale >= 0 {
             Ratio::new(unscaled, BigInt::from(10).pow(scale as u32))
         } else {
-            Ratio::new(unscaled * BigInt::from(10).pow((-scale) as u32), BigInt::one())
+            Ratio::new(
+                unscaled * BigInt::from(10).pow((-scale) as u32),
+                BigInt::one(),
+            )
         }
     }
 
@@ -159,11 +171,17 @@ impl Ratio {
     }
 
     pub fn abs(&self) -> Ratio {
-        Ratio { numerator: self.numerator.abs(), denominator: self.denominator.clone() }
+        Ratio {
+            numerator: self.numerator.abs(),
+            denominator: self.denominator.clone(),
+        }
     }
 
     pub fn neg(&self) -> Ratio {
-        Ratio { numerator: -self.numerator.clone(), denominator: self.denominator.clone() }
+        Ratio {
+            numerator: -self.numerator.clone(),
+            denominator: self.denominator.clone(),
+        }
     }
 
     pub fn inverse(&self) -> Ratio {
@@ -185,11 +203,17 @@ impl Ratio {
     }
 
     pub fn mul(&self, that: &Ratio) -> Ratio {
-        Ratio::new(&self.numerator * &that.numerator, &self.denominator * &that.denominator)
+        Ratio::new(
+            &self.numerator * &that.numerator,
+            &self.denominator * &that.denominator,
+        )
     }
 
     pub fn div(&self, that: &Ratio) -> Ratio {
-        Ratio::new(&self.numerator * &that.denominator, &self.denominator * &that.numerator)
+        Ratio::new(
+            &self.numerator * &that.denominator,
+            &self.denominator * &that.numerator,
+        )
     }
 
     /// Integer power. Mirrors `RatioOps.pow(n: Int)` for non-negative `n`.
@@ -273,9 +297,8 @@ impl Ratio {
         // Produce a decimal string with sufficient significant digits (well beyond
         // double precision) and let Rust's correctly-rounded str->f64 do the rounding.
         let s = self.to_decimal_string(40);
-        s.parse::<f64>().unwrap_or_else(|_| {
-            bigint_to_f64(&self.numerator) / bigint_to_f64(&self.denominator)
-        })
+        s.parse::<f64>()
+            .unwrap_or_else(|_| bigint_to_f64(&self.numerator) / bigint_to_f64(&self.denominator))
     }
 
     /// Plain-decimal string for string ops (cat / join / in). Integral values render

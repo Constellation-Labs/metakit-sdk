@@ -44,7 +44,10 @@ fn load_cases() -> Vec<Case> {
                 expr: c["expr"].as_str().expect("expr string").to_string(),
                 data: c["data"].as_str().expect("data string").to_string(),
                 expected: c["expected"].as_str().expect("expected string").to_string(),
-                note: c.get("note").and_then(|n| n.as_str()).map(|s| s.to_string()),
+                note: c
+                    .get("note")
+                    .and_then(|n| n.as_str())
+                    .map(|s| s.to_string()),
             });
         }
     }
@@ -73,7 +76,8 @@ fn json_struct_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
         }
         (Object(x), Object(y)) => {
             x.len() == y.len()
-                && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| json_struct_eq(v, w)))
+                && x.iter()
+                    .all(|(k, v)| y.get(k).is_some_and(|w| json_struct_eq(v, w)))
         }
         _ => false,
     }
@@ -177,7 +181,10 @@ fn differential_against_shared_vectors() {
     );
 
     if !struct_failures.is_empty() {
-        eprintln!("\n---- structural failures ({}) ----", struct_failures.len());
+        eprintln!(
+            "\n---- structural failures ({}) ----",
+            struct_failures.len()
+        );
         for f in &struct_failures {
             eprintln!("  {}", f);
         }
