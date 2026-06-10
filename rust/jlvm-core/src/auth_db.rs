@@ -69,7 +69,15 @@ fn hash_empty() -> String {
 /// `JsonBinaryHasher.computeDigest(json, prefix)` for a circe-`Json`-shaped value:
 /// `Hash.fromBytes(prefix ++ canonicalBytes(json))`.
 fn compute_digest_prefixed(json: &serde_json::Value, prefix: &[u8]) -> String {
-    let canon = canonicalize_json(json);
+    let canon = match canonicalize_json(json) {
+        Ok(bytes) => bytes,
+        // Unreachable in practice: `serde_json::Number` cannot hold NaN/Infinity
+        // (and `encode_value` maps unrepresentable numbers to JSON null), so
+        // canonicalization of these proof/value JSONs cannot fail. Defensively,
+        // an empty digest string can never equal a real 64-hex digest, so a
+        // (hypothetical) failure degrades to `valid:false`, never a panic.
+        Err(_) => return String::new(),
+    };
     let mut pre = Vec::with_capacity(prefix.len() + canon.len());
     pre.extend_from_slice(prefix);
     pre.extend_from_slice(&canon);

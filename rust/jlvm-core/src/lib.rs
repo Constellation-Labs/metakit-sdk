@@ -53,5 +53,5 @@ pub fn evaluate_json_str(expr_json: &str, data_json: &str) -> Result<Value, Stri
 /// Convenience: evaluate then canonicalize the result to RFC 8785 bytes.
 pub fn evaluate_to_canonical(expr_json: &str, data_json: &str) -> Result<Vec<u8>, String> {
     let v = evaluate_json_str(expr_json, data_json)?;
-    Ok(canonical::canonicalize(&v))
+    canonical::canonicalize(&v)
 }

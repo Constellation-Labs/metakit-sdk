@@ -17,6 +17,12 @@ num-traits = "0.2"
 [dev-dependencies]
 hex = "0.4"
 
+# Deterministic-VM hardening: a silent two's-complement wrap in release builds
+# would be a consensus/parity hazard, so integer overflow must panic (and be
+# caught as an error) in release exactly as it does in debug.
+[profile.release]
+overflow-checks = true
+
 [lib]
 name = "poseidon_bn254"
 path = "src/lib.rs"

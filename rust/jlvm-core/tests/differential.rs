@@ -151,8 +151,8 @@ fn differential_against_shared_vectors() {
         }
 
         // 2) Canonical byte comparison.
-        let result_canon = canonicalize_string(&result);
-        let expected_canon = canonicalize_string(&expected_val);
+        let result_canon = canonicalize_string(&result).expect("canonicalizable result");
+        let expected_canon = canonicalize_string(&expected_val).expect("canonicalizable expected");
         let c_ok = result_canon == expected_canon;
         if c_ok {
             canon_pass += 1;
