@@ -66,10 +66,29 @@ export class Ratio {
   }
 
   /**
-   * Exact conversion from a terminating decimal `unscaled * 10^(-scale)`.
-   * Mirrors `Ratio.fromBigDecimal`: no precision loss.
+   * Maximum permitted magnitude of the effective decimal scale (fractional
+   * digits minus exponent) accepted by {@link Ratio.fromDecimal} /
+   * {@link Ratio.parseDecimal}. Mirrors Rust `Ratio::MAX_DECIMAL_SCALE`
+   * (rust/jlvm-core/src/ratio.rs) and Scala `NumericOps.MaxDecimalScale`.
+   *
+   * SECURITY: a Ratio materializes `10n ** |scale|` as a full bigint, so an
+   * attacker-controlled exponent like "1e-2000000000" would eagerly allocate a
+   * multi-GB integer (memory bomb). The bound is generous but safe (a
+   * 10_000-digit power of ten is ~4 KB); anything beyond is rejected, so
+   * programs like {"+":["1e-2000000000"]} error identically in all impls.
    */
-  static fromDecimal(unscaled: bigint, scale: bigint): Ratio {
+  static readonly MAX_DECIMAL_SCALE = 10000n;
+
+  /**
+   * Exact conversion from a terminating decimal `unscaled * 10^(-scale)`.
+   * Mirrors `Ratio.fromBigDecimal`: no precision loss. Returns null when
+   * `|scale|` exceeds {@link Ratio.MAX_DECIMAL_SCALE} (see the bound's docs).
+   */
+  static fromDecimal(unscaled: bigint, scale: bigint): Ratio | null {
+    const mag = scale < ZERO ? -scale : scale;
+    if (mag > Ratio.MAX_DECIMAL_SCALE) {
+      return null;
+    }
     if (scale >= ZERO) {
       return Ratio.of(unscaled, TEN ** scale);
     }
@@ -79,7 +98,9 @@ export class Ratio {
   /**
    * Parse a decimal string (possibly with a sign, fraction, and `e` exponent)
    * into an exact Ratio. Analogue of `Ratio.fromBigDecimal(BigDecimal(s))`,
-   * used for string -> number coercion. Returns null on malformed input.
+   * used for string -> number coercion. Returns null on malformed input or
+   * when the effective decimal scale exceeds {@link Ratio.MAX_DECIMAL_SCALE}
+   * (callers surface that as a normal evaluation error).
    */
   static parseDecimal(input: string): Ratio | null {
     const s = input.trim();

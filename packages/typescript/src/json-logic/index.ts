@@ -134,7 +134,21 @@ export {
   map,
 } from './errors';
 
-export { evaluate, type EvaluationContext } from './evaluator';
+export { evaluate, type EvaluationContext, MAX_EVAL_DEPTH } from './evaluator';
+
+// Gas-metered evaluation (port of rust/jlvm-core/src/gas_eval.rs; consensus
+// schedule + charging contract shared with the Scala / Rust meters).
+export {
+  evaluateWithGas,
+  opBaseCost,
+  depthPenaltyOf,
+  sizeCostOf,
+  javaSplitDotSegments,
+  GasExhaustedError,
+  DEFAULT_GAS_SCHEDULE,
+  type GasSchedule,
+  type GasMeteredResult,
+} from './gas-eval';
 
 // Gas metering
 export {

@@ -138,6 +138,30 @@ export interface GasConfig {
   readonly missingSome: GasCost;
   readonly typeOf: GasCost;
 
+  // ZK / crypto opcodes (flat base costs + per-element multipliers), in
+  // lock-step with rust/jlvm-core/src/gas.rs `GasConfig` and the Scala
+  // GasConfig defaults.
+  readonly poseidon: GasCost;
+  readonly poseidonPerInput: GasCost;
+  readonly pmtVerify: GasCost;
+  readonly pmtPerSibling: GasCost;
+  readonly groth16Verify: GasCost;
+  readonly ecvrfVerify: GasCost;
+  readonly bn254Add: GasCost;
+  readonly bn254Mul: GasCost;
+  readonly bn254Pairing: GasCost;
+  readonly bn254PairingPerPair: GasCost;
+  readonly blsVerify: GasCost;
+  readonly blsAggregateVerify: GasCost;
+  readonly blsAggregatePerKey: GasCost;
+  readonly schnorrVerify: GasCost;
+  readonly smtVerify: GasCost;
+  readonly smtPerSibling: GasCost;
+  readonly mptVerify: GasCost;
+  readonly mptPerNode: GasCost;
+  readonly mptPrefixVerify: GasCost;
+  readonly mptPrefixPerEntry: GasCost;
+
   // Base costs
   readonly const: GasCost;
   readonly varAccess: GasCost;
@@ -227,6 +251,28 @@ export const DEFAULT_GAS_CONFIG: GasConfig = {
   missing: gasCost(10),
   missingSome: gasCost(15),
   typeOf: gasCost(1),
+
+  // ZK / crypto opcodes
+  poseidon: gasCost(150),
+  poseidonPerInput: gasCost(150),
+  pmtVerify: gasCost(200),
+  pmtPerSibling: gasCost(300),
+  groth16Verify: gasCost(250_000),
+  ecvrfVerify: gasCost(50_000),
+  bn254Add: gasCost(500),
+  bn254Mul: gasCost(40_000),
+  bn254Pairing: gasCost(45_000),
+  bn254PairingPerPair: gasCost(35_000),
+  blsVerify: gasCost(120_000),
+  blsAggregateVerify: gasCost(120_000),
+  blsAggregatePerKey: gasCost(15_000),
+  schnorrVerify: gasCost(45_000),
+  smtVerify: gasCost(500),
+  smtPerSibling: gasCost(400),
+  mptVerify: gasCost(500),
+  mptPerNode: gasCost(400),
+  mptPrefixVerify: gasCost(1_000),
+  mptPrefixPerEntry: gasCost(800),
 
   // Base costs
   const: gasCost(0),
@@ -388,6 +434,34 @@ export const getOperatorCost = (op: JsonLogicOpTag, config: GasConfig): GasCost 
       return config.typeOf;
     case 'noop':
       return gasCost(0);
+    // ZK / crypto opcodes (flat base costs; per-element components are applied
+    // by the metered evaluator's input-scaled charge).
+    case 'poseidon':
+      return config.poseidon;
+    case 'pmt_verify':
+      return config.pmtVerify;
+    case 'schnorr_verify':
+      return config.schnorrVerify;
+    case 'smt_verify':
+      return config.smtVerify;
+    case 'mpt_verify':
+      return config.mptVerify;
+    case 'mpt_prefix_verify':
+      return config.mptPrefixVerify;
+    case 'bn254_add':
+      return config.bn254Add;
+    case 'bn254_mul':
+      return config.bn254Mul;
+    case 'bn254_pairing':
+      return config.bn254Pairing;
+    case 'ecvrf_verify':
+      return config.ecvrfVerify;
+    case 'groth16_verify':
+      return config.groth16Verify;
+    case 'bls_verify':
+      return config.blsVerify;
+    case 'bls_aggregate_verify':
+      return config.blsAggregateVerify;
   }
 };
 

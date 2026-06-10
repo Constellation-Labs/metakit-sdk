@@ -22,7 +22,12 @@ struct Case {
     category: String,
     expr: String,
     data: String,
-    expected: String,
+    /// Present for ordinary cases; absent for `error: true` cases.
+    expected: Option<String>,
+    /// `"error": true` pins that evaluation MUST fail (same convention as the
+    /// ZK vectors and the Scala `SharedVectorConformanceSuite`). A case the
+    /// decoder itself rejects also satisfies "evaluation MUST fail".
+    must_error: bool,
     note: Option<String>,
 }
 
@@ -39,11 +44,21 @@ fn load_cases() -> Vec<Case> {
     for cat in root["tests"].as_array().expect("tests array") {
         let category = cat["category"].as_str().unwrap_or("?").to_string();
         for c in cat["cases"].as_array().expect("cases array") {
+            let must_error = c.get("error").and_then(|e| e.as_bool()).unwrap_or(false);
+            let expected = c.get("expected").and_then(|e| e.as_str()).map(String::from);
+            if !must_error {
+                assert!(
+                    expected.is_some(),
+                    "non-error case must define `expected`: {}",
+                    c["expr"]
+                );
+            }
             out.push(Case {
                 category: category.clone(),
                 expr: c["expr"].as_str().expect("expr string").to_string(),
                 data: c["data"].as_str().expect("data string").to_string(),
-                expected: c["expected"].as_str().expect("expected string").to_string(),
+                expected,
+                must_error,
                 note: c
                     .get("note")
                     .and_then(|n| n.as_str())
@@ -98,41 +113,49 @@ fn differential_against_shared_vectors() {
             None => format!("[{}] {}", c.category, c.expr),
         };
 
-        // Decode expression and data.
-        let expr_json: serde_json::Value = match serde_json::from_str(&c.expr) {
-            Ok(v) => v,
-            Err(e) => {
-                struct_failures.push(format!("{}\n    EXPR-JSON-PARSE-ERR: {}", label, e));
-                continue;
-            }
-        };
-        let data_json: serde_json::Value = match serde_json::from_str(&c.data) {
-            Ok(v) => v,
-            Err(e) => {
-                struct_failures.push(format!("{}\n    DATA-JSON-PARSE-ERR: {}", label, e));
-                continue;
-            }
-        };
-        let expr = match decode_expression(&expr_json) {
-            Ok(e) => e,
-            Err(e) => {
-                struct_failures.push(format!("{}\n    DECODE-ERR: {}", label, e));
-                continue;
-            }
-        };
-        let data = decode_value(&data_json);
+        // Decode + evaluate as one pipeline so `error: true` cases can accept a
+        // failure at ANY stage (decode failures still satisfy "evaluation MUST
+        // fail", matching the Scala suite).
+        let outcome: Result<_, String> = (|| {
+            let expr_json: serde_json::Value =
+                serde_json::from_str(&c.expr).map_err(|e| format!("EXPR-JSON-PARSE-ERR: {}", e))?;
+            let data_json: serde_json::Value =
+                serde_json::from_str(&c.data).map_err(|e| format!("DATA-JSON-PARSE-ERR: {}", e))?;
+            let expr = decode_expression(&expr_json).map_err(|e| format!("DECODE-ERR: {}", e))?;
+            let data = decode_value(&data_json);
+            evaluate(&expr, &data).map_err(|e| format!("EVAL-ERR: {}", e))
+        })();
 
-        let result = match evaluate(&expr, &data) {
+        if c.must_error {
+            match outcome {
+                Err(_) => {
+                    // Failed as required: both comparisons are vacuously satisfied.
+                    struct_pass += 1;
+                    canon_pass += 1;
+                }
+                Ok(v) => {
+                    struct_failures.push(format!(
+                        "{}\n    expected an error but evaluated to {}",
+                        label,
+                        serde_json::to_string(&encode_value(&v)).unwrap()
+                    ));
+                }
+            }
+            continue;
+        }
+
+        let result = match outcome {
             Ok(v) => v,
             Err(e) => {
-                struct_failures.push(format!("{}\n    EVAL-ERR: {}", label, e));
+                struct_failures.push(format!("{}\n    {}", label, e));
                 continue;
             }
         };
 
         // Expected JSON value and JLVM value.
+        let expected_raw = c.expected.as_ref().expect("non-error case has expected");
         let expected_json: serde_json::Value =
-            serde_json::from_str(&c.expected).expect("expected is valid JSON");
+            serde_json::from_str(expected_raw).expect("expected is valid JSON");
         let expected_val = decode_value(&expected_json);
 
         // 1) Structural comparison.
