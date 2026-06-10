@@ -76,7 +76,24 @@ export type JsonLogicOpTag =
   | 'exists'
   | 'missing'
   | 'missing_some'
-  | 'typeof';
+  | 'typeof'
+  // ZK / crypto opcodes (Tiers 1-3), mirroring Scala `JsonLogicOp` / Rust `ops.rs`.
+  // All are decodable; the evaluator implements poseidon / pmt_verify /
+  // schnorr_verify / bls_verify / bls_aggregate_verify and rejects the rest at
+  // runtime ("Unsupported operator: ...") until they are ported.
+  | 'poseidon'
+  | 'pmt_verify'
+  | 'schnorr_verify'
+  | 'smt_verify'
+  | 'mpt_verify'
+  | 'mpt_prefix_verify'
+  | 'bn254_add'
+  | 'bn254_mul'
+  | 'bn254_pairing'
+  | 'ecvrf_verify'
+  | 'groth16_verify'
+  | 'bls_verify'
+  | 'bls_aggregate_verify';
 
 // All known operator tags
 export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
@@ -150,6 +167,20 @@ export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
   'missing',
   'missing_some',
   'typeof',
+  // ZK / crypto
+  'poseidon',
+  'pmt_verify',
+  'schnorr_verify',
+  'smt_verify',
+  'mpt_verify',
+  'mpt_prefix_verify',
+  'bn254_add',
+  'bn254_mul',
+  'bn254_pairing',
+  'ecvrf_verify',
+  'groth16_verify',
+  'bls_verify',
+  'bls_aggregate_verify',
 ]);
 
 // Check if a string is a known operator
@@ -205,4 +236,19 @@ export const OPERATOR_CATEGORIES = {
   ] as const,
   object: ['values', 'keys', 'get', 'has', 'entries'] as const,
   utility: ['length', 'exists', 'missing', 'missing_some', 'typeof'] as const,
+  zk: [
+    'poseidon',
+    'pmt_verify',
+    'schnorr_verify',
+    'smt_verify',
+    'mpt_verify',
+    'mpt_prefix_verify',
+    'bn254_add',
+    'bn254_mul',
+    'bn254_pairing',
+    'ecvrf_verify',
+    'groth16_verify',
+    'bls_verify',
+    'bls_aggregate_verify',
+  ] as const,
 } as const;
