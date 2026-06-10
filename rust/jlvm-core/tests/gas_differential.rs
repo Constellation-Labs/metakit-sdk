@@ -14,8 +14,9 @@
 //! The charging contract under test is normative per metakit PR #37 (charge-once;
 //! base + depthPenalty + inputScaledCost pre-charged atomically before the
 //! primitive; output-scaled residual only for split/merge/flatten/slice/substr;
-//! var lookups charge varAccess + #pathSegments at lookup; if/let charge no base
-//! cost; gasUsed = gas-counter delta).
+//! var lookups charge varAccess + #pathSegments at lookup; the lazily-dispatched
+//! if/let charge their flat base cost once per node with no depth penalty;
+//! gasUsed = gas-counter delta).
 
 use jlvm_core::{decode_expression, evaluate_with_gas, GasError};
 use std::path::PathBuf;

@@ -24,9 +24,15 @@
 //!   into the var default (or null) and consumes nothing — evaluation
 //!   continues. This mirrors the Scala runtime, which treats a failed
 //!   `getVar` as "missing variable".
-//! - The lazily-evaluated `if` and `let` charge NO base cost (pre-existing
-//!   special case of the tail-recursive runtime, kept deliberately): only
-//!   their condition / bindings / taken branch pay.
+//! - The lazily-evaluated `if` and `let` charge their flat base cost
+//!   (`if_else`) exactly once per node at the dispatch site, BEFORE any
+//!   child is evaluated and before argument-shape validation, with NO
+//!   depth penalty: the penalty's input everywhere else is
+//!   max(evaluated-argument metric depths) + 1, which is undefined at the
+//!   lazy dispatch site (children unevaluated; if/let are depth-transparent
+//!   in the metrics flow). Lazy evaluation is unchanged: the condition /
+//!   bindings / taken branch pay for themselves, untaken branches pay
+//!   nothing.
 //! - Reported gas-used is the gas-counter delta. All cost arithmetic is u64
 //!   saturating.
 //!
@@ -240,10 +246,13 @@ impl<'a> Metered<'a> {
         Ok((value, 0))
     }
 
-    /// Lazy if/else chain, charging NOTHING for `if` itself. Mirrors the
-    /// tail-recursive runtime (which requires at least 2 args; the condition's
-    /// metric depth is dropped; the taken branch's flows through).
+    /// Lazy if/else chain. The `if` node itself charges its flat base cost
+    /// once at dispatch — no depth penalty (undefined at the lazy dispatch
+    /// site), before the arg-count check, mirroring the Scala runtime's
+    /// `chargeBaseThen` wrapping. The condition's metric depth is dropped;
+    /// the taken branch's flows through.
     fn eval_if(&self, args: &[Expression], ctx: Option<&Value>, sem_depth: u32) -> Outcome {
+        self.consume(self.config.if_else)?;
         if args.len() < 2 {
             return Err(GasError::Eval(format!(
                 "Invalid arguments for if/else operation: expected at least 2 args, got {}",
@@ -273,11 +282,15 @@ impl<'a> Metered<'a> {
         }
     }
 
-    /// `let` with sequential scope-aware bindings, charging NOTHING for `let`
-    /// itself. Binding metric depths are dropped; the result expression's
-    /// flows through. Mirrors the runtime's let handling (both surface forms;
+    /// `let` with sequential scope-aware bindings. The `let` node itself
+    /// charges its flat base cost once at dispatch — no depth penalty
+    /// (undefined at the lazy dispatch site), before binding-shape
+    /// validation, mirroring the Scala runtime's `chargeBaseThen` wrapping.
+    /// Binding metric depths are dropped; the result expression's flows
+    /// through. Mirrors the runtime's let handling (both surface forms;
     /// object-form bindings in RFC-8785 sorted-key order).
     fn eval_let(&self, args: &[Expression], ctx: Option<&Value>, sem_depth: u32) -> Outcome {
+        self.consume(self.config.if_else)?;
         enum Bindings<'b> {
             Sorted(Vec<&'b (String, Expression)>),
             Pairs(&'b [Expression]),

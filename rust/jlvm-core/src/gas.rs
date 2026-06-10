@@ -14,7 +14,10 @@
 //!     work), plus an output-scaled residual AFTER it for
 //!     split/merge/flatten/slice/substr only;
 //!   - var lookups consume `var_access + #path_segments` once at lookup time;
-//!   - the lazily-evaluated `if` / `let` charge NO base cost;
+//!   - the lazily-evaluated `if` / `let` charge their flat base cost
+//!     (`if_else`) once per node at the dispatch site, with NO depth penalty
+//!     (depth is undefined at the lazy dispatch site); untaken branches cost
+//!     nothing;
 //!   - reported gas-used is the gas-counter delta.
 //!
 //! All cost arithmetic is u64 saturating.
