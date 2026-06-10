@@ -33,6 +33,10 @@ pub const FQ_BYTES: usize = 32;
 /// Byte width of a serialized BN254 G1 point (`x || y`, 32B each).
 pub const G1_BYTES: usize = 64;
 
+/// Byte width of a serialized BN254 G2 point. Each of the two Fp2 coordinates is
+/// two 32-byte limbs, laid out in EIP-197 imaginary-first order.
+pub const G2_BYTES: usize = 128;
+
 /// Byte width of a 256-bit big-endian scalar (e.g. a Schnorr response `s`).
 pub const SCALAR_BYTES: usize = 32;
 
@@ -123,6 +127,37 @@ pub fn parse_g1(hex: &str, role: &str) -> Result<(BigUint, BigUint), String> {
         return Err(format!("{role}: y not in base field (>= P): {y}"));
     }
     Ok((x, y))
+}
+
+/// Parse a 128-byte hex string into a BN254 G2 affine point in EIP-197 byte
+/// order, i.e. each Fp2 coordinate is serialized imaginary-part-first:
+/// `x.c1 || x.c0 || y.c1 || y.c0`. Returns `(xReal, xImag, yReal, yImag)` (the
+/// `(real, imag)` / `(c0, c1)` convention), so the caller can build a G2 point
+/// `(Fq2(c0=xReal, c1=xImag), Fq2(c0=yReal, c1=yImag))` directly. Each 32-byte
+/// limb is validated as a canonical Fq element (`< P`).
+///
+/// Byte-for-byte port of the Scala `HexBytes.parseG2` (which feeds
+/// `Bn254.G2(xReal, xImag, yReal, yImag)` -> Besu `Fq2.create(c0=real, c1=imag)`).
+pub fn parse_g2(hex: &str, role: &str) -> Result<(BigUint, BigUint, BigUint, BigUint), String> {
+    let bytes = parse_bytes(hex, Some(G2_BYTES), role)?;
+    let limb = |i: usize| BigUint::from_bytes_be(&bytes[i * FQ_BYTES..(i + 1) * FQ_BYTES]);
+    // EIP-197 order: imaginary-before-real for each Fp2 coordinate.
+    let x_imag = limb(0);
+    let x_real = limb(1);
+    let y_imag = limb(2);
+    let y_real = limb(3);
+    let p = base_field_modulus();
+    for (name, v) in [
+        ("x.imag", &x_imag),
+        ("x.real", &x_real),
+        ("y.imag", &y_imag),
+        ("y.real", &y_real),
+    ] {
+        if v >= p {
+            return Err(format!("{role}: {name} not in base field (>= P): {v}"));
+        }
+    }
+    Ok((x_real, x_imag, y_real, y_imag))
 }
 
 /// Parse a 32-byte hex string into a non-negative big-endian scalar with NO

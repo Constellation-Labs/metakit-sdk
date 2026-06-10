@@ -2,10 +2,15 @@
 //!
 //! Loads `shared/zk_opcode_test_vectors.json` (Scala metakit is the reference;
 //! the `known_answer` category carries independent ground truth) and runs the
-//! TIER-1 categories implemented by this Rust JLVM:
-//!   - `poseidon`
-//!   - `pmt_verify`
-//!   - `schnorr_verify`
+//! categories implemented by this Rust JLVM, split per tier:
+//!   - TIER-1 (pure crypto): `poseidon`, `pmt_verify`, `schnorr_verify`.
+//!   - TIER-2a (auth-DB verifiers): `smt_verify`, `mpt_verify`,
+//!     `mpt_prefix_verify` -- SMT + MPT inclusion/absence/prefix proofs whose
+//!     JSON proofs are hashed through the metakit canonical-bytes SHA-256 seam.
+//!   - TIER-2b (BN254 curve + ECVRF): `bn254_add`, `bn254_mul`,
+//!     `bn254_pairing` (EIP-196/197 ecAdd/ecMul/ecPairing) and `ecvrf_verify`
+//!     (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381 suite 0x03). The `bn254_pairing`
+//!     identity and the RFC 9381 ecvrf vector are HARD ANCHORS.
 //!
 //! There are two kinds of case:
 //!   - VALUE cases carry `expected`. The result must be BYTE-IDENTICAL to it:
@@ -21,9 +26,9 @@
 //! reproduced by Rust because Rust ERRORS, that too is surfaced as a parity bug
 //! rather than silently swallowed. The whole point is to EXPOSE divergence.
 //!
-//! EVERY Tier-1 vector MUST pass. Categories not yet implemented in the Rust
-//! core (smt/mpt/bn254/ecvrf/groth16, and the deferred bls ops) are skipped with
-//! a report line, so the harness stays green as later waves land.
+//! EVERY Tier-1, Tier-2a and Tier-2b vector MUST pass. Categories not yet
+//! implemented in the Rust core (groth16 and the bls ops) are skipped with a
+//! report line, so the harness stays green as later waves land.
 
 use jlvm_core::canonical::canonicalize_string;
 use jlvm_core::value::{decode_value, encode_value};
@@ -38,6 +43,20 @@ const TIER1_CATEGORIES: &[&str] = &["poseidon", "pmt_verify", "schnorr_verify"];
 /// of these is ALSO a Tier-1 cross-check (the `known_answer` poseidon vector is
 /// independent circomlib ground truth) and must pass.
 const TIER1_OPS: &[&str] = &["poseidon", "pmt_verify", "schnorr_verify"];
+
+/// The Tier-2a auth-DB categories this Rust JLVM implements and must pass:
+/// the SMT verifier and the MPT single / prefix verifiers.
+const TIER2A_CATEGORIES: &[&str] = &["smt_verify", "mpt_verify", "mpt_prefix_verify"];
+
+/// Tier-2a opcode tags (for any `known_answer` cross-check that lands later).
+const TIER2A_OPS: &[&str] = &["smt_verify", "mpt_verify", "mpt_prefix_verify"];
+
+/// The Tier-2b BN254 curve + ECVRF categories this Rust JLVM implements and must
+/// pass: ecAdd / ecMul / ecPairing (EIP-196/197) and ECVRF (RFC 9381 TAI).
+const TIER2B_CATEGORIES: &[&str] = &["bn254_add", "bn254_mul", "bn254_pairing", "ecvrf_verify"];
+
+/// Tier-2b opcode tags (for any `known_answer` cross-check that lands later).
+const TIER2B_OPS: &[&str] = &["bn254_add", "bn254_mul", "bn254_pairing", "ecvrf_verify"];
 
 /// The single top-level operator tag of an expression, if it is an
 /// `{"op": ...}` object. Used to pull Tier-1 ops out of the `known_answer` mix.
@@ -126,12 +145,27 @@ fn json_struct_eq(a: &serde_json::Value, b: &serde_json::Value) -> bool {
     }
 }
 
-#[test]
-fn tier1_zk_differential_against_shared_vectors() {
-    let cases = load_cases();
-    let tier1: BTreeSet<&str> = TIER1_CATEGORIES.iter().copied().collect();
+/// Outcome counters for a differential run over one tier's categories.
+struct RunReport {
+    total: usize,
+    struct_pass: usize,
+    canon_pass: usize,
+    error_cases: usize,
+    error_pass: usize,
+    failures: Vec<String>,
+    skipped: BTreeSet<String>,
+}
 
-    let mut tier1_total = 0usize;
+/// Run every case whose category is in `categories`, OR which is a `known_answer`
+/// case whose top-level operator is in `ops`. Shared body for the per-tier
+/// differential tests: VALUE cases must reproduce `expected` byte-for-byte
+/// (structural + canonical); ERROR cases (`error:true`) must FAIL in Rust where
+/// Scala fails. Any divergence (incl. error-vs-value) is recorded as a failure.
+fn run_differential(categories: &[&str], ops: &[&str]) -> RunReport {
+    let cases = load_cases();
+    let cat_set: BTreeSet<&str> = categories.iter().copied().collect();
+
+    let mut total = 0usize;
     let mut struct_pass = 0usize;
     let mut canon_pass = 0usize;
     let mut error_cases = 0usize; // cases marked `error:true` (Scala fails ⇒ Rust must fail)
@@ -139,19 +173,20 @@ fn tier1_zk_differential_against_shared_vectors() {
     let mut failures: Vec<String> = Vec::new();
     let mut skipped: BTreeSet<String> = BTreeSet::new();
 
-    let tier1_ops: BTreeSet<&str> = TIER1_OPS.iter().copied().collect();
+    let op_set: BTreeSet<&str> = ops.iter().copied().collect();
 
     for c in &cases {
-        // Run a case if it is in a Tier-1 category, OR if it is a known_answer
-        // (independent ground truth) case whose top-level operator is Tier-1.
-        let is_tier1_cat = tier1.contains(c.category.as_str());
-        let is_tier1_ka = c.category == "known_answer"
-            && top_op(&c.expr).is_some_and(|op| tier1_ops.contains(op.as_str()));
-        if !is_tier1_cat && !is_tier1_ka {
+        // Run a case if it is in one of this tier's categories, OR if it is a
+        // known_answer (independent ground truth) case whose top-level operator
+        // is in this tier.
+        let is_cat = cat_set.contains(c.category.as_str());
+        let is_ka = c.category == "known_answer"
+            && top_op(&c.expr).is_some_and(|op| op_set.contains(op.as_str()));
+        if !is_cat && !is_ka {
             skipped.insert(c.category.clone());
             continue;
         }
-        tier1_total += 1;
+        total += 1;
 
         let label = match &c.note {
             Some(n) => format!("[{}] {}  ({})", c.category, c.expr, n),
@@ -247,42 +282,78 @@ fn tier1_zk_differential_against_shared_vectors() {
         }
     }
 
-    eprintln!("\n============ JLVM Tier-1 ZK differential report ============");
-    eprintln!("tier-1 categories:      {:?}", TIER1_CATEGORIES);
-    eprintln!("tier-1 cases:           {tier1_total}");
-    eprintln!(
-        "error-convention cases: {error_pass}/{error_cases}  (Rust errors where Scala errors)"
-    );
-    eprintln!(
-        "structural pass:        {struct_pass}/{tier1_total}  ({:.1}%)",
-        100.0 * struct_pass as f64 / tier1_total.max(1) as f64
-    );
-    eprintln!(
-        "canonical-bytes pass:   {canon_pass}/{tier1_total}  ({:.1}%)",
-        100.0 * canon_pass as f64 / tier1_total.max(1) as f64
-    );
-    if !skipped.is_empty() {
-        eprintln!("skipped (not Tier 1):   {skipped:?}");
+    RunReport {
+        total,
+        struct_pass,
+        canon_pass,
+        error_cases,
+        error_pass,
+        failures,
+        skipped,
     }
-    if !failures.is_empty() {
-        eprintln!("\n---- failures ({}) ----", failures.len());
-        for f in &failures {
+}
+
+/// Print a per-tier report and assert every case passed (structural + canonical).
+fn report_and_assert(tier: &str, categories: &[&str], r: &RunReport) {
+    eprintln!("\n============ JLVM {tier} ZK differential report ============");
+    eprintln!("{tier} categories:       {categories:?}");
+    eprintln!("{tier} cases:            {}", r.total);
+    eprintln!(
+        "error-convention cases: {}/{}  (Rust errors where Scala errors)",
+        r.error_pass, r.error_cases
+    );
+    eprintln!(
+        "structural pass:        {}/{}  ({:.1}%)",
+        r.struct_pass,
+        r.total,
+        100.0 * r.struct_pass as f64 / r.total.max(1) as f64
+    );
+    eprintln!(
+        "canonical-bytes pass:   {}/{}  ({:.1}%)",
+        r.canon_pass,
+        r.total,
+        100.0 * r.canon_pass as f64 / r.total.max(1) as f64
+    );
+    if !r.skipped.is_empty() {
+        eprintln!("skipped (other tiers):  {:?}", r.skipped);
+    }
+    if !r.failures.is_empty() {
+        eprintln!("\n---- failures ({}) ----", r.failures.len());
+        for f in &r.failures {
             eprintln!("  {f}");
         }
     }
     eprintln!("===========================================================\n");
 
     assert!(
-        failures.is_empty(),
-        "{} Tier-1 ZK vector divergence(s) against the shared vectors (see report above)",
-        failures.len()
+        r.failures.is_empty(),
+        "{} {tier} ZK vector divergence(s) against the shared vectors (see report above)",
+        r.failures.len()
     );
     assert_eq!(
-        struct_pass, tier1_total,
-        "every Tier-1 vector must pass structurally"
+        r.struct_pass, r.total,
+        "every {tier} vector must pass structurally"
     );
     assert_eq!(
-        canon_pass, tier1_total,
-        "every Tier-1 vector must pass canonical-byte comparison"
+        r.canon_pass, r.total,
+        "every {tier} vector must pass canonical-byte comparison"
     );
+}
+
+#[test]
+fn tier1_zk_differential_against_shared_vectors() {
+    let r = run_differential(TIER1_CATEGORIES, TIER1_OPS);
+    report_and_assert("Tier-1", TIER1_CATEGORIES, &r);
+}
+
+#[test]
+fn tier2a_zk_differential_against_shared_vectors() {
+    let r = run_differential(TIER2A_CATEGORIES, TIER2A_OPS);
+    report_and_assert("Tier-2a", TIER2A_CATEGORIES, &r);
+}
+
+#[test]
+fn tier2b_zk_differential_against_shared_vectors() {
+    let r = run_differential(TIER2B_CATEGORIES, TIER2B_OPS);
+    report_and_assert("Tier-2b", TIER2B_CATEGORIES, &r);
 }

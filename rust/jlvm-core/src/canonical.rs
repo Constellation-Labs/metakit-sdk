@@ -72,6 +72,60 @@ fn encode(v: &Value, out: &mut String) {
     }
 }
 
+/// Canonicalize a raw `serde_json::Value` to RFC 8785 canonical JSON bytes.
+///
+/// This is the circe-`Json` analogue of [`canonicalize`]: the Scala
+/// `JsonBinaryHasher` canonicalizes a circe `Json` (the proof-value bridge does
+/// `jlv.asJson` first). Numbers route through `f64` exactly like the JLVM-value
+/// path and like Scala's `NumberToJson.serializeNumber(num.toDouble)`, so the
+/// emitted bytes match the Scala hasher pre-image. Used by the auth-DB opcodes
+/// for value digests and node-commitment digests.
+pub fn canonicalize_json(v: &serde_json::Value) -> Vec<u8> {
+    let mut out = String::new();
+    encode_json(v, &mut out);
+    out.into_bytes()
+}
+
+fn encode_json(v: &serde_json::Value, out: &mut String) {
+    use serde_json::Value as J;
+    match v {
+        J::Null => out.push_str("null"),
+        J::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        J::Number(n) => {
+            // Match Scala: every JSON number goes through Double first, then
+            // ECMAScript-shortest. serde_json without arbitrary_precision keeps
+            // numbers as i64/u64/f64; `as_f64` reproduces `num.toDouble`.
+            let d = n.as_f64().expect("finite JSON number");
+            out.push_str(&serialize_number(d));
+        }
+        J::String(s) => serialize_string(s, out),
+        J::Array(arr) => {
+            out.push('[');
+            for (i, el) in arr.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                encode_json(el, out);
+            }
+            out.push(']');
+        }
+        J::Object(m) => {
+            let mut entries: Vec<(&String, &serde_json::Value)> = m.iter().collect();
+            entries.sort_by(|a, b| utf16_cmp(a.0, b.0));
+            out.push('{');
+            for (i, (k, val)) in entries.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                serialize_string(k, out);
+                out.push(':');
+                encode_json(val, out);
+            }
+            out.push('}');
+        }
+    }
+}
+
 /// ECMAScript shortest-double formatting. `0.0` (and `-0.0`) render as `"0"`, matching
 /// `NumberToJson.serializeNumber` which special-cases zero. ryu-js implements the same
 /// ECMAScript Number::toString algorithm the Scala DoubleSerializerImpl ports.
