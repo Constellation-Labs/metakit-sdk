@@ -26,6 +26,7 @@ pub mod ecvrf;
 pub mod eval;
 pub mod expression;
 pub mod gas;
+pub mod gas_eval;
 pub mod hex_bytes;
 pub mod numeric;
 pub mod ops;
@@ -34,6 +35,7 @@ pub mod value;
 
 pub use eval::evaluate;
 pub use expression::{decode_expression, Expression};
+pub use gas_eval::{evaluate_with_gas, evaluate_with_gas_config, GasError, GasUsed};
 pub use value::{decode_value, encode_value, Value};
 
 /// Convenience: parse an expression and data from JSON strings, evaluate, and return the

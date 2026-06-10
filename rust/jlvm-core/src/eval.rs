@@ -26,8 +26,12 @@ pub fn evaluate(expr: &Expression, data: &Value) -> Result<Value, String> {
     ev.eval(expr, None)
 }
 
-struct Evaluator<'a> {
-    vars: &'a Value,
+/// The un-metered evaluator core. `pub(crate)` so the gas-metered evaluator
+/// (`gas_eval`) can delegate every non-callback primitive to it (the metered layer
+/// re-implements only argument traversal, charge points, and the callback-running
+/// collection ops, whose per-element runs must charge the shared gas counter).
+pub(crate) struct Evaluator<'a> {
+    pub(crate) vars: &'a Value,
 }
 
 impl<'a> Evaluator<'a> {
@@ -84,7 +88,7 @@ impl<'a> Evaluator<'a> {
         Ok(raw)
     }
 
-    fn get_var(&self, key: &str, ctx: Option<&Value>) -> Result<Value, String> {
+    pub(crate) fn get_var(&self, key: &str, ctx: Option<&Value>) -> Result<Value, String> {
         if key.is_empty() {
             return Ok(ctx.cloned().unwrap_or_else(|| self.vars.clone()));
         }
@@ -230,7 +234,7 @@ impl<'a> Evaluator<'a> {
 
     /// Build the let context overlay from the current ctx and accumulated bindings.
     /// Mirrors the runtime's letCtx construction.
-    fn let_ctx(&self, ctx: Option<&Value>, acc: &[(String, Value)]) -> Option<Value> {
+    pub(crate) fn let_ctx(&self, ctx: Option<&Value>, acc: &[(String, Value)]) -> Option<Value> {
         match ctx {
             Some(Value::Map(existing)) => Some(Value::Map(merge_maps(existing, acc))),
             Some(other) => {
@@ -250,7 +254,12 @@ impl<'a> Evaluator<'a> {
 
     // --- operator dispatch ---------------------------------------------------
 
-    fn apply_op(&self, op: &str, values: Vec<Value>, ctx: Option<&Value>) -> Result<Value, String> {
+    pub(crate) fn apply_op(
+        &self,
+        op: &str,
+        values: Vec<Value>,
+        ctx: Option<&Value>,
+    ) -> Result<Value, String> {
         match op {
             "==" => self.op_eq(values),
             "===" => self.op_eq_strict(values),
