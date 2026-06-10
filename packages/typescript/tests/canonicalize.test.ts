@@ -184,6 +184,15 @@ describe('RFC 8785 conformance (vendored serializer)', () => {
     expect(canonicalize(true)).toBe('true');
     expect(canonicalize(null)).toBe('null');
   });
+
+  it('preserves a "__proto__" member through drop-nulls and canonicalization', () => {
+    // JSON.parse stores "__proto__" as an ordinary own property; the
+    // canonical bytes must include it (the Scala server keeps it too), and
+    // processing it must not mutate Object.prototype.
+    const data = JSON.parse('{"__proto__": {"a": 1}, "b": 2, "constructor": 3}');
+    expect(canonicalize(data)).toBe('{"__proto__":{"a":1},"b":2,"constructor":3}');
+    expect(({} as Record<string, unknown>).a).toBeUndefined();
+  });
 });
 
 describe('dropNullFields', () => {

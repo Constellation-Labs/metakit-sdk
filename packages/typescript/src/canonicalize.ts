@@ -56,14 +56,14 @@ export function dropNullFields<T>(data: T): T {
   }
 
   if (data !== null && typeof data === 'object') {
-    const result: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-      if (value === null) {
-        continue; // drop null-valued object fields
-      }
-      result[key] = dropNullFields(value);
-    }
-    return result as unknown as T;
+    // Build via Object.fromEntries (CreateDataProperty semantics) so keys like
+    // "__proto__" survive as ordinary own properties instead of being swallowed
+    // by the prototype setter — they must reach the canonical bytes.
+    return Object.fromEntries(
+      Object.entries(data as Record<string, unknown>)
+        .filter(([, value]) => value !== null)
+        .map(([key, value]) => [key, dropNullFields(value)])
+    ) as unknown as T;
   }
 
   // Primitives (and top-level null) pass through unchanged.
