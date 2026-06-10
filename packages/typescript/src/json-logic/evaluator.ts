@@ -50,10 +50,28 @@ import {
   ok,
   err,
 } from './errors';
+import {
+  opBlsAggregateVerify,
+  opBlsVerify,
+  opPmtVerify,
+  opPoseidon,
+  opSchnorrVerify,
+} from './crypto-ops';
 
 const MAX_SAFE_EXPONENT = 999n;
 const I64_MIN = -(2n ** 63n);
 const I64_MAX = 2n ** 63n - 1n;
+
+/**
+ * Maximum expression-recursion depth, enforced identically by this un-metered
+ * evaluator and the gas-metered one (gas-eval.ts). Mirrors Rust
+ * `MAX_EVAL_DEPTH` (rust/jlvm-core/src/eval.rs) exactly: one unit is consumed
+ * per `eval` call — nested operator arguments, `if`/`let` children, and
+ * callback runs (map/filter/reduce/...) all count. Exceeding the limit throws
+ * a normal evaluation error ("Recursion depth limit exceeded"), never a
+ * RangeError stack overflow.
+ */
+export const MAX_EVAL_DEPTH = 256;
 
 /**
  * Evaluation context (kept for API compatibility)
@@ -90,9 +108,9 @@ const fail = (message: string): never => {
 /**
  * Whether the argument at `argIndex` of operator `op` is a lazily-wrapped
  * callback (a FunctionValue) rather than an eagerly-evaluated value.
- * Mirrors Rust `is_callback_arg`.
+ * Mirrors Rust `is_callback_arg`. Exported for the gas-metered evaluator.
  */
-const isCallbackArg = (op: string, argIndex: number): boolean =>
+export const isCallbackArg = (op: string, argIndex: number): boolean =>
   argIndex === 1 &&
   (op === 'map' ||
     op === 'filter' ||
@@ -216,10 +234,36 @@ const replaceLoneSurrogates = (s: string): string => {
   return out;
 };
 
-class Evaluator {
+/**
+ * The un-metered evaluator core. Exported for the gas-metered evaluator
+ * (gas-eval.ts), which delegates every non-callback primitive to it — exactly
+ * like Rust's `Metered { inner: Evaluator }`. Not part of the public API
+ * surface (use `evaluate` / `evaluateWithGas`).
+ */
+export class Evaluator {
+  /** Current `eval` recursion depth (guarded by MAX_EVAL_DEPTH). */
+  private depth = 0;
+
   constructor(private readonly vars: JsonLogicValue) {}
 
+  /**
+   * Depth-guarded recursion entry: every recursive evaluation step goes
+   * through here, so the counter tracks true evaluation depth (including
+   * callback runs). Mirrors Rust `Evaluator::eval`.
+   */
   eval(expr: JsonLogicExpression, ctx?: JsonLogicValue): JsonLogicValue {
+    if (this.depth >= MAX_EVAL_DEPTH) {
+      return fail(`Recursion depth limit exceeded (${MAX_EVAL_DEPTH})`);
+    }
+    this.depth++;
+    try {
+      return this.evalNode(expr, ctx);
+    } finally {
+      this.depth--;
+    }
+  }
+
+  private evalNode(expr: JsonLogicExpression, ctx?: JsonLogicValue): JsonLogicValue {
     switch (expr.tag) {
       case 'const':
         return expr.value;
@@ -270,7 +314,8 @@ class Evaluator {
     return raw;
   }
 
-  private getVar(key: string, ctx?: JsonLogicValue): JsonLogicValue {
+  /** @internal Exposed for the gas-metered evaluator (mirrors Rust pub(crate)). */
+  getVar(key: string, ctx?: JsonLogicValue): JsonLogicValue {
     if (key.length === 0) {
       return ctx ?? this.vars;
     }
@@ -408,7 +453,8 @@ class Evaluator {
    * Build the let context overlay from the current ctx and accumulated
    * bindings. Mirrors Rust `let_ctx`.
    */
-  private letCtx(
+  /** @internal Exposed for the gas-metered evaluator (mirrors Rust pub(crate)). */
+  letCtx(
     ctx: JsonLogicValue | undefined,
     acc: Map<string, JsonLogicValue>
   ): JsonLogicValue | undefined {
@@ -425,7 +471,8 @@ class Evaluator {
 
   // --- operator dispatch -----------------------------------------------
 
-  private applyOp(op: string, values: JsonLogicValue[], ctx?: JsonLogicValue): JsonLogicValue {
+  /** @internal Exposed for the gas-metered evaluator (mirrors Rust pub(crate)). */
+  applyOp(op: string, values: JsonLogicValue[], ctx?: JsonLogicValue): JsonLogicValue {
     switch (op) {
       case '==':
         return this.opEq(values, false);
@@ -545,6 +592,20 @@ class Evaluator {
         return this.opMissing(values, ctx);
       case 'missing_some':
         return this.opMissingSome(values, ctx);
+      // ZK / crypto opcodes. Pure precompiles over already-parsed hex args;
+      // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs / Scala
+      // CryptoOps. Tags that decode but are not yet ported (smt/mpt/bn254/
+      // ecvrf/groth16) fall through to the default error.
+      case 'poseidon':
+        return opPoseidon(values);
+      case 'pmt_verify':
+        return opPmtVerify(values);
+      case 'schnorr_verify':
+        return opSchnorrVerify(values);
+      case 'bls_verify':
+        return opBlsVerify(values);
+      case 'bls_aggregate_verify':
+        return opBlsAggregateVerify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }
