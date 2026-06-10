@@ -2,10 +2,14 @@
  * JSON Logic Value Types
  *
  * Represents runtime values in the JSON Logic VM.
- * Mirrors the Scala implementation in metakit.
+ * Mirrors the Scala implementation in metakit and rust/jlvm-core/src/value.rs:
+ * NullValue, BoolValue, IntValue (unbounded bigint), FloatValue (exact Ratio),
+ * StrValue, ArrayValue, MapValue (insertion-ordered, prototype-safe `Map`),
+ * and FunctionValue.
  */
 
 import type { JsonLogicExpression } from './expression';
+import { Ratio } from './ratio';
 
 // Discriminated union tag
 export type JsonLogicValueTag =
@@ -40,10 +44,10 @@ export interface IntValue extends JsonLogicValueBase {
   readonly value: bigint;
 }
 
-// Float value (decimal)
+// Float value (exact rational - see ratio.ts)
 export interface FloatValue extends JsonLogicValueBase {
   readonly tag: 'float';
-  readonly value: number;
+  readonly value: Ratio;
 }
 
 // String value
@@ -58,10 +62,11 @@ export interface ArrayValue extends JsonLogicValueBase {
   readonly value: JsonLogicValue[];
 }
 
-// Map/Object value
+// Map/Object value. Backed by a `Map` (insertion-ordered, immune to prototype
+// pollution via attacker-controlled keys like "__proto__"/"constructor").
 export interface MapValue extends JsonLogicValueBase {
   readonly tag: 'map';
-  readonly value: Record<string, JsonLogicValue>;
+  readonly value: Map<string, JsonLogicValue>;
 }
 
 // Function value (unevaluated expression)
@@ -110,23 +115,43 @@ export const intValue = (value: bigint | number): IntValue => ({
   tag: 'int',
   value: typeof value === 'number' ? BigInt(Math.trunc(value)) : value,
 });
-export const floatValue = (value: number): FloatValue => ({ tag: 'float', value });
+export const floatValue = (value: Ratio | number): FloatValue => ({
+  tag: 'float',
+  value: value instanceof Ratio ? value : ratioFromNumber(value),
+});
 export const strValue = (value: string): StrValue => ({ tag: 'string', value });
 export const arrayValue = (value: JsonLogicValue[]): ArrayValue => ({ tag: 'array', value });
-export const mapValue = (value: Record<string, JsonLogicValue>): MapValue => ({
+export const mapValue = (
+  value: Map<string, JsonLogicValue> | Record<string, JsonLogicValue>
+): MapValue => ({
   tag: 'map',
-  value,
+  value: value instanceof Map ? value : new Map(Object.entries(value)),
 });
 export const functionValue = (expr: JsonLogicExpression): FunctionValue => ({
   tag: 'function',
   expr,
 });
 
+/**
+ * Exact Ratio from a finite JS number, via its ECMAScript shortest-round-trip
+ * decimal form (the same value Rust gets from serde_json's f64 Display).
+ */
+export const ratioFromNumber = (n: number): Ratio => {
+  if (!Number.isFinite(n)) {
+    throw new Error(`Cannot represent non-finite number ${n} as an exact ratio`);
+  }
+  const r = Ratio.parseDecimal(String(n));
+  if (r === null) {
+    throw new Error(`Cannot parse number ${n} as an exact ratio`);
+  }
+  return r;
+};
+
 // Empty values
 export const emptyArray = (): ArrayValue => arrayValue([]);
-export const emptyMap = (): MapValue => mapValue({});
+export const emptyMap = (): MapValue => mapValue(new Map());
 
-// Truthiness (matches Scala implementation)
+// Truthiness (matches Scala/Rust `isTruthy`)
 export const isTruthy = (v: JsonLogicValue): boolean => {
   switch (v.tag) {
     case 'null':
@@ -136,13 +161,13 @@ export const isTruthy = (v: JsonLogicValue): boolean => {
     case 'int':
       return v.value !== 0n;
     case 'float':
-      return v.value !== 0;
+      return !v.value.isZero();
     case 'string':
       return v.value.length > 0;
     case 'array':
       return v.value.length > 0;
     case 'map':
-      return Object.keys(v.value).length > 0;
+      return v.value.size > 0;
     case 'function':
       return false;
   }
@@ -158,7 +183,7 @@ export const getDefault = (v: JsonLogicValue): JsonLogicValue => {
     case 'int':
       return intValue(0n);
     case 'float':
-      return floatValue(0);
+      return floatValue(Ratio.zero());
     case 'string':
       return strValue('');
     case 'array':
@@ -170,7 +195,11 @@ export const getDefault = (v: JsonLogicValue): JsonLogicValue => {
   }
 };
 
-// Equality (strict - types must match, 1 !== 1.0)
+/**
+ * Structural (deep) equality. Used by `===`/`!==` for collections and by `in`,
+ * `unique`, `intersect`. Mirrors Rust `Value::deep_eq` / Scala `eqJsonLogicValue`.
+ * Strict: types must match (1 !== 1.0); functions are never equal.
+ */
 export const strictEquals = (a: JsonLogicValue, b: JsonLogicValue): boolean => {
   if (a.tag !== b.tag) return false;
 
@@ -182,7 +211,7 @@ export const strictEquals = (a: JsonLogicValue, b: JsonLogicValue): boolean => {
     case 'int':
       return a.value === (b as IntValue).value;
     case 'float':
-      return a.value === (b as FloatValue).value;
+      return a.value.equals((b as FloatValue).value);
     case 'string':
       return a.value === (b as StrValue).value;
     case 'array': {
@@ -191,65 +220,20 @@ export const strictEquals = (a: JsonLogicValue, b: JsonLogicValue): boolean => {
       return a.value.every((v, i) => strictEquals(v, bArr[i]));
     }
     case 'map': {
-      const aKeys = Object.keys(a.value);
       const bMap = (b as MapValue).value;
-      const bKeys = Object.keys(bMap);
-      if (aKeys.length !== bKeys.length) return false;
-      return aKeys.every((k) => k in bMap && strictEquals(a.value[k], bMap[k]));
+      if (a.value.size !== bMap.size) return false;
+      for (const [k, v] of a.value) {
+        const bv = bMap.get(k);
+        if (bv === undefined || !strictEquals(v, bv)) return false;
+      }
+      return true;
     }
     case 'function':
       return false; // Functions are never equal
   }
 };
 
-// Loose equality (with type coercion)
-export const looseEquals = (a: JsonLogicValue, b: JsonLogicValue): boolean => {
-  // Same type - use strict
-  if (a.tag === b.tag) return strictEquals(a, b);
-
-  // Null equals null only
-  if (a.tag === 'null' || b.tag === 'null') return false;
-
-  // Numeric comparison (int vs float)
-  if (isNumeric(a) && isNumeric(b)) {
-    const aNum = a.tag === 'int' ? Number(a.value) : a.value;
-    const bNum = b.tag === 'int' ? Number(b.value) : b.value;
-    return aNum === bNum;
-  }
-
-  // String to number coercion
-  if (isNumeric(a) && isStr(b)) {
-    const bNum = parseFloat(b.value);
-    if (isNaN(bNum)) return false;
-    const aNum = a.tag === 'int' ? Number(a.value) : a.value;
-    return aNum === bNum;
-  }
-  if (isStr(a) && isNumeric(b)) {
-    return looseEquals(b, a);
-  }
-
-  return false;
-};
-
-// Convert to number (for arithmetic)
-export const toNumber = (v: JsonLogicValue): number | null => {
-  switch (v.tag) {
-    case 'int':
-      return Number(v.value);
-    case 'float':
-      return v.value;
-    case 'string': {
-      const n = parseFloat(v.value);
-      return isNaN(n) ? null : n;
-    }
-    case 'bool':
-      return v.value ? 1 : 0;
-    default:
-      return null;
-  }
-};
-
-// Convert to string
+// Convert to string (debug/display rendering)
 export const toString = (v: JsonLogicValue): string => {
   switch (v.tag) {
     case 'null':
@@ -259,13 +243,13 @@ export const toString = (v: JsonLogicValue): string => {
     case 'int':
       return v.value.toString();
     case 'float':
-      return v.value.toString();
+      return v.value.toPlainString();
     case 'string':
       return v.value;
     case 'array':
       return `[${v.value.map(toString).join(', ')}]`;
     case 'map':
-      return `{${Object.entries(v.value)
+      return `{${[...v.value.entries()]
         .map(([k, val]) => `"${k}": ${toString(val)}`)
         .join(', ')}}`;
     case 'function':

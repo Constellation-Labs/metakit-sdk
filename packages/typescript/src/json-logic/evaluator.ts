@@ -1,14 +1,22 @@
 /**
  * JSON Logic Evaluator
  *
- * The runtime that evaluates JSON Logic expressions.
- * Matches the Scala metakit implementation.
+ * The runtime that evaluates JSON Logic expressions. A faithful port of
+ * rust/jlvm-core/src/eval.rs (which mirrors the Scala metakit
+ * `JsonLogicRuntime.evaluate` + `JsonLogicSemantics`), so that the Scala,
+ * Rust, and TypeScript evaluators are consensus-equivalent:
+ *
+ * - All arithmetic is exact: integers are unbounded bigints, floats are exact
+ *   rationals (see ratio.ts / numeric.ts). Result typing matches Rust: a result
+ *   is IntValue only when no operand was a float and the result is integral.
+ * - Callback operators (map/filter/reduce/...) receive each element as the
+ *   evaluation CONTEXT overlay; the outer data remains visible through
+ *   `combineState`, matching the reference scoping exactly.
+ * - Maps are insertion-ordered `Map`s (prototype-pollution safe).
  */
 
 import type { JsonLogicExpression } from './expression';
-import { constExpr } from './expression';
-import type { JsonLogicOpTag } from './operators';
-import type { JsonLogicValue } from './value';
+import type { JsonLogicValue, MapValue } from './value';
 import {
   nullValue,
   boolValue,
@@ -17,18 +25,25 @@ import {
   strValue,
   arrayValue,
   mapValue,
-  isNull,
-  isStr,
-  isArray,
-  isMap,
+  functionValue,
   isTruthy,
-  toNumber,
-  toString,
   strictEquals,
-  looseEquals,
+  isPrimitive,
 } from './value';
+import { Ratio } from './ratio';
 import {
-  JsonLogicTypeError,
+  numericInt,
+  numericIsFloat,
+  numericToRatio,
+  numericToValue,
+  promoteToNumeric,
+  combineNumeric,
+  reduceNumeric,
+  compareNumeric,
+} from './numeric';
+import { coerceToPrimitive, compareCoerced } from './coercion';
+import {
+  JsonLogicError,
   JsonLogicDivisionByZeroError,
   JsonLogicRuntimeError,
   type JsonLogicResult,
@@ -36,8 +51,12 @@ import {
   err,
 } from './errors';
 
+const MAX_SAFE_EXPONENT = 999n;
+const I64_MIN = -(2n ** 63n);
+const I64_MAX = 2n ** 63n - 1n;
+
 /**
- * Evaluation context
+ * Evaluation context (kept for API compatibility)
  */
 export interface EvaluationContext {
   /** The data object (input to the expression) */
@@ -54,1136 +73,1258 @@ export const evaluate = (
   data: JsonLogicValue,
   context?: JsonLogicValue
 ): JsonLogicResult<JsonLogicValue> => {
-  const ctx: EvaluationContext = { data, context };
-  return evalExpr(expr, ctx);
+  try {
+    return ok(new Evaluator(data).eval(expr, context));
+  } catch (e) {
+    if (e instanceof JsonLogicError) {
+      return err(e);
+    }
+    return err(new JsonLogicRuntimeError(String(e), e instanceof Error ? e : undefined));
+  }
+};
+
+const fail = (message: string): never => {
+  throw new JsonLogicRuntimeError(message);
 };
 
 /**
- * Core expression evaluator
+ * Whether the argument at `argIndex` of operator `op` is a lazily-wrapped
+ * callback (a FunctionValue) rather than an eagerly-evaluated value.
+ * Mirrors Rust `is_callback_arg`.
  */
-const evalExpr = (
-  expr: JsonLogicExpression,
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  switch (expr.tag) {
-    case 'const':
-      return ok(expr.value);
+const isCallbackArg = (op: string, argIndex: number): boolean =>
+  argIndex === 1 &&
+  (op === 'map' ||
+    op === 'filter' ||
+    op === 'all' ||
+    op === 'some' ||
+    op === 'none' ||
+    op === 'find' ||
+    op === 'count' ||
+    op === 'reduce');
 
-    case 'var':
-      return evalVar(expr.path, expr.defaultValue, ctx);
+/** Compare two strings by their UTF-16 code units (RFC 8785 key ordering). */
+const utf16Cmp = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0);
 
-    case 'array': {
-      const results: JsonLogicValue[] = [];
-      for (const elem of expr.elements) {
-        const result = evalExpr(elem, ctx);
-        if (!result.ok) return result;
-        results.push(result.value);
+const bigintToI64 = (v: bigint, what: string): bigint => {
+  if (v < I64_MIN || v > I64_MAX) {
+    fail(`${what} out of range`);
+  }
+  return v;
+};
+
+const bigintToU32 = (v: bigint): number => {
+  if (v < 0n || v > 0xffffffffn) {
+    fail('exponent out of range');
+  }
+  return Number(v);
+};
+
+/**
+ * Merge two insertion-ordered maps: right overwrites left, preserving left
+ * order then appending new right keys. Mirrors Rust `merge_maps`.
+ */
+const mergeMaps = (
+  l: Map<string, JsonLogicValue>,
+  r: Map<string, JsonLogicValue>
+): Map<string, JsonLogicValue> => {
+  const out = new Map(l);
+  for (const [k, v] of r) {
+    out.set(k, v);
+  }
+  return out;
+};
+
+/**
+ * Get a child by path segment. Mirrors Rust `get_child`: arrays by numeric
+ * index, maps by key, everything else -> Null.
+ */
+const getChild = (parent: JsonLogicValue, segment: string): JsonLogicValue => {
+  if (parent.tag === 'array') {
+    if (!/^-?[0-9]+$/.test(segment)) return nullValue();
+    const idx = BigInt(segment);
+    if (idx >= 0n && idx < BigInt(parent.value.length)) {
+      return parent.value[Number(idx)];
+    }
+    return nullValue();
+  }
+  if (parent.tag === 'map') {
+    return parent.value.get(segment) ?? nullValue();
+  }
+  return nullValue();
+};
+
+/** Stringification of primitives (used by `in`). Mirrors `stringify_primitive`. */
+const stringifyPrimitive = (v: JsonLogicValue): string => {
+  switch (v.tag) {
+    case 'bool':
+      return v.value.toString();
+    case 'int':
+      return v.value.toString();
+    case 'float':
+      return v.value.toPlainString();
+    case 'string':
+      return v.value;
+    default:
+      return '';
+  }
+};
+
+/**
+ * Stringification used by `join`. Mirrors Rust `array_to_string`: null,
+ * collections and functions become empty strings.
+ */
+const arrayToString = (v: JsonLogicValue): string => {
+  switch (v.tag) {
+    case 'null':
+      return '';
+    case 'bool':
+      return v.value.toString();
+    case 'int':
+      return v.value.toString();
+    case 'float':
+      return v.value.toPlainString();
+    case 'string':
+      return v.value;
+    default:
+      return '';
+  }
+};
+
+/**
+ * Replace unpaired UTF-16 surrogates with U+FFFD, matching Rust's
+ * `String::from_utf16_lossy` at substr cut points.
+ */
+const replaceLoneSurrogates = (s: string): string => {
+  let out = '';
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c >= 0xd800 && c <= 0xdbff) {
+      const next = i + 1 < s.length ? s.charCodeAt(i + 1) : 0;
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        out += s[i] + s[i + 1];
+        i++;
+      } else {
+        out += '�';
       }
-      return ok(arrayValue(results));
+    } else if (c >= 0xdc00 && c <= 0xdfff) {
+      out += '�';
+    } else {
+      out += s[i];
     }
+  }
+  return out;
+};
 
-    case 'map': {
-      const results: Record<string, JsonLogicValue> = {};
-      for (const [key, elemExpr] of Object.entries(expr.entries)) {
-        const result = evalExpr(elemExpr, ctx);
-        if (!result.ok) return result;
-        results[key] = result.value;
+class Evaluator {
+  constructor(private readonly vars: JsonLogicValue) {}
+
+  eval(expr: JsonLogicExpression, ctx?: JsonLogicValue): JsonLogicValue {
+    switch (expr.tag) {
+      case 'const':
+        return expr.value;
+      case 'array':
+        return arrayValue(expr.elements.map((e) => this.eval(e, ctx)));
+      case 'map': {
+        const out = new Map<string, JsonLogicValue>();
+        for (const [k, e] of expr.entries) {
+          out.set(k, this.eval(e, ctx));
+        }
+        return mapValue(out);
       }
-      return ok(mapValue(results));
+      case 'var': {
+        let keyStr: string;
+        if (typeof expr.path === 'string') {
+          keyStr = expr.path;
+        } else {
+          const evaluated = this.eval(expr.path, ctx);
+          if (evaluated.tag === 'string') {
+            keyStr = evaluated.value;
+          } else if (evaluated.tag === 'array' && evaluated.value[0]?.tag === 'string') {
+            keyStr = evaluated.value[0].value;
+          } else {
+            return fail(`Got non-string input for var key`);
+          }
+        }
+        return this.lookupVar(keyStr, expr.defaultValue, ctx);
+      }
+      case 'apply':
+        return this.evalApply(expr.op, expr.args, ctx);
+    }
+  }
+
+  /**
+   * Variable lookup with dot-path traversal and default handling.
+   * Mirrors Rust `lookup_var` + `get_var`.
+   */
+  private lookupVar(
+    key: string,
+    defaultValue: JsonLogicValue | undefined,
+    ctx?: JsonLogicValue
+  ): JsonLogicValue {
+    const raw = this.getVar(key, ctx);
+    // Apply default only when key is non-empty and the lookup produced Null.
+    if (key.length > 0 && raw.tag === 'null' && defaultValue !== undefined) {
+      return defaultValue;
+    }
+    return raw;
+  }
+
+  private getVar(key: string, ctx?: JsonLogicValue): JsonLogicValue {
+    if (key.length === 0) {
+      return ctx ?? this.vars;
+    }
+    if (key.endsWith('.')) {
+      return nullValue();
+    }
+    // Combine base (vars) with the context overlay. Mirrors `combineState`.
+    let cur = this.combineState(ctx);
+    for (const seg of key.split('.')) {
+      cur = getChild(cur, seg);
+    }
+    return cur;
+  }
+
+  /**
+   * Mirrors Rust `combine_state`: arrays/maps merge, primitives/null leave
+   * base unchanged, other combinations replace base with ctx.
+   */
+  private combineState(ctx?: JsonLogicValue): JsonLogicValue {
+    if (ctx === undefined || ctx.tag === 'null' || isPrimitive(ctx)) {
+      return this.vars;
+    }
+    if (ctx.tag === 'array') {
+      if (this.vars.tag === 'array') {
+        return arrayValue([...this.vars.value, ...ctx.value]);
+      }
+      return ctx;
+    }
+    if (ctx.tag === 'map') {
+      if (this.vars.tag === 'map') {
+        return mapValue(mergeMaps(this.vars.value, ctx.value));
+      }
+      return ctx;
+    }
+    return ctx;
+  }
+
+  private evalApply(op: string, args: JsonLogicExpression[], ctx?: JsonLogicValue): JsonLogicValue {
+    if (op === 'if') {
+      return this.evalIf(args, ctx);
+    }
+    if (op === 'let') {
+      return this.evalLet(args, ctx);
+    }
+    // Evaluate args, wrapping callback positions as FunctionValue.
+    const values: JsonLogicValue[] = [];
+    for (let idx = 0; idx < args.length; idx++) {
+      const arg = args[idx];
+      if (isCallbackArg(op, idx)) {
+        if (arg.tag === 'const' && arg.value.tag === 'function') {
+          values.push(arg.value);
+        } else {
+          values.push(functionValue(arg));
+        }
+      } else {
+        values.push(this.eval(arg, ctx));
+      }
+    }
+    return this.applyOp(op, values, ctx);
+  }
+
+  /** Lazy if/else chain. Mirrors Rust `eval_if`. */
+  private evalIf(args: JsonLogicExpression[], ctx?: JsonLogicValue): JsonLogicValue {
+    let rest = args;
+    for (;;) {
+      if (rest.length === 0) {
+        return fail('If/else requires at least one argument');
+      }
+      if (rest.length === 1) {
+        return fail('If/else malformed: condition without then-branch');
+      }
+      const [cond, then, ...tail] = rest;
+      if (isTruthy(this.eval(cond, ctx))) {
+        return this.eval(then, ctx);
+      }
+      if (tail.length === 0) {
+        return nullValue();
+      }
+      if (tail.length === 1) {
+        return this.eval(tail[0], ctx);
+      }
+      rest = tail;
+    }
+  }
+
+  /**
+   * `{"let": [[[name, expr], ...], result]}` (array form, insertion order) or
+   * `{"let": [{name: expr, ...}, result]}` (object form, RFC-8785 sorted-key
+   * order — UTF-16 code units, the SAME ordering the JSON canonicalizer uses,
+   * so all impls are byte-identical). Bindings are evaluated SEQUENTIALLY,
+   * each seeing prior bindings (and the outer scope) in context.
+   * Mirrors Rust `eval_let`.
+   */
+  private evalLet(args: JsonLogicExpression[], ctx?: JsonLogicValue): JsonLogicValue {
+    if (args.length !== 2) {
+      return fail('let requires [[bindings...], resultExpr]');
+    }
+    const [bindingsExpr, resultExpr] = args;
+
+    if (bindingsExpr.tag === 'map') {
+      const sorted = [...bindingsExpr.entries].sort((a, b) => utf16Cmp(a[0], b[0]));
+      const acc = new Map<string, JsonLogicValue>();
+      for (const [name, valueExpr] of sorted) {
+        const bindingCtx = this.letCtx(ctx, acc);
+        acc.set(name, this.eval(valueExpr, bindingCtx));
+      }
+      const resultCtx = this.letCtx(ctx, acc) ?? mapValue(acc);
+      return this.eval(resultExpr, resultCtx);
     }
 
-    case 'apply':
-      return evalApply(expr.op, expr.args, ctx);
-  }
-};
-
-/**
- * Evaluate a variable reference
- */
-const evalVar = (
-  path: string | JsonLogicExpression,
-  defaultValue: JsonLogicValue | undefined,
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  // If path is an expression, evaluate it first
-  let pathStr: string;
-  if (typeof path === 'string') {
-    pathStr = path;
-  } else {
-    const pathResult = evalExpr(path, ctx);
-    if (!pathResult.ok) return pathResult;
-    pathStr = toString(pathResult.value);
-  }
-
-  // Empty path = return the whole data/context
-  if (pathStr === '') {
-    return ok(ctx.context ?? ctx.data);
-  }
-
-  // Trailing dot = null
-  if (pathStr.endsWith('.')) {
-    return ok(defaultValue ?? nullValue());
-  }
-
-  // Combine data and context
-  const combined = combineState(ctx.data, ctx.context);
-
-  // Navigate the path
-  const segments = pathStr.split('.');
-  let current = combined;
-
-  for (const segment of segments) {
-    const child = getChild(current, segment);
-    if (isNull(child)) {
-      return ok(defaultValue ?? nullValue());
+    if (bindingsExpr.tag === 'array') {
+      const acc = new Map<string, JsonLogicValue>();
+      for (const binding of bindingsExpr.elements) {
+        if (
+          binding.tag === 'array' &&
+          binding.elements.length === 2 &&
+          binding.elements[0].tag === 'const' &&
+          binding.elements[0].value.tag === 'string'
+        ) {
+          const name = binding.elements[0].value.value;
+          const bindingCtx = this.letCtx(ctx, acc);
+          acc.set(name, this.eval(binding.elements[1], bindingCtx));
+        } else {
+          return fail('let binding must be [name, expr]');
+        }
+      }
+      const resultCtx = this.letCtx(ctx, acc) ?? mapValue(acc);
+      return this.eval(resultExpr, resultCtx);
     }
-    current = child;
+
+    return fail('let requires [[bindings...], resultExpr]');
   }
 
-  return ok(current);
-};
-
-/**
- * Combine base data with optional context
- */
-const combineState = (
-  base: JsonLogicValue,
-  context: JsonLogicValue | undefined
-): JsonLogicValue => {
-  if (!context || isNull(context)) return base;
-
-  // Merge arrays
-  if (isArray(base) && isArray(context)) {
-    return arrayValue([...base.value, ...context.value]);
+  /**
+   * Build the let context overlay from the current ctx and accumulated
+   * bindings. Mirrors Rust `let_ctx`.
+   */
+  private letCtx(
+    ctx: JsonLogicValue | undefined,
+    acc: Map<string, JsonLogicValue>
+  ): JsonLogicValue | undefined {
+    if (ctx === undefined) {
+      return acc.size === 0 ? undefined : mapValue(new Map(acc));
+    }
+    if (ctx.tag === 'map') {
+      return mapValue(mergeMaps(ctx.value, acc));
+    }
+    const m = new Map(acc);
+    m.set('', ctx);
+    return mapValue(m);
   }
 
-  // Merge maps
-  if (isMap(base) && isMap(context)) {
-    return mapValue({ ...base.value, ...context.value });
+  // --- operator dispatch -----------------------------------------------
+
+  private applyOp(op: string, values: JsonLogicValue[], ctx?: JsonLogicValue): JsonLogicValue {
+    switch (op) {
+      case '==':
+        return this.opEq(values, false);
+      case '!=':
+        return this.opEq(values, true);
+      case '===':
+        return this.opEqStrict(values, false);
+      case '!==':
+        return this.opEqStrict(values, true);
+      case '!':
+        return this.opNot(values);
+      case '!!':
+        return this.opTruthy(values);
+      case 'or':
+        return this.opOr(values);
+      case 'and':
+        return this.opAnd(values);
+      case '<':
+        return this.opCmp(values, -1, false);
+      case '<=':
+        return this.opCmp(values, -1, true);
+      case '>':
+        return this.opCmpGt(values, false);
+      case '>=':
+        return this.opCmpGt(values, true);
+      case '%':
+        return this.opModulo(values);
+      case 'max':
+        return this.opMinMax(values, true);
+      case 'min':
+        return this.opMinMax(values, false);
+      case '+':
+        return this.opAdd(values);
+      case '*':
+        return this.opTimes(values);
+      case '-':
+        return this.opMinus(values);
+      case '/':
+        return this.opDiv(values);
+      case 'merge':
+        return this.opMerge(values);
+      case 'in':
+        return this.opIn(values);
+      case 'intersect':
+        return this.opIntersect(values);
+      case 'cat':
+        return this.opCat(values);
+      case 'substr':
+        return this.opSubstr(values);
+      case 'map':
+        return this.opMap(values);
+      case 'filter':
+        return this.opFilter(values);
+      case 'reduce':
+        return this.opReduce(values);
+      case 'all':
+        return this.opAll(values);
+      case 'none':
+        return this.opNone(values);
+      case 'some':
+        return this.opSome(values);
+      case 'values':
+        return this.opMapValues(values);
+      case 'keys':
+        return this.opMapKeys(values);
+      case 'get':
+        return this.opGet(values);
+      case 'count':
+        return this.opCount(values);
+      case 'length':
+        return this.opLength(values);
+      case 'find':
+        return this.opFind(values);
+      case 'lower':
+        return this.opLower(values);
+      case 'upper':
+        return this.opUpper(values);
+      case 'join':
+        return this.opJoin(values);
+      case 'split':
+        return this.opSplit(values);
+      case 'default':
+        return this.opDefault(values);
+      case 'unique':
+        return this.opUnique(values);
+      case 'slice':
+        return this.opSlice(values);
+      case 'reverse':
+        return this.opReverse(values);
+      case 'flatten':
+        return this.opFlatten(values);
+      case 'trim':
+        return this.opTrim(values);
+      case 'startsWith':
+        return this.opStartsWith(values);
+      case 'endsWith':
+        return this.opEndsWith(values);
+      case 'abs':
+        return this.opAbs(values);
+      case 'round':
+        return this.opRound(values);
+      case 'floor':
+        return this.opFloor(values);
+      case 'ceil':
+        return this.opCeil(values);
+      case 'pow':
+        return this.opPow(values);
+      case 'has':
+        return this.opHas(values);
+      case 'entries':
+        return this.opEntries(values);
+      case 'typeof':
+        return this.opTypeof(values);
+      case 'exists':
+        return this.opExists(values);
+      case 'missing':
+        return this.opMissing(values, ctx);
+      case 'missing_some':
+        return this.opMissingSome(values, ctx);
+      default:
+        return fail(`Unsupported operator: ${op}`);
+    }
   }
 
-  // Context overrides for non-collections
-  return context;
-};
+  // --- equality ----------------------------------------------------------
 
-/**
- * Get a child value from a parent by key
- */
-const getChild = (parent: JsonLogicValue, key: string): JsonLogicValue => {
-  if (isArray(parent)) {
-    const idx = parseInt(key, 10);
-    if (!isNaN(idx) && idx >= 0 && idx < parent.value.length) {
-      return parent.value[idx];
+  private opEq(values: JsonLogicValue[], negate: boolean): JsonLogicValue {
+    if (values.length !== 2) {
+      return fail(`Unexpected input for \`${negate ? '!=' : '=='}\``);
+    }
+    const result = compareCoerced(coerceToPrimitive(values[0]), coerceToPrimitive(values[1]));
+    return boolValue(negate ? !result : result);
+  }
+
+  private opEqStrict(values: JsonLogicValue[], negate: boolean): JsonLogicValue {
+    // `===` over two values; mismatched arity behaves like the reference
+    // (non-2-arity pairs are simply "not strictly equal"). `!==` is the exact
+    // negation of `===`, matching Rust (see the SPEC DIVERGENCE note there).
+    const eq =
+      values.length === 2 &&
+      values[0].tag !== 'function' &&
+      strictEquals(values[0], values[1]);
+    return boolValue(negate ? !eq : eq);
+  }
+
+  // --- logical -------------------------------------------------------------
+
+  private opNot(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input for `!`');
+    return boolValue(!isTruthy(values[0]));
+  }
+
+  private opTruthy(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input for `!!`');
+    return boolValue(isTruthy(values[0]));
+  }
+
+  private opOr(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 0) return boolValue(false);
+    for (const v of values) {
+      if (isTruthy(v)) return v;
+    }
+    return values[values.length - 1];
+  }
+
+  private opAnd(values: JsonLogicValue[]): JsonLogicValue {
+    // Mirrors handleAndOp fold: returns first falsy, else the last element;
+    // true if empty.
+    let acc: JsonLogicValue = boolValue(true);
+    for (const el of values) {
+      if (!isTruthy(acc)) return acc;
+      if (!isTruthy(el)) return el;
+      acc = el;
+    }
+    return acc;
+  }
+
+  // --- comparison ----------------------------------------------------------
+
+  private opCmp(values: JsonLogicValue[], want: number, orEqual: boolean): JsonLogicValue {
+    const test = (a: JsonLogicValue, b: JsonLogicValue): boolean => {
+      const ord = compareNumeric(promoteToNumeric(a), promoteToNumeric(b));
+      return ord === want || (orEqual && ord === 0);
+    };
+    if (values.length === 2) {
+      return boolValue(test(values[0], values[1]));
+    }
+    if (values.length === 3) {
+      return boolValue(test(values[0], values[1]) && test(values[1], values[2]));
+    }
+    return fail('Unexpected input for comparison');
+  }
+
+  private opCmpGt(values: JsonLogicValue[], orEqual: boolean): JsonLogicValue {
+    // `>` and `>=` are binary-only in the Scala semantics.
+    if (values.length !== 2) return fail('Unexpected input for comparison');
+    const ord = compareNumeric(promoteToNumeric(values[0]), promoteToNumeric(values[1]));
+    return boolValue(ord === 1 || (orEqual && ord === 0));
+  }
+
+  // --- arithmetic ----------------------------------------------------------
+
+  private opModulo(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 2) return fail('Unexpected input for `%`');
+    const ln = promoteToNumeric(values[0]);
+    const rn = promoteToNumeric(values[1]);
+    if (numericToRatio(rn).isZero()) {
+      throw new JsonLogicDivisionByZeroError();
+    }
+    return combineNumeric((a, b) => a.rem(b), ln, rn);
+  }
+
+  private opMinMax(values: JsonLogicValue[], isMax: boolean): JsonLogicValue {
+    const list = values.length === 1 && values[0].tag === 'array' ? values[0].value : values;
+    if (list.length === 0) {
+      return fail('min/max: list cannot be empty');
+    }
+    const numerics = list.map(promoteToNumeric);
+    const hasFloat = numerics.some(numericIsFloat);
+    let acc = numericToRatio(numerics[0]);
+    for (let i = 1; i < numerics.length; i++) {
+      const r = numericToRatio(numerics[i]);
+      acc = isMax ? acc.max(r) : acc.min(r);
+    }
+    if (!hasFloat && acc.isInteger()) {
+      return intValue(acc.numerator);
+    }
+    return floatValue(acc);
+  }
+
+  private opAdd(values: JsonLogicValue[]): JsonLogicValue {
+    const list = values.length === 1 && values[0].tag === 'array' ? values[0].value : values;
+    if (list.length === 0) {
+      return fail('`+`: list cannot be empty');
+    }
+    // Single string arg: coerce-to-number (unary plus). Mirrors handleAddOp.
+    if (list.length === 1 && list[0].tag === 'string') {
+      return numericToValue(promoteToNumeric(list[0]));
+    }
+    return reduceNumeric(list, (a, b) => a.add(b));
+  }
+
+  private opTimes(values: JsonLogicValue[]): JsonLogicValue {
+    const list = values.length === 1 && values[0].tag === 'array' ? values[0].value : values;
+    if (list.length === 0) {
+      return fail('`*`: list cannot be empty');
+    }
+    return reduceNumeric(list, (a, b) => a.mul(b));
+  }
+
+  private opMinus(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1) {
+      const n = promoteToNumeric(values[0]);
+      return combineNumeric((a, _b) => Ratio.zero().sub(a), n, numericInt(0n));
+    }
+    if (values.length === 2) {
+      return combineNumeric(
+        (a, b) => a.sub(b),
+        promoteToNumeric(values[0]),
+        promoteToNumeric(values[1])
+      );
+    }
+    return fail('Unexpected input for `-`');
+  }
+
+  private opDiv(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 2) return fail('Unexpected input for `/`');
+    const ln = promoteToNumeric(values[0]);
+    const rn = promoteToNumeric(values[1]);
+    if (numericToRatio(rn).isZero()) {
+      throw new JsonLogicDivisionByZeroError();
+    }
+    return combineNumeric((a, b) => a.div(b), ln, rn);
+  }
+
+  private opAbs(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input to abs');
+    const n = promoteToNumeric(values[0]);
+    return n.kind === 'int'
+      ? intValue(n.value < 0n ? -n.value : n.value)
+      : floatValue(n.value.abs());
+  }
+
+  private opRound(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input to round');
+    const n = promoteToNumeric(values[0]);
+    return n.kind === 'int' ? intValue(n.value) : intValue(n.value.roundHalfUp());
+  }
+
+  private opFloor(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input to floor');
+    const n = promoteToNumeric(values[0]);
+    return n.kind === 'int' ? intValue(n.value) : intValue(n.value.floor());
+  }
+
+  private opCeil(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input to ceil');
+    const n = promoteToNumeric(values[0]);
+    return n.kind === 'int' ? intValue(n.value) : intValue(n.value.ceil());
+  }
+
+  private opPow(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 2) return fail('Unexpected input to pow');
+    const [base, exp] = values;
+
+    // Int^Int fast path (non-negative exponent).
+    if (base.tag === 'int' && exp.tag === 'int') {
+      if (exp.value > MAX_SAFE_EXPONENT) {
+        return fail(`Exponent ${exp.value} exceeds maximum safe value ${MAX_SAFE_EXPONENT}`);
+      }
+      if (exp.value >= 0n) {
+        return intValue(base.value ** exp.value);
+      }
+      // Negative Int exponent falls through to the general path below.
+    }
+
+    const baseNum = promoteToNumeric(base);
+    const expNum = promoteToNumeric(exp);
+    const e = numericToRatio(expNum).toBigIntExact();
+    if (e === null) {
+      return fail('Exponent must be an integer for deterministic exponentiation');
+    }
+    const eAbs = e < 0n ? -e : e;
+    if (eAbs > MAX_SAFE_EXPONENT) {
+      return fail(`Exponent magnitude ${eAbs} exceeds maximum safe value ${MAX_SAFE_EXPONENT}`);
+    }
+    const br = numericToRatio(baseNum);
+    if (e < 0n && br.numerator === 0n) {
+      return fail('Zero cannot be raised to a negative power');
+    }
+    const powed = e >= 0n ? br.pow(bigintToU32(e)) : br.inverse().pow(bigintToU32(-e));
+    if (!numericIsFloat(baseNum) && e >= 0n && powed.isInteger()) {
+      return intValue(powed.numerator);
+    }
+    return floatValue(powed);
+  }
+
+  // --- collections / strings ----------------------------------------------
+
+  private opMerge(values: JsonLogicValue[]): JsonLogicValue {
+    // All maps -> merged map; else flatten one level.
+    if (values.length > 0 && values.every((v) => v.tag === 'map')) {
+      let acc = new Map<string, JsonLogicValue>();
+      for (const v of values) {
+        acc = mergeMaps(acc, (v as MapValue).value);
+      }
+      return mapValue(acc);
+    }
+    const list = values.length === 1 && values[0].tag === 'array' ? values[0].value : values;
+    const flattened: JsonLogicValue[] = [];
+    for (const el of list) {
+      if (el.tag === 'array') {
+        flattened.push(...el.value);
+      } else {
+        flattened.push(el);
+      }
+    }
+    return arrayValue(flattened);
+  }
+
+  private opIn(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2) {
+      const [toFind, haystack] = values;
+      if (toFind.tag === 'null') {
+        return boolValue(false);
+      }
+      if (haystack.tag === 'string' && isPrimitive(toFind)) {
+        return boolValue(haystack.value.includes(stringifyPrimitive(toFind)));
+      }
+      if (haystack.tag === 'array') {
+        return boolValue(haystack.value.some((x) => strictEquals(x, toFind)));
+      }
+    }
+    return fail('Unexpected input to `in`');
+  }
+
+  private opIntersect(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2) {
+      const [toFind, arr] = values;
+      if (toFind.tag === 'null') {
+        return boolValue(true);
+      }
+      if (toFind.tag === 'array' && arr.tag === 'null') {
+        return boolValue(false);
+      }
+      if (toFind.tag === 'array' && arr.tag === 'array') {
+        const all = toFind.value.every((x) => arr.value.some((y) => strictEquals(y, x)));
+        return boolValue(all);
+      }
+    }
+    return fail('Unexpected input to `intersect`: expected two arrays');
+  }
+
+  private opCat(values: JsonLogicValue[]): JsonLogicValue {
+    let out = '';
+    for (const v of values) {
+      switch (v.tag) {
+        case 'null':
+          break;
+        case 'bool':
+          out += v.value.toString();
+          break;
+        case 'int':
+          out += v.value.toString();
+          break;
+        case 'float':
+          out += v.value.toPlainString();
+          break;
+        case 'string':
+          out += v.value;
+          break;
+        default:
+          return fail('Unexpected input for `cat`');
+      }
+    }
+    return strValue(out);
+  }
+
+  private opSubstr(values: JsonLogicValue[]): JsonLogicValue {
+    // Indices are over UTF-16 code units, matching Scala String semantics.
+    let s: string;
+    let start: bigint;
+    let length: bigint;
+    if (values.length === 2 && values[0].tag === 'string' && values[1].tag === 'int') {
+      s = values[0].value;
+      start = bigintToI64(values[1].value, 'substr start');
+      length = BigInt(values[0].value.length);
+    } else if (
+      values.length === 3 &&
+      values[0].tag === 'string' &&
+      values[1].tag === 'int' &&
+      values[2].tag === 'int'
+    ) {
+      s = values[0].value;
+      start = bigintToI64(values[1].value, 'substr start');
+      length = bigintToI64(values[2].value, 'substr length');
+    } else {
+      return fail('Unexpected input to `substr`');
+    }
+
+    const strLen = BigInt(s.length);
+    const rawStart = start < 0n ? strLen + start : start;
+    let startIdx = rawStart < 0n ? 0n : rawStart;
+    if (startIdx > strLen) startIdx = strLen;
+    let endIdx: bigint;
+    if (length >= 0n) {
+      endIdx = startIdx + length;
+      if (endIdx > strLen) endIdx = strLen;
+    } else {
+      endIdx = strLen + length;
+      if (endIdx < 0n) endIdx = 0n;
+    }
+    if (startIdx >= strLen || endIdx <= startIdx) {
+      return strValue('');
+    }
+    return strValue(replaceLoneSurrogates(s.substring(Number(startIdx), Number(endIdx))));
+  }
+
+  // --- callbacks -------------------------------------------------------------
+
+  private opMap(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      const expr = values[1].expr;
+      return arrayValue(values[0].value.map((el) => this.eval(expr, el)));
+    }
+    return fail('Unexpected input to map');
+  }
+
+  private opFilter(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      const expr = values[1].expr;
+      return arrayValue(values[0].value.filter((el) => isTruthy(this.eval(expr, el))));
+    }
+    return fail('Unexpected input to filter');
+  }
+
+  private opReduce(values: JsonLogicValue[]): JsonLogicValue {
+    let arr: JsonLogicValue[];
+    let expr: JsonLogicExpression;
+    let init: JsonLogicValue | undefined;
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      arr = values[0].value;
+      expr = values[1].expr;
+      init = undefined;
+    } else if (
+      values.length === 3 &&
+      values[0].tag === 'array' &&
+      values[1].tag === 'function' &&
+      isPrimitive(values[2])
+    ) {
+      arr = values[0].value;
+      expr = values[1].expr;
+      init = values[2];
+    } else {
+      return fail('Unexpected input to reduce');
+    }
+
+    let start: number;
+    let acc: JsonLogicValue;
+    if (init !== undefined) {
+      start = 0;
+      acc = init;
+    } else {
+      if (arr.length === 0) {
+        return nullValue();
+      }
+      start = 1;
+      acc = arr[0];
+    }
+    for (let i = start; i < arr.length; i++) {
+      const ctx = mapValue(
+        new Map<string, JsonLogicValue>([
+          ['current', arr[i]],
+          ['accumulator', acc],
+        ])
+      );
+      acc = this.eval(expr, ctx);
+    }
+    return acc;
+  }
+
+  private opAll(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'null' && values[1].tag === 'function') {
+      return boolValue(false);
+    }
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      // The shared conformance vectors pin all-on-empty-array to `false`
+      // (see the matching note in Rust `op_all`).
+      if (values[0].value.length === 0) {
+        return boolValue(false);
+      }
+      const expr = values[1].expr;
+      for (const el of values[0].value) {
+        if (!isTruthy(this.eval(expr, el))) {
+          return boolValue(false);
+        }
+      }
+      return boolValue(true);
+    }
+    return fail('Unexpected input to all');
+  }
+
+  private opNone(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      const expr = values[1].expr;
+      for (const el of values[0].value) {
+        if (isTruthy(this.eval(expr, el))) {
+          return boolValue(false);
+        }
+      }
+      return boolValue(true);
+    }
+    return fail('Unexpected input to none');
+  }
+
+  private opSome(values: JsonLogicValue[]): JsonLogicValue {
+    let arr: JsonLogicValue[];
+    let expr: JsonLogicExpression;
+    let threshold: bigint;
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      arr = values[0].value;
+      expr = values[1].expr;
+      threshold = 1n;
+    } else if (
+      values.length === 3 &&
+      values[0].tag === 'array' &&
+      values[1].tag === 'function' &&
+      values[2].tag === 'int'
+    ) {
+      arr = values[0].value;
+      expr = values[1].expr;
+      threshold = bigintToI64(values[2].value, 'some threshold');
+    } else {
+      return fail('Unexpected input to some');
+    }
+    let count = 0n;
+    for (const el of arr) {
+      if (isTruthy(this.eval(expr, el))) {
+        count++;
+      }
+    }
+    return boolValue(count >= threshold);
+  }
+
+  private opCount(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      return intValue(BigInt(values[0].value.length));
+    }
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      const expr = values[1].expr;
+      let count = 0n;
+      for (const el of values[0].value) {
+        if (isTruthy(this.eval(expr, el))) {
+          count++;
+        }
+      }
+      return intValue(count);
+    }
+    return fail('Unexpected input to count');
+  }
+
+  private opFind(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'function') {
+      const expr = values[1].expr;
+      for (const el of values[0].value) {
+        if (isTruthy(this.eval(expr, el))) {
+          return el;
+        }
+      }
+      return nullValue();
+    }
+    return fail('Unexpected input to find');
+  }
+
+  // --- maps / objects --------------------------------------------------------
+
+  private opMapValues(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 0) return nullValue();
+    if (values.length === 1 && values[0].tag === 'null') return nullValue();
+    if (values.length === 1 && values[0].tag === 'map') {
+      return arrayValue([...values[0].value.values()]);
+    }
+    return fail('Unexpected input for `values`');
+  }
+
+  private opMapKeys(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 0) return nullValue();
+    if (values.length === 1 && values[0].tag === 'null') return nullValue();
+    if (values.length === 1 && values[0].tag === 'map') {
+      return arrayValue([...values[0].value.keys()].map((k) => strValue(k)));
+    }
+    return fail('Unexpected input for `keys`');
+  }
+
+  private opGet(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'map' && values[1].tag === 'string') {
+      return values[0].value.get(values[1].value) ?? nullValue();
+    }
+    if (values.length === 3 && values[0].tag === 'map' && values[1].tag === 'string') {
+      return values[0].value.get(values[1].value) ?? values[2];
+    }
+    return fail('Unexpected input to get');
+  }
+
+  private opHas(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'map' && values[1].tag === 'string') {
+      return boolValue(values[0].value.has(values[1].value));
+    }
+    return fail('Unexpected input to has');
+  }
+
+  private opEntries(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 0) return nullValue();
+    if (values.length === 1 && values[0].tag === 'map') {
+      return arrayValue(
+        [...values[0].value.entries()].map(([k, v]) => arrayValue([strValue(k), v]))
+      );
+    }
+    return fail('Unexpected input to entries');
+  }
+
+  // --- strings / arrays --------------------------------------------------------
+
+  private opLength(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      return intValue(BigInt(values[0].value.length));
+    }
+    if (values.length === 1 && values[0].tag === 'string') {
+      // UTF-16 code units, matching Scala String#length.
+      return intValue(BigInt(values[0].value.length));
+    }
+    return fail('Unexpected input to length');
+  }
+
+  private opLower(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'string') {
+      return strValue(values[0].value.toLowerCase());
+    }
+    return fail('Unexpected input to lower');
+  }
+
+  private opUpper(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'string') {
+      return strValue(values[0].value.toUpperCase());
+    }
+    return fail('Unexpected input to upper');
+  }
+
+  private opJoin(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'string') {
+      return strValue(values[0].value.map(arrayToString).join(values[1].value));
+    }
+    return fail('Unexpected input to join');
+  }
+
+  private opSplit(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'string' && values[1].tag === 'string') {
+      const sep = values[1].value;
+      if (sep.length === 0) {
+        return fail('Split separator cannot be empty');
+      }
+      // Literal separator, keep trailing empties (Scala split(quote(sep), -1)).
+      return arrayValue(values[0].value.split(sep).map((p) => strValue(p)));
+    }
+    return fail('Unexpected input to split');
+  }
+
+  private opDefault(values: JsonLogicValue[]): JsonLogicValue {
+    for (const v of values) {
+      if (v.tag !== 'null' && isTruthy(v)) {
+        return v;
+      }
     }
     return nullValue();
   }
 
-  if (isMap(parent)) {
-    return parent.value[key] ?? nullValue();
-  }
-
-  return nullValue();
-};
-
-/**
- * Evaluate an operator application
- */
-const evalApply = (
-  op: JsonLogicOpTag,
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  // Some operators have special evaluation (short-circuit, lazy, etc.)
-  switch (op) {
-    case 'if':
-      return evalIf(argExprs, ctx);
-    case 'and':
-      return evalAnd(argExprs, ctx);
-    case 'or':
-      return evalOr(argExprs, ctx);
-    case 'let':
-      return evalLet(argExprs, ctx);
-    case 'map':
-      return evalMapOp(argExprs, ctx);
-    case 'filter':
-      return evalFilter(argExprs, ctx);
-    case 'reduce':
-      return evalReduce(argExprs, ctx);
-    case 'all':
-      return evalAll(argExprs, ctx);
-    case 'some':
-      return evalSome(argExprs, ctx);
-    case 'none':
-      return evalNone(argExprs, ctx);
-    case 'find':
-      return evalFind(argExprs, ctx);
-    case 'count':
-      return evalCount(argExprs, ctx);
-    default: {
-      // Evaluate all arguments first
-      const args: JsonLogicValue[] = [];
-      for (const argExpr of argExprs) {
-        const result = evalExpr(argExpr, ctx);
-        if (!result.ok) return result;
-        args.push(result.value);
+  private opUnique(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      const seen: JsonLogicValue[] = [];
+      for (const el of values[0].value) {
+        if (!seen.some((x) => strictEquals(x, el))) {
+          seen.push(el);
+        }
       }
-      return applyOp(op, args);
+      return arrayValue(seen);
     }
-  }
-};
-
-/**
- * Apply an operator to evaluated arguments
- */
-const applyOp = (op: JsonLogicOpTag, args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  switch (op) {
-    // Logical
-    case '!':
-      return ok(boolValue(!isTruthy(args[0] ?? nullValue())));
-    case '!!':
-      return ok(boolValue(isTruthy(args[0] ?? nullValue())));
-
-    // Comparison
-    case '==':
-      return ok(boolValue(looseEquals(args[0] ?? nullValue(), args[1] ?? nullValue())));
-    case '===':
-      return ok(boolValue(strictEquals(args[0] ?? nullValue(), args[1] ?? nullValue())));
-    case '!=':
-      return ok(boolValue(!looseEquals(args[0] ?? nullValue(), args[1] ?? nullValue())));
-    case '!==':
-      return ok(boolValue(!strictEquals(args[0] ?? nullValue(), args[1] ?? nullValue())));
-
-    case '<':
-      return evalComparison(args, (a, b) => a < b);
-    case '<=':
-      return evalComparison(args, (a, b) => a <= b);
-    case '>':
-      return evalComparison(args, (a, b) => a > b);
-    case '>=':
-      return evalComparison(args, (a, b) => a >= b);
-
-    // Arithmetic
-    case '+':
-      return evalAdd(args);
-    case '-':
-      return evalSubtract(args);
-    case '*':
-      return evalMultiply(args);
-    case '/':
-      return evalDivide(args);
-    case '%':
-      return evalModulo(args);
-    case 'max':
-      return evalMinMax(args, 'max');
-    case 'min':
-      return evalMinMax(args, 'min');
-    case 'abs':
-      return evalAbs(args);
-    case 'round':
-      return evalRound(args);
-    case 'floor':
-      return evalFloor(args);
-    case 'ceil':
-      return evalCeil(args);
-    case 'pow':
-      return evalPow(args);
-
-    // String
-    case 'cat':
-      return ok(strValue(args.map((a) => toString(a)).join('')));
-    case 'substr':
-      return evalSubstr(args);
-    case 'lower':
-      return ok(strValue(toString(args[0] ?? nullValue()).toLowerCase()));
-    case 'upper':
-      return ok(strValue(toString(args[0] ?? nullValue()).toUpperCase()));
-    case 'trim':
-      return ok(strValue(toString(args[0] ?? nullValue()).trim()));
-    case 'join':
-      return evalJoin(args);
-    case 'split':
-      return evalSplit(args);
-    case 'startsWith':
-      return evalStartsWith(args);
-    case 'endsWith':
-      return evalEndsWith(args);
-
-    // Array
-    case 'merge':
-      return evalMerge(args);
-    case 'in':
-      return evalIn(args);
-    case 'intersect':
-      return evalIntersect(args);
-    case 'unique':
-      return evalUnique(args);
-    case 'slice':
-      return evalSlice(args);
-    case 'reverse':
-      return evalReverse(args);
-    case 'flatten':
-      return evalFlatten(args);
-
-    // Object
-    case 'keys':
-      return evalKeys(args);
-    case 'values':
-      return evalValues(args);
-    case 'get':
-      return evalGet(args);
-    case 'has':
-      return evalHas(args);
-    case 'entries':
-      return evalEntries(args);
-
-    // Utility
-    case 'length':
-      return evalLength(args);
-    case 'typeof':
-      return ok(strValue((args[0] ?? nullValue()).tag));
-    case 'default':
-      return ok(args.find((a) => isTruthy(a)) ?? nullValue());
-    case 'exists':
-      return ok(boolValue(!isNull(args[0] ?? nullValue())));
-    case 'missing':
-      return evalMissing(args);
-    case 'missing_some':
-      return evalMissingSome(args);
-
-    case 'noop':
-      return err(new JsonLogicRuntimeError('Unexpected noop operator'));
-
-    default:
-      return err(new JsonLogicRuntimeError(`Unknown operator: ${op}`));
-  }
-};
-
-// ============= Operator Implementations =============
-
-// Comparison with chaining: [1, 2, 3] means 1 < 2 < 3
-const evalComparison = (
-  args: JsonLogicValue[],
-  cmp: (a: number, b: number) => boolean
-): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) {
-    return ok(boolValue(true));
+    return fail('Unexpected input to unique');
   }
 
-  for (let i = 0; i < args.length - 1; i++) {
-    const a = toNumber(args[i]);
-    const b = toNumber(args[i + 1]);
-    if (a === null || b === null) {
-      return ok(boolValue(false));
+  private opSlice(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'array' && values[1].tag === 'int') {
+      const arr = values[0].value;
+      const len = BigInt(arr.length);
+      const s = bigintToI64(values[1].value, 'slice start');
+      let startIdx = s < 0n ? len + s : s;
+      if (startIdx < 0n) startIdx = 0n;
+      if (startIdx > len) startIdx = len;
+      return arrayValue(arr.slice(Number(startIdx)));
     }
-    if (!cmp(a, b)) {
-      return ok(boolValue(false));
+    if (
+      values.length === 3 &&
+      values[0].tag === 'array' &&
+      values[1].tag === 'int' &&
+      values[2].tag === 'int'
+    ) {
+      const arr = values[0].value;
+      const len = BigInt(arr.length);
+      const s = bigintToI64(values[1].value, 'slice start');
+      const e = bigintToI64(values[2].value, 'slice end');
+      let startIdx = s < 0n ? len + s : s;
+      if (startIdx < 0n) startIdx = 0n;
+      if (startIdx > len) startIdx = len;
+      let endIdx = e < 0n ? len + e : e;
+      if (endIdx < 0n) endIdx = 0n;
+      if (endIdx > len) endIdx = len;
+      if (endIdx <= startIdx) {
+        return arrayValue([]);
+      }
+      return arrayValue(arr.slice(Number(startIdx), Number(endIdx)));
     }
+    return fail('Unexpected input to slice');
   }
 
-  return ok(boolValue(true));
-};
-
-// Add: unary +, binary +, or variadic sum
-const evalAdd = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(intValue(0n));
-
-  // Unary: coerce to number
-  if (args.length === 1) {
-    const n = toNumber(args[0]);
-    if (n === null) return ok(intValue(0n));
-    if (Number.isInteger(n)) return ok(intValue(BigInt(n)));
-    return ok(floatValue(n));
+  private opReverse(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      return arrayValue([...values[0].value].reverse());
+    }
+    return fail('Unexpected input to reverse');
   }
 
-  // Variadic sum
-  let sum = 0;
-  let isIntResult = true;
-  for (const arg of args) {
-    const n = toNumber(arg);
-    if (n === null) continue;
-    sum += n;
-    if (!Number.isInteger(n)) isIntResult = false;
+  private opFlatten(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      const out: JsonLogicValue[] = [];
+      for (const el of values[0].value) {
+        if (el.tag === 'array') {
+          out.push(...el.value);
+        } else {
+          out.push(el);
+        }
+      }
+      return arrayValue(out);
+    }
+    return fail('Unexpected input to flatten');
   }
 
-  if (isIntResult && Number.isSafeInteger(sum)) {
-    return ok(intValue(BigInt(sum)));
-  }
-  return ok(floatValue(sum));
-};
-
-// Subtract: unary negation or binary subtraction
-const evalSubtract = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(intValue(0n));
-
-  if (args.length === 1) {
-    const n = toNumber(args[0]);
-    if (n === null) return ok(intValue(0n));
-    if (Number.isInteger(n)) return ok(intValue(BigInt(-n)));
-    return ok(floatValue(-n));
+  private opTrim(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'string') {
+      // Scala String.trim removes chars <= U+0020 from both ends.
+      const s = values[0].value;
+      let start = 0;
+      let end = s.length;
+      while (start < end && s.charCodeAt(start) <= 0x20) start++;
+      while (end > start && s.charCodeAt(end - 1) <= 0x20) end--;
+      return strValue(s.substring(start, end));
+    }
+    return fail('Unexpected input to trim');
   }
 
-  const a = toNumber(args[0]);
-  const b = toNumber(args[1]);
-  if (a === null || b === null) return ok(nullValue());
-
-  const result = a - b;
-  if (Number.isInteger(result) && Number.isSafeInteger(result)) {
-    return ok(intValue(BigInt(result)));
-  }
-  return ok(floatValue(result));
-};
-
-// Multiply: variadic product
-const evalMultiply = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(intValue(1n));
-
-  let product = 1;
-  let isIntResult = true;
-  for (const arg of args) {
-    const n = toNumber(arg);
-    if (n === null) return ok(nullValue());
-    product *= n;
-    if (!Number.isInteger(n)) isIntResult = false;
+  private opStartsWith(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2) {
+      const [a, b] = values;
+      if (a.tag === 'string' && b.tag === 'string') {
+        return boolValue(a.value.startsWith(b.value));
+      }
+      if (a.tag === 'string' && b.tag === 'null') return boolValue(false);
+      if (a.tag === 'null') return boolValue(false);
+    }
+    return fail('Unexpected input to startsWith');
   }
 
-  if (isIntResult && Number.isSafeInteger(product)) {
-    return ok(intValue(BigInt(product)));
+  private opEndsWith(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2) {
+      const [a, b] = values;
+      if (a.tag === 'string' && b.tag === 'string') {
+        return boolValue(a.value.endsWith(b.value));
+      }
+      if (a.tag === 'string' && b.tag === 'null') return boolValue(false);
+      if (a.tag === 'null') return boolValue(false);
+    }
+    return fail('Unexpected input to endsWith');
   }
-  return ok(floatValue(product));
-};
 
-// Divide
-const evalDivide = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(nullValue());
+  // --- utility -----------------------------------------------------------------
 
-  const a = toNumber(args[0]);
-  const b = toNumber(args[1]);
-  if (a === null || b === null) return ok(nullValue());
-  if (b === 0) return err(new JsonLogicDivisionByZeroError());
-
-  return ok(floatValue(a / b));
-};
-
-// Modulo
-const evalModulo = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(nullValue());
-
-  const a = toNumber(args[0]);
-  const b = toNumber(args[1]);
-  if (a === null || b === null) return ok(nullValue());
-  if (b === 0) return err(new JsonLogicDivisionByZeroError());
-
-  const result = a % b;
-  if (Number.isInteger(result) && Number.isSafeInteger(result)) {
-    return ok(intValue(BigInt(result)));
+  private opTypeof(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length !== 1) return fail('Unexpected input to typeof');
+    return strValue(values[0].tag);
   }
-  return ok(floatValue(result));
-};
 
-// Min/Max
-const evalMinMax = (
-  args: JsonLogicValue[],
-  mode: 'min' | 'max'
-): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(nullValue());
+  private opExists(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 1 && values[0].tag === 'array') {
+      return boolValue(!values[0].value.some((v) => v.tag === 'null'));
+    }
+    return boolValue(!values.some((v) => v.tag === 'null'));
+  }
 
-  // Flatten arrays
-  const values: number[] = [];
-  const collectValues = (arr: JsonLogicValue[]) => {
-    for (const v of arr) {
-      if (isArray(v)) {
-        collectValues(v.value);
-      } else {
-        const n = toNumber(v);
-        if (n !== null) values.push(n);
+  private opMissing(values: JsonLogicValue[], ctx?: JsonLogicValue): JsonLogicValue {
+    const list = values.length === 1 && values[0].tag === 'array' ? values[0].value : values;
+    const missing: JsonLogicValue[] = [];
+    for (const field of list) {
+      const m = this.fieldIfMissing(field, ctx);
+      if (m !== null) {
+        missing.push(m);
       }
     }
-  };
-  collectValues(args);
-
-  if (values.length === 0) return ok(nullValue());
-
-  const result = mode === 'min' ? Math.min(...values) : Math.max(...values);
-  if (Number.isInteger(result) && Number.isSafeInteger(result)) {
-    return ok(intValue(BigInt(result)));
-  }
-  return ok(floatValue(result));
-};
-
-// Abs
-const evalAbs = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const n = toNumber(args[0] ?? nullValue());
-  if (n === null) return ok(nullValue());
-
-  const result = Math.abs(n);
-  if (Number.isInteger(result) && Number.isSafeInteger(result)) {
-    return ok(intValue(BigInt(result)));
-  }
-  return ok(floatValue(result));
-};
-
-// Round
-const evalRound = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const n = toNumber(args[0] ?? nullValue());
-  if (n === null) return ok(nullValue());
-  return ok(intValue(BigInt(Math.round(n))));
-};
-
-// Floor
-const evalFloor = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const n = toNumber(args[0] ?? nullValue());
-  if (n === null) return ok(nullValue());
-  return ok(intValue(BigInt(Math.floor(n))));
-};
-
-// Ceil
-const evalCeil = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const n = toNumber(args[0] ?? nullValue());
-  if (n === null) return ok(nullValue());
-  return ok(intValue(BigInt(Math.ceil(n))));
-};
-
-// Pow
-const evalPow = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(nullValue());
-
-  const base = toNumber(args[0]);
-  const exp = toNumber(args[1]);
-  if (base === null || exp === null) return ok(nullValue());
-
-  const result = Math.pow(base, exp);
-  if (Number.isInteger(result) && Number.isSafeInteger(result)) {
-    return ok(intValue(BigInt(result)));
-  }
-  return ok(floatValue(result));
-};
-
-// Substr
-const evalSubstr = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(strValue(''));
-
-  const str = toString(args[0]);
-  const start = toNumber(args[1]) ?? 0;
-  const len = args.length > 2 ? toNumber(args[2]) : undefined;
-
-  // Handle negative start
-  const startIdx = start < 0 ? Math.max(0, str.length + start) : start;
-
-  if (len === undefined || len === null) {
-    return ok(strValue(str.substring(startIdx)));
+    return arrayValue(missing);
   }
 
-  // Handle negative length (means "from end")
-  if (len < 0) {
-    return ok(strValue(str.substring(startIdx, str.length + len)));
-  }
-
-  return ok(strValue(str.substring(startIdx, startIdx + len)));
-};
-
-// Join
-const evalJoin = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(strValue(''));
-
-  const arr = args[0];
-  const sep = args.length > 1 ? toString(args[1]) : '';
-
-  if (!isArray(arr)) {
-    return ok(strValue(toString(arr)));
-  }
-
-  return ok(strValue(arr.value.map((v) => toString(v)).join(sep)));
-};
-
-// Split
-const evalSplit = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(arrayValue([]));
-
-  const str = toString(args[0]);
-  const sep = args.length > 1 ? toString(args[1]) : '';
-
-  return ok(arrayValue(str.split(sep).map((s) => strValue(s))));
-};
-
-// StartsWith
-const evalStartsWith = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(boolValue(false));
-  const str = toString(args[0]);
-  const prefix = toString(args[1]);
-  return ok(boolValue(str.startsWith(prefix)));
-};
-
-// EndsWith
-const evalEndsWith = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(boolValue(false));
-  const str = toString(args[0]);
-  const suffix = toString(args[1]);
-  return ok(boolValue(str.endsWith(suffix)));
-};
-
-// Merge arrays
-const evalMerge = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const result: JsonLogicValue[] = [];
-  for (const arg of args) {
-    if (isArray(arg)) {
-      result.push(...arg.value);
+  private opMissingSome(values: JsonLogicValue[], ctx?: JsonLogicValue): JsonLogicValue {
+    let minRequired: bigint;
+    let arr: JsonLogicValue[];
+    if (values.length === 1 && values[0].tag === 'array') {
+      minRequired = 1n;
+      arr = values[0].value;
+    } else if (
+      values.length === 2 &&
+      values[0].tag === 'int' &&
+      values[0].value > 0n &&
+      values[1].tag === 'array'
+    ) {
+      minRequired = bigintToI64(values[0].value, 'missing_some min');
+      arr = values[1].value;
     } else {
-      result.push(arg);
+      return fail("Unexpected input for `missing_some'");
     }
-  }
-  return ok(arrayValue(result));
-};
-
-// In (element in array or substring in string)
-const evalIn = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(boolValue(false));
-
-  const needle = args[0];
-  const haystack = args[1];
-
-  if (isStr(haystack) && isStr(needle)) {
-    return ok(boolValue(haystack.value.includes(needle.value)));
-  }
-
-  if (isArray(haystack)) {
-    for (const item of haystack.value) {
-      if (looseEquals(needle, item)) {
-        return ok(boolValue(true));
+    const missing: JsonLogicValue[] = [];
+    for (const field of arr) {
+      const m = this.fieldIfMissing(field, ctx);
+      if (m !== null) {
+        missing.push(m);
       }
     }
-    return ok(boolValue(false));
-  }
-
-  return ok(boolValue(false));
-};
-
-// Intersect arrays
-const evalIntersect = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length === 0) return ok(arrayValue([]));
-  if (args.length === 1) {
-    return isArray(args[0]) ? ok(args[0]) : ok(arrayValue([args[0]]));
-  }
-
-  const first = args[0];
-  const second = args[1];
-
-  if (!isArray(first) || !isArray(second)) {
-    return ok(arrayValue([]));
-  }
-
-  const result = first.value.filter((a) => second.value.some((b) => looseEquals(a, b)));
-  return ok(arrayValue(result));
-};
-
-// Unique
-const evalUnique = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const arr = args[0];
-  if (!isArray(arr)) return ok(arrayValue([]));
-
-  const seen: JsonLogicValue[] = [];
-  const result: JsonLogicValue[] = [];
-
-  for (const item of arr.value) {
-    if (!seen.some((s) => strictEquals(s, item))) {
-      seen.push(item);
-      result.push(item);
+    const present = BigInt(arr.length) - BigInt(missing.length);
+    if (present >= minRequired) {
+      return arrayValue([]);
     }
+    return arrayValue(missing);
   }
 
-  return ok(arrayValue(result));
-};
-
-// Slice
-const evalSlice = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const arr = args[0];
-  if (!isArray(arr)) return ok(arrayValue([]));
-
-  const start = args.length > 1 ? (toNumber(args[1]) ?? 0) : 0;
-  const end = args.length > 2 ? (toNumber(args[2]) ?? undefined) : undefined;
-
-  return ok(arrayValue(arr.value.slice(start, end)));
-};
-
-// Reverse
-const evalReverse = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const arr = args[0];
-  if (!isArray(arr)) {
-    if (isStr(arr)) {
-      return ok(strValue(arr.value.split('').reverse().join('')));
+  /**
+   * Returns the field (a key name) if it is missing from the data, else null.
+   * Mirrors Rust `field_if_missing` / Scala `isFieldMissing`.
+   */
+  private fieldIfMissing(field: JsonLogicValue, ctx?: JsonLogicValue): JsonLogicValue | null {
+    let key: string;
+    switch (field.tag) {
+      case 'string':
+        key = field.value;
+        break;
+      case 'int':
+        key = field.value.toString();
+        break;
+      case 'float':
+        key = field.value.toPlainString();
+        break;
+      default:
+        return field;
     }
-    return ok(arrayValue([]));
+    const looked = this.getVar(key, ctx);
+    return looked.tag === 'null' ? field : null;
   }
-  return ok(arrayValue([...arr.value].reverse()));
-};
-
-// Flatten
-const evalFlatten = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const arr = args[0];
-  if (!isArray(arr)) return ok(arrayValue([arr]));
-
-  const depth = args.length > 1 ? (toNumber(args[1]) ?? 1) : 1;
-
-  const flatten = (arr: JsonLogicValue[], d: number): JsonLogicValue[] => {
-    if (d <= 0) return arr;
-    const result: JsonLogicValue[] = [];
-    for (const item of arr) {
-      if (isArray(item)) {
-        result.push(...flatten(item.value, d - 1));
-      } else {
-        result.push(item);
-      }
-    }
-    return result;
-  };
-
-  return ok(arrayValue(flatten(arr.value, depth)));
-};
-
-// Keys
-const evalKeys = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const obj = args[0];
-  if (!isMap(obj)) return ok(arrayValue([]));
-  return ok(arrayValue(Object.keys(obj.value).map((k) => strValue(k))));
-};
-
-// Values
-const evalValues = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const obj = args[0];
-  if (!isMap(obj)) return ok(arrayValue([]));
-  return ok(arrayValue(Object.values(obj.value)));
-};
-
-// Get (nested property access)
-const evalGet = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(nullValue());
-
-  const obj = args[0];
-  const key = toString(args[1]);
-  const defaultVal = args.length > 2 ? args[2] : nullValue();
-
-  const result = getChild(obj, key);
-  return ok(isNull(result) ? defaultVal : result);
-};
-
-// Has (check if key exists)
-const evalHas = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(boolValue(false));
-
-  const obj = args[0];
-  const key = toString(args[1]);
-
-  if (isMap(obj)) {
-    return ok(boolValue(key in obj.value));
-  }
-
-  if (isArray(obj)) {
-    const idx = parseInt(key, 10);
-    return ok(boolValue(!isNaN(idx) && idx >= 0 && idx < obj.value.length));
-  }
-
-  return ok(boolValue(false));
-};
-
-// Entries (key-value pairs)
-const evalEntries = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const obj = args[0];
-  if (!isMap(obj)) return ok(arrayValue([]));
-
-  const entries = Object.entries(obj.value).map(([k, v]) => arrayValue([strValue(k), v]));
-  return ok(arrayValue(entries));
-};
-
-// Length
-const evalLength = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  const val = args[0] ?? nullValue();
-
-  if (isStr(val)) return ok(intValue(BigInt(val.value.length)));
-  if (isArray(val)) return ok(intValue(BigInt(val.value.length)));
-  if (isMap(val)) return ok(intValue(BigInt(Object.keys(val.value).length)));
-
-  return ok(intValue(0n));
-};
-
-// Missing
-const evalMissing = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  // Flatten args and check each key
-  const keys: string[] = [];
-  const collectKeys = (arr: JsonLogicValue[]) => {
-    for (const v of arr) {
-      if (isArray(v)) collectKeys(v.value);
-      else if (isStr(v)) keys.push(v.value);
-    }
-  };
-  collectKeys(args);
-
-  // Missing keys are returned
-  const missing: JsonLogicValue[] = [];
-  for (const key of keys) {
-    // Check if key exists in data
-    // This is simplified - full implementation would use var lookup
-    missing.push(strValue(key));
-  }
-
-  return ok(arrayValue(missing));
-};
-
-// Missing some (simplified implementation)
-const evalMissingSome = (args: JsonLogicValue[]): JsonLogicResult<JsonLogicValue> => {
-  if (args.length < 2) return ok(arrayValue([]));
-
-  // args[0] = minimum required, args[1] = keys to check
-  // Full implementation would check how many keys exist and compare to minimum
-  const keys = args[1];
-  if (!isArray(keys)) return ok(arrayValue([]));
-
-  return ok(arrayValue([]));
-};
-
-// ============= Control Flow with Lazy Evaluation =============
-
-// If-else
-const evalIf = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  // if(cond, then, else) or if(c1, t1, c2, t2, ..., else)
-  for (let i = 0; i < argExprs.length - 1; i += 2) {
-    const condResult = evalExpr(argExprs[i], ctx);
-    if (!condResult.ok) return condResult;
-
-    if (isTruthy(condResult.value)) {
-      return evalExpr(argExprs[i + 1], ctx);
-    }
-  }
-
-  // Else clause (odd number of args)
-  if (argExprs.length % 2 === 1) {
-    return evalExpr(argExprs[argExprs.length - 1], ctx);
-  }
-
-  return ok(nullValue());
-};
-
-// And (short-circuit)
-const evalAnd = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  let last: JsonLogicValue = boolValue(true);
-
-  for (const expr of argExprs) {
-    const result = evalExpr(expr, ctx);
-    if (!result.ok) return result;
-
-    last = result.value;
-    if (!isTruthy(last)) {
-      return ok(last);
-    }
-  }
-
-  return ok(last);
-};
-
-// Or (short-circuit)
-const evalOr = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  let last: JsonLogicValue = boolValue(false);
-
-  for (const expr of argExprs) {
-    const result = evalExpr(expr, ctx);
-    if (!result.ok) return result;
-
-    last = result.value;
-    if (isTruthy(last)) {
-      return ok(last);
-    }
-  }
-
-  return ok(last);
-};
-
-// Let (variable binding)
-//
-// Object-form `let` — `{"let": [{name: expr, ...}, body]}` — evaluates its
-// bindings in RFC-8785 sorted-key order (UTF-16 code units), the SAME ordering
-// the JSON canonicalizer uses, for crypto-determinism / byte-identical behaviour
-// across the Scala, Rust and TS impls. Bindings are evaluated SEQUENTIALLY, each
-// seeing prior bindings (and the outer scope) in context; the body sees all of
-// them. We reuse the canonicalizer's key ordering, which is JS's default
-// `Array.prototype.sort()` on strings (the exact comparator the `canonicalize`
-// dependency uses: `Object.keys(obj).sort()`).
-const evalLet = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(nullValue());
-
-  // let([{name: expr, ...}, body])
-  const bindingsExpr = argExprs[0];
-  const bodyExpr = argExprs[1];
-
-  // Extract the object-form bindings as (name -> bindingExpr) pairs WITHOUT
-  // evaluating them up-front, so each can be evaluated sequentially with prior
-  // bindings already in scope. Two parsed shapes carry object-form bindings:
-  //   - MapExpression  : at least one value is a sub-expression.
-  //   - ConstExpression(MapValue) : all values are constants (codec collapses it).
-  let bindingExprs: Record<string, JsonLogicExpression> | undefined;
-  if (bindingsExpr.tag === 'map') {
-    bindingExprs = bindingsExpr.entries;
-  } else if (bindingsExpr.tag === 'const' && isMap(bindingsExpr.value)) {
-    bindingExprs = Object.fromEntries(
-      Object.entries(bindingsExpr.value.value).map(([k, v]) => [k, constExpr(v)])
-    );
-  }
-
-  if (bindingExprs !== undefined) {
-    // RFC-8785 key order: default string sort == UTF-16 code-unit order, the same
-    // ordering the canonicalizer emits keys in.
-    const sortedNames = Object.keys(bindingExprs).sort();
-
-    let accumulated: Record<string, JsonLogicValue> = {};
-    for (const name of sortedNames) {
-      const bindingCtx: JsonLogicValue = isMap(ctx.data)
-        ? mapValue({ ...ctx.data.value, ...accumulated })
-        : mapValue({ ...accumulated });
-      const r = evalExpr(bindingExprs[name], { data: bindingCtx, context: ctx.context });
-      if (!r.ok) return r;
-      accumulated = { ...accumulated, [name]: r.value };
-    }
-
-    const bodyCtx: JsonLogicValue = isMap(ctx.data)
-      ? mapValue({ ...ctx.data.value, ...accumulated })
-      : mapValue({ ...accumulated });
-    return evalExpr(bodyExpr, { data: bodyCtx, context: ctx.context });
-  }
-
-  // General form: the first arg is some other expression that evaluates to a map.
-  // Evaluate it and merge (no sequential-scope semantics apply here).
-  const bindingsResult = evalExpr(bindingsExpr, ctx);
-  if (!bindingsResult.ok) return bindingsResult;
-
-  const bindings = bindingsResult.value;
-  if (!isMap(bindings)) {
-    return err(new JsonLogicTypeError('let', 'map', bindings.tag));
-  }
-
-  // Create new context with bindings merged in
-  const newContext: JsonLogicValue = isMap(ctx.data)
-    ? mapValue({ ...ctx.data.value, ...bindings.value })
-    : bindings;
-
-  return evalExpr(bodyExpr, { data: newContext, context: ctx.context });
-};
-
-// Map (iterate over array)
-const evalMapOp = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(arrayValue([]));
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(arrayValue([]));
-
-  const mapperExpr = argExprs[1];
-  const results: JsonLogicValue[] = [];
-
-  for (const item of arr.value) {
-    // The current item becomes the new data for the mapper expression
-    // { var: '' } will return the item
-    const itemResult = evalExpr(mapperExpr, { data: item });
-    if (!itemResult.ok) return itemResult;
-    results.push(itemResult.value);
-  }
-
-  return ok(arrayValue(results));
-};
-
-// Filter
-const evalFilter = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(arrayValue([]));
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(arrayValue([]));
-
-  const predicateExpr = argExprs[1];
-  const results: JsonLogicValue[] = [];
-
-  for (const item of arr.value) {
-    const predResult = evalExpr(predicateExpr, { data: item });
-    if (!predResult.ok) return predResult;
-
-    if (isTruthy(predResult.value)) {
-      results.push(item);
-    }
-  }
-
-  return ok(arrayValue(results));
-};
-
-// Reduce
-const evalReduce = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 3) return ok(nullValue());
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(nullValue());
-
-  const reducerExpr = argExprs[1];
-  const initialResult = evalExpr(argExprs[2], ctx);
-  if (!initialResult.ok) return initialResult;
-
-  let accumulator = initialResult.value;
-
-  for (const item of arr.value) {
-    // Reducer gets {current: item, accumulator: acc}
-    const reducerData = mapValue({
-      current: item,
-      accumulator,
-    });
-
-    const result = evalExpr(reducerExpr, { data: reducerData, context: ctx.data });
-    if (!result.ok) return result;
-
-    accumulator = result.value;
-  }
-
-  return ok(accumulator);
-};
-
-// All
-const evalAll = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(boolValue(true));
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(boolValue(false));
-  if (arr.value.length === 0) return ok(boolValue(false));
-
-  const predicateExpr = argExprs[1];
-
-  for (const item of arr.value) {
-    const predResult = evalExpr(predicateExpr, { data: item });
-    if (!predResult.ok) return predResult;
-
-    if (!isTruthy(predResult.value)) {
-      return ok(boolValue(false));
-    }
-  }
-
-  return ok(boolValue(true));
-};
-
-// Some
-const evalSome = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(boolValue(false));
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(boolValue(false));
-
-  const predicateExpr = argExprs[1];
-
-  for (const item of arr.value) {
-    const predResult = evalExpr(predicateExpr, { data: item });
-    if (!predResult.ok) return predResult;
-
-    if (isTruthy(predResult.value)) {
-      return ok(boolValue(true));
-    }
-  }
-
-  return ok(boolValue(false));
-};
-
-// None
-const evalNone = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  const someResult = evalSome(argExprs, ctx);
-  if (!someResult.ok) return someResult;
-
-  return ok(boolValue(!isTruthy(someResult.value)));
-};
-
-// Find
-const evalFind = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(nullValue());
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(nullValue());
-
-  const predicateExpr = argExprs[1];
-
-  for (const item of arr.value) {
-    const predResult = evalExpr(predicateExpr, { data: item });
-    if (!predResult.ok) return predResult;
-
-    if (isTruthy(predResult.value)) {
-      return ok(item);
-    }
-  }
-
-  return ok(nullValue());
-};
-
-// Count (count matching items)
-const evalCount = (
-  argExprs: JsonLogicExpression[],
-  ctx: EvaluationContext
-): JsonLogicResult<JsonLogicValue> => {
-  if (argExprs.length < 2) return ok(intValue(0n));
-
-  const arrResult = evalExpr(argExprs[0], ctx);
-  if (!arrResult.ok) return arrResult;
-
-  const arr = arrResult.value;
-  if (!isArray(arr)) return ok(intValue(0n));
-
-  const predicateExpr = argExprs[1];
-  let count = 0n;
-
-  for (const item of arr.value) {
-    const predResult = evalExpr(predicateExpr, { data: item });
-    if (!predResult.ok) return predResult;
-
-    if (isTruthy(predResult.value)) {
-      count++;
-    }
-  }
-
-  return ok(intValue(count));
-};
+}

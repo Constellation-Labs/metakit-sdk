@@ -72,10 +72,28 @@ export {
   isTruthy,
   getDefault,
   strictEquals,
+  toString,
+  ratioFromNumber,
+} from './value';
+
+export { Ratio } from './ratio';
+
+export {
+  type Numeric,
+  promoteToNumeric,
+  combineNumeric,
+  reduceNumeric,
+  compareNumeric,
+  parseBigInt,
+} from './numeric';
+
+export {
+  type Coerced,
+  coerceToPrimitive,
+  compareCoerced,
   looseEquals,
   toNumber,
-  toString,
-} from './value';
+} from './coercion';
 
 export {
   // Expression constructors
@@ -154,6 +172,7 @@ export {
 
 import { parseExpression, parseValue, encodeValue } from './codec';
 import { evaluate } from './evaluator';
+import { isTruthy as valueIsTruthy } from './value';
 import type { JsonLogicValue } from './value';
 
 /**
@@ -206,22 +225,7 @@ export const jsonLogic = {
    * Check if a value is truthy (according to JSON Logic rules)
    */
   truthy(value: unknown): boolean {
-    const v = parseValue(value);
-    return v.tag === 'null'
-      ? false
-      : v.tag === 'bool'
-        ? v.value
-        : v.tag === 'int'
-          ? v.value !== 0n
-          : v.tag === 'float'
-            ? v.value !== 0
-            : v.tag === 'string'
-              ? v.value.length > 0
-              : v.tag === 'array'
-                ? v.value.length > 0
-                : v.tag === 'map'
-                  ? Object.keys(v.value).length > 0
-                  : false;
+    return valueIsTruthy(parseValue(value));
   },
 };
 

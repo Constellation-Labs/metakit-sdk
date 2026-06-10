@@ -45,12 +45,16 @@ export interface ArrayExpression extends JsonLogicExpressionBase {
 }
 
 /**
- * A map/object of expressions (not a literal map)
- * e.g., {"a": {"var": "x"}, "b": 1} when the map contains expressions
+ * A map/object of expressions (an object literal that is not an operator)
+ * e.g., {"a": {"var": "x"}, "b": 1}
+ *
+ * Entries are an insertion-ordered list of [key, expression] pairs, mirroring
+ * Rust's `Expression::Map(Vec<(String, Expression)>)` — prototype-safe and
+ * order-preserving.
  */
 export interface MapExpression extends JsonLogicExpressionBase {
   readonly tag: 'map';
-  readonly entries: Record<string, JsonLogicExpression>;
+  readonly entries: ReadonlyArray<readonly [string, JsonLogicExpression]>;
 }
 
 /**
@@ -98,9 +102,15 @@ export const arrayExpr = (elements: JsonLogicExpression[]): ArrayExpression => (
   elements,
 });
 
-export const mapExpr = (entries: Record<string, JsonLogicExpression>): MapExpression => ({
+export const mapExpr = (
+  entries:
+    | ReadonlyArray<readonly [string, JsonLogicExpression]>
+    | Record<string, JsonLogicExpression>
+): MapExpression => ({
   tag: 'map',
-  entries,
+  entries: Array.isArray(entries)
+    ? entries
+    : Object.entries(entries as Record<string, JsonLogicExpression>),
 });
 
 export const varExpr = (
