@@ -1,6 +1,6 @@
 {
   "description": "JSON Logic VM test vectors for cross-language compatibility",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "tests": [
     {
       "category": "constants",
@@ -227,6 +227,76 @@
           "expected": "2",
           "note": "UTF-16 code-unit key order: 'a' (U+0061) sorts before 'ä' (U+00E4), so a=1 then ä=a+1=2"
         }
+      ]
+    },
+    {
+      "category": "missing",
+      "cases": [
+        { "expr": "{\"missing\": [\"a\", \"b\"]}", "data": "{\"a\": 1}", "expected": "[\"b\"]" },
+        { "expr": "{\"missing\": [\"a\", \"b\"]}", "data": "{\"a\": 1, \"b\": 2}", "expected": "[]" },
+        { "expr": "{\"missing\": [\"a\", \"b\"]}", "data": "{}", "expected": "[\"a\", \"b\"]" },
+        { "expr": "{\"missing\": [[\"x.y\", \"x.z\"]]}", "data": "{\"x\": {\"y\": 1}}", "expected": "[\"x.z\"]", "note": "single array argument with dot paths" }
+      ]
+    },
+    {
+      "category": "missing_some",
+      "cases": [
+        { "expr": "{\"missing_some\": [1, [\"a\", \"b\", \"c\"]]}", "data": "{\"a\": 1}", "expected": "[]", "note": "minimum met -> empty" },
+        { "expr": "{\"missing_some\": [2, [\"a\", \"b\", \"c\"]]}", "data": "{\"a\": 1}", "expected": "[\"b\", \"c\"]", "note": "below minimum -> all missing keys" },
+        { "expr": "{\"missing_some\": [[\"a\", \"b\"]]}", "data": "{}", "expected": "[\"a\", \"b\"]", "note": "single-array form behaves like min=1" }
+      ]
+    },
+    {
+      "category": "reduce_no_initializer",
+      "cases": [
+        {
+          "expr": "{\"reduce\": [{\"var\": \"items\"}, {\"+\": [{\"var\": \"accumulator\"}, {\"var\": \"current\"}]}]}",
+          "data": "{\"items\": [1, 2, 3, 4]}",
+          "expected": "10",
+          "note": "2-arg reduce folds from the first element"
+        },
+        {
+          "expr": "{\"reduce\": [{\"var\": \"items\"}, {\"+\": [{\"var\": \"accumulator\"}, {\"var\": \"current\"}]}]}",
+          "data": "{\"items\": []}",
+          "expected": "null",
+          "note": "2-arg reduce of empty array is null"
+        }
+      ]
+    },
+    {
+      "category": "callback_scope",
+      "note": "Callbacks receive the element as a context OVERLAY; outer data stays visible",
+      "cases": [
+        {
+          "expr": "{\"map\": [{\"var\": \"items\"}, {\"*\": [{\"var\": \"\"}, {\"var\": \"factor\"}]}]}",
+          "data": "{\"items\": [1, 2, 3], \"factor\": 10}",
+          "expected": "[10, 20, 30]",
+          "note": "map callback reads outer var"
+        },
+        {
+          "expr": "{\"filter\": [{\"var\": \"items\"}, {\">\": [{\"var\": \"\"}, {\"var\": \"threshold\"}]}]}",
+          "data": "{\"items\": [1, 5, 10], \"threshold\": 4}",
+          "expected": "[5, 10]",
+          "note": "filter callback reads outer var"
+        },
+        {
+          "expr": "{\"reduce\": [{\"var\": \"items\"}, {\"+\": [{\"var\": \"accumulator\"}, {\"*\": [{\"var\": \"current\"}, {\"var\": \"factor\"}]}]}, 0]}",
+          "data": "{\"items\": [1, 2, 3], \"factor\": 10}",
+          "expected": "60",
+          "note": "reduce callback reads outer var alongside current/accumulator"
+        }
+      ]
+    },
+    {
+      "category": "exact_arithmetic",
+      "note": "Arithmetic is exact rational; no IEEE-754 drift",
+      "cases": [
+        { "expr": "{\"==\": [{\"+\": [0.1, 0.2]}, 0.3]}", "data": "{}", "expected": "true", "note": "0.1 + 0.2 == 0.3 exactly" },
+        { "expr": "{\"+\": [0.1, 0.2]}", "data": "{}", "expected": "0.3" },
+        { "expr": "{\"==\": [{\"*\": [{\"/\": [1, 3]}, 3]}, 1]}", "data": "{}", "expected": "true", "note": "(1/3)*3 == 1 exactly" },
+        { "expr": "{\"typeof\": [{\"/\": [10, 2]}]}", "data": "{}", "expected": "\"int\"", "note": "integral int division stays Int" },
+        { "expr": "{\"typeof\": [{\"/\": [7, 2]}]}", "data": "{}", "expected": "\"float\"" },
+        { "expr": "{\"cat\": [\"x=\", {\"/\": [7, 2]}]}", "data": "{}", "expected": "\"x=3.5\"", "note": "floats render as plain decimal strings" }
       ]
     },
     {
