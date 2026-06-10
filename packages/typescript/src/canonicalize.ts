@@ -1,11 +1,26 @@
 /**
  * RFC 8785 JSON Canonicalization
  *
- * Provides deterministic JSON serialization according to RFC 8785.
+ * Provides deterministic JSON serialization according to RFC 8785 (JCS).
  * This ensures identical JSON objects always produce identical strings.
+ *
+ * The serializer is vendored (no external dependency) and matches the
+ * reference implementations byte-for-byte:
+ * - metakit (Scala) `std.JsonCanonicalizer`
+ * - rust/jlvm-core `canonical.rs`
+ *
+ * Specifically:
+ * - Object keys are sorted by their UTF-16 code units (the JCS rule).
+ *   JavaScript's default `Array.prototype.sort()` comparator already sorts
+ *   strings by UTF-16 code units, so no custom comparator is needed.
+ * - Numbers serialize using the ECMAScript shortest-round-trip "Number to
+ *   String" algorithm, which `JSON.stringify` provides natively in JS
+ *   (the Scala impl ports this via DoubleSerializer / Rust via ryu-js).
+ *   `-0` serializes as `0`. NaN and Infinity throw.
+ * - Strings use ECMAScript `JSON.stringify` escaping, which is exactly the
+ *   JCS escaping set (\n \b \f \r \t \" \\ plus \u00XX for remaining C0
+ *   controls).
  */
-
-import canonicalizeLib from 'canonicalize';
 
 /**
  * Recursively drop null-valued object fields prior to canonicalization.
@@ -56,6 +71,65 @@ export function dropNullFields<T>(data: T): T {
 }
 
 /**
+ * Serialize a single value to its RFC 8785 canonical form.
+ *
+ * Returns `undefined` for values that have no JSON representation
+ * (`undefined`, functions, symbols), mirroring `JSON.stringify`:
+ * such object members are omitted and such array elements become `null`.
+ */
+function serializeJcs(value: unknown): string | undefined {
+  if (value === null) {
+    return 'null';
+  }
+
+  switch (typeof value) {
+    case 'boolean':
+      return value ? 'true' : 'false';
+
+    case 'number':
+      if (!Number.isFinite(value)) {
+        throw new Error('Cannot canonicalize non-finite number (NaN/Infinity)');
+      }
+      // ECMAScript shortest-round-trip serialization; JSON.stringify(-0) === '0'.
+      return JSON.stringify(value);
+
+    case 'string':
+      // ECMAScript JSON.stringify escaping == the JCS escaping set.
+      return JSON.stringify(value);
+
+    case 'bigint':
+      throw new Error(
+        'Cannot canonicalize BigInt: JCS numbers are IEEE-754 doubles; convert explicitly first'
+      );
+
+    case 'object':
+      break; // handled below
+
+    default:
+      // undefined, function, symbol — no JSON representation.
+      return undefined;
+  }
+
+  if (Array.isArray(value)) {
+    const parts = value.map((element) => serializeJcs(element) ?? 'null');
+    return `[${parts.join(',')}]`;
+  }
+
+  // Plain object: keys sorted by UTF-16 code units (JS default string sort).
+  const obj = value as Record<string, unknown>;
+  const keys = Object.keys(obj).sort();
+  const parts: string[] = [];
+  for (const key of keys) {
+    const serialized = serializeJcs(obj[key]);
+    if (serialized === undefined) {
+      continue; // omit members without a JSON representation
+    }
+    parts.push(`${JSON.stringify(key)}:${serialized}`);
+  }
+  return `{${parts.join(',')}}`;
+}
+
+/**
  * Canonicalize JSON data according to RFC 8785
  *
  * Null-valued object fields are dropped before canonicalization to match the
@@ -64,8 +138,8 @@ export function dropNullFields<T>(data: T): T {
  *
  * Key features:
  * - Null-valued object fields dropped (server-aligned; arrays/empties preserved)
- * - Object keys sorted by UTF-16BE binary comparison
- * - Numbers serialized in shortest decimal representation
+ * - Object keys sorted by UTF-16 code-unit comparison
+ * - Numbers serialized in ECMAScript shortest decimal representation
  * - No whitespace
  * - Proper Unicode escaping
  *
@@ -83,7 +157,7 @@ export function dropNullFields<T>(data: T): T {
  * ```
  */
 export function canonicalize<T>(data: T): string {
-  const result = canonicalizeLib(dropNullFields(data));
+  const result = serializeJcs(dropNullFields(data));
   if (result === undefined) {
     throw new Error('Failed to canonicalize data: data cannot be serialized to JSON');
   }
