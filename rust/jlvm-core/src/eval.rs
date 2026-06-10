@@ -183,8 +183,18 @@ impl<'a> Evaluator<'a> {
             [Expression::Map(entries), result] => {
                 // Convenience object form `{"let": [{name: expr}, result]}` as used by
                 // the conformance vectors. Each entry becomes a binding.
+                //
+                // Crypto-determinism: object-form bindings are evaluated in RFC-8785
+                // sorted-key order (UTF-16 code units), the SAME ordering the JSON
+                // canonicalizer uses for object keys, so all three impls (Scala/Rust/TS)
+                // are byte-identical. We reuse `canonical::utf16_cmp` (the comparator that
+                // backs `canonicalize`) rather than serde_json's incidental key order.
+                // Bindings are then evaluated sequentially, each seeing prior ones in
+                // scope. Array-form `let` keeps explicit insertion order (handled below).
+                let mut sorted: Vec<&(String, Expression)> = entries.iter().collect();
+                sorted.sort_by(|a, b| crate::canonical::utf16_cmp(&a.0, &b.0));
                 let mut acc: Vec<(String, Value)> = Vec::new();
-                for (name, value_expr) in entries {
+                for (name, value_expr) in sorted {
                     let binding_ctx = self.let_ctx(ctx, &acc);
                     let v = self.eval(value_expr, binding_ctx.as_ref())?;
                     acc.push((name.clone(), v));
@@ -1259,4 +1269,38 @@ fn bigint_to_i64(v: &BigInt) -> Option<i64> {
 fn bigint_to_u32(v: &BigInt) -> Option<u32> {
     use num_traits::ToPrimitive;
     v.to_u32()
+}
+
+#[cfg(test)]
+mod let_order_tests {
+    use crate::{decode_expression, evaluate, Value};
+
+    fn eval_str(expr_json: &str) -> Value {
+        let json: serde_json::Value = serde_json::from_str(expr_json).unwrap();
+        let expr = decode_expression(&json).unwrap();
+        evaluate(&expr, &Value::Map(Vec::new())).unwrap()
+    }
+
+    /// Object-form `let` evaluates bindings in RFC-8785 sorted-key order (UTF-16),
+    /// so `a` (=1) is bound before `b` (= a + 1 = 2) even though `b` is listed first.
+    /// Insertion order would leave `a` unbound when `b` is evaluated.
+    #[test]
+    fn object_let_evaluates_bindings_in_sorted_key_order() {
+        let v = eval_str(r#"{"let":[{"b":{"+":[{"var":"a"},1]},"a":1},{"var":"b"}]}"#);
+        assert!(v.deep_eq(&Value::int_from_i64(2)), "got {:?}", v);
+    }
+
+    /// Keys are ordered by UTF-16 code units: 'a' (U+0061) before 'ä' (U+00E4).
+    #[test]
+    fn object_let_sorts_keys_by_utf16_code_units() {
+        let v = eval_str(r#"{"let":[{"ä":{"+":[{"var":"a"},1]},"a":1},{"var":"ä"}]}"#);
+        assert!(v.deep_eq(&Value::int_from_i64(2)), "got {:?}", v);
+    }
+
+    /// Array-form `let` keeps explicit insertion order (unchanged behaviour).
+    #[test]
+    fn array_let_keeps_insertion_order() {
+        let v = eval_str(r#"{"let":[[["a",1],["b",{"+":[{"var":"a"},1]}]],{"var":"b"}]}"#);
+        assert!(v.deep_eq(&Value::int_from_i64(2)), "got {:?}", v);
+    }
 }

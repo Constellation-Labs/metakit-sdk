@@ -110,7 +110,11 @@ fn serialize_string(s: &str, out: &mut String) {
 
 /// Compare two strings by their UTF-16 code units, as required by RFC 8785 key
 /// ordering. Mirrors the Scala `TreeOrderedMap` comparator (UTF-16BE byte compare).
-fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
+///
+/// Exposed `pub(crate)` so the evaluator can reuse the exact same key ordering for
+/// object-form `let` bindings (crypto-determinism: object-let must evaluate bindings
+/// in the SAME order the canonicalizer emits keys, byte-identical across Scala/Rust/TS).
+pub(crate) fn utf16_cmp(a: &str, b: &str) -> std::cmp::Ordering {
     let mut ai = a.encode_utf16();
     let mut bi = b.encode_utf16();
     loop {

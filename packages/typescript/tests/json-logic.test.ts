@@ -359,5 +359,24 @@ describe('JSON Logic VM', () => {
 
       expect(jsonLogic.apply(expr, { x: 5 })).toBe(11);
     });
+
+    it('evaluates object-form let bindings in RFC-8785 sorted-key order', () => {
+      // `b` is listed first but references `a`; sorted order binds `a` (=1) first,
+      // then `b` = a + 1 = 2. Insertion order would leave `a` unbound when `b` runs.
+      const expr = {
+        let: [{ b: { '+': [{ var: 'a' }, 1] }, a: 1 }, { var: 'b' }],
+      };
+
+      expect(jsonLogic.apply(expr, {})).toBe(2);
+    });
+
+    it('sorts object-form let keys by UTF-16 code units (non-ASCII)', () => {
+      // 'a' (U+0061) sorts before 'ä' (U+00E4): a=1 then ä = a + 1 = 2.
+      const expr = {
+        let: [{ ä: { '+': [{ var: 'a' }, 1] }, a: 1 }, { var: 'ä' }],
+      };
+
+      expect(jsonLogic.apply(expr, {})).toBe(2);
+    });
   });
 });

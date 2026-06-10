@@ -6,6 +6,7 @@
  */
 
 import type { JsonLogicExpression } from './expression';
+import { constExpr } from './expression';
 import type { JsonLogicOpTag } from './operators';
 import type { JsonLogicValue } from './value';
 import {
@@ -904,6 +905,15 @@ const evalOr = (
 };
 
 // Let (variable binding)
+//
+// Object-form `let` — `{"let": [{name: expr, ...}, body]}` — evaluates its
+// bindings in RFC-8785 sorted-key order (UTF-16 code units), the SAME ordering
+// the JSON canonicalizer uses, for crypto-determinism / byte-identical behaviour
+// across the Scala, Rust and TS impls. Bindings are evaluated SEQUENTIALLY, each
+// seeing prior bindings (and the outer scope) in context; the body sees all of
+// them. We reuse the canonicalizer's key ordering, which is JS's default
+// `Array.prototype.sort()` on strings (the exact comparator the `canonicalize`
+// dependency uses: `Object.keys(obj).sort()`).
 const evalLet = (
   argExprs: JsonLogicExpression[],
   ctx: EvaluationContext
@@ -914,7 +924,43 @@ const evalLet = (
   const bindingsExpr = argExprs[0];
   const bodyExpr = argExprs[1];
 
-  // Evaluate bindings expression to get the bindings object
+  // Extract the object-form bindings as (name -> bindingExpr) pairs WITHOUT
+  // evaluating them up-front, so each can be evaluated sequentially with prior
+  // bindings already in scope. Two parsed shapes carry object-form bindings:
+  //   - MapExpression  : at least one value is a sub-expression.
+  //   - ConstExpression(MapValue) : all values are constants (codec collapses it).
+  let bindingExprs: Record<string, JsonLogicExpression> | undefined;
+  if (bindingsExpr.tag === 'map') {
+    bindingExprs = bindingsExpr.entries;
+  } else if (bindingsExpr.tag === 'const' && isMap(bindingsExpr.value)) {
+    bindingExprs = Object.fromEntries(
+      Object.entries(bindingsExpr.value.value).map(([k, v]) => [k, constExpr(v)])
+    );
+  }
+
+  if (bindingExprs !== undefined) {
+    // RFC-8785 key order: default string sort == UTF-16 code-unit order, the same
+    // ordering the canonicalizer emits keys in.
+    const sortedNames = Object.keys(bindingExprs).sort();
+
+    let accumulated: Record<string, JsonLogicValue> = {};
+    for (const name of sortedNames) {
+      const bindingCtx: JsonLogicValue = isMap(ctx.data)
+        ? mapValue({ ...ctx.data.value, ...accumulated })
+        : mapValue({ ...accumulated });
+      const r = evalExpr(bindingExprs[name], { data: bindingCtx, context: ctx.context });
+      if (!r.ok) return r;
+      accumulated = { ...accumulated, [name]: r.value };
+    }
+
+    const bodyCtx: JsonLogicValue = isMap(ctx.data)
+      ? mapValue({ ...ctx.data.value, ...accumulated })
+      : mapValue({ ...accumulated });
+    return evalExpr(bodyExpr, { data: bodyCtx, context: ctx.context });
+  }
+
+  // General form: the first arg is some other expression that evaluates to a map.
+  // Evaluate it and merge (no sequential-scope semantics apply here).
   const bindingsResult = evalExpr(bindingsExpr, ctx);
   if (!bindingsResult.ok) return bindingsResult;
 
