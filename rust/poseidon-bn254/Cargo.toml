@@ -1,0 +1,22 @@
+[package]
+name = "poseidon-bn254"
+version = "0.1.0"
+edition = "2021"
+authors = ["Constellation Network"]
+description = "Circomlib-compatible Poseidon hash over BN254 Fr and a fixed-depth sparse Poseidon Merkle tree, byte-compatible with metakit's Scala implementation. Foundation for the zk shielded-transfer VM."
+license = "Apache-2.0"
+repository = "https://github.com/Constellation-Labs/metakit-sdk"
+
+[dependencies]
+# Arbitrary-precision unsigned integers reduced modulo the BN254 Fr modulus,
+# mirroring Scala's `BigInt mod R` exactly (no Montgomery form). Works natively
+# and inside the SP1 RISC-V guest.
+num-bigint = "0.4"
+num-traits = "0.2"
+
+[dev-dependencies]
+hex = "0.4"
+
+[lib]
+name = "poseidon_bn254"
+path = "src/lib.rs"

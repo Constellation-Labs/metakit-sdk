@@ -100,8 +100,10 @@ where
     if values.is_empty() {
         return Err("Cannot reduce empty list".into());
     }
-    let numerics: Vec<Numeric> =
-        values.iter().map(promote_to_numeric).collect::<Result<Vec<_>, _>>()?;
+    let numerics: Vec<Numeric> = values
+        .iter()
+        .map(promote_to_numeric)
+        .collect::<Result<Vec<_>, _>>()?;
     let has_float = numerics.iter().any(|n| n.is_float());
     let mut iter = numerics.iter().map(|n| n.to_ratio());
     let mut acc = iter.next().unwrap();

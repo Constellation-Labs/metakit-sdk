@@ -19,6 +19,19 @@ ryu-js = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
+# --- ZK / crypto opcodes (Tier 1) -------------------------------------------
+# Circomlib-compatible Poseidon over BN254 Fr + fixed-depth Poseidon Merkle tree,
+# already byte-compatible with the Scala reference. Backs `poseidon` and `pmt_verify`.
+poseidon-bn254 = { path = "../poseidon-bn254" }
+# BN254 (alt_bn128) G1 curve arithmetic for `schnorr_verify`. Matches the Besu
+# AltBn128Point semantics used by the Scala `Bn254.G1` (generator (1, 2), affine
+# point-at-infinity = (0, 0)).
+ark-bn254 = "0.4"
+ark-ec = "0.4"
+ark-ff = "0.4"
+# SHA-256 for the Schnorr challenge c = SHA256(R || pk || msg) mod r.
+sha2 = "0.10"
+
 [dev-dependencies]
 serde_json = "1.0"
 
@@ -29,3 +42,7 @@ path = "src/lib.rs"
 [[test]]
 name = "differential"
 path = "tests/differential.rs"
+
+[[test]]
+name = "zk_differential"
+path = "tests/zk_differential.rs"
