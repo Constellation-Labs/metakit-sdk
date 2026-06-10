@@ -1,0 +1,24 @@
+[package]
+name = "zk-jlvm-script"
+version = "0.1.0"
+edition = "2021"
+default-run = "zk-jlvm"
+
+[[bin]]
+name = "zk-jlvm"
+path = "src/main.rs"
+
+[dependencies]
+sp1-sdk = { version = "6.0.1", features = ["blocking"] }
+jlvm-core = { path = "../../jlvm-core" }
+zk-jlvm-lib = { path = "../lib" }
+alloy-sol-types = { workspace = true }
+alloy-primitives = { workspace = true }
+clap = { version = "4.0", features = ["derive", "env"] }
+serde_json = "1.0"
+hex = "0.4.3"
+tracing = "0.1.40"
+dotenv = "0.15.0"
+
+[build-dependencies]
+sp1-build = "6.0.1"
