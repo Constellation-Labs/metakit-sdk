@@ -353,3 +353,46 @@ mod error_handling {
         assert!(matches!(result, Err(SdkError::NoPrivateKeys)));
     }
 }
+
+mod null_dropping_signatures {
+    use super::*;
+
+    /// Explicit-null and absent optional fields must produce identical
+    /// signatures (content-hash rule: drop nulls before RFC 8785).
+    #[test]
+    fn absent_equals_explicit_null_signature() {
+        let key_pair = generate_key_pair();
+        let with_null = json!({"id": "test", "value": 42, "nested": null});
+        let absent = json!({"id": "test", "value": 42});
+
+        let proof_null = sign_data_update(&with_null, &key_pair.private_key).unwrap();
+        let proof_absent = sign_data_update(&absent, &key_pair.private_key).unwrap();
+        assert_eq!(proof_null.signature, proof_absent.signature);
+    }
+
+    /// Array nulls are preserved: removing one changes the signature.
+    #[test]
+    fn array_nulls_are_significant() {
+        let key_pair = generate_key_pair();
+        let with_array_null = json!({"xs": [1, null, 3]});
+        let without = json!({"xs": [1, 3]});
+
+        let proof_a = sign_data_update(&with_array_null, &key_pair.private_key).unwrap();
+        let proof_b = sign_data_update(&without, &key_pair.private_key).unwrap();
+        assert_ne!(proof_a.signature, proof_b.signature);
+    }
+
+    /// A null-containing payload signs over the dropped bytes and verifies.
+    #[test]
+    fn null_containing_payload_round_trips() {
+        let key_pair = generate_key_pair();
+        let data = json!({"id": "test", "meta": null, "xs": [null, 1]});
+        let proof = sign_data_update(&data, &key_pair.private_key).unwrap();
+        let signed = Signed {
+            value: data,
+            proofs: vec![proof],
+        };
+        let result = verify(&signed, true);
+        assert!(result.is_valid);
+    }
+}

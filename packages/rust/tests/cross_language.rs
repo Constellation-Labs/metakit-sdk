@@ -220,3 +220,48 @@ mod by_source_language {
         test_language_vectors("go");
     }
 }
+
+mod content_hash_rule {
+    //! Pins the normative content-hash rule (metakit docs/content-hash.md):
+    //! drop null OBJECT fields recursively, PRESERVE array nulls, then RFC 8785.
+    //! The expected hash below is the exact value pinned by metakit's
+    //! JsonBinaryHasherSuite for the same fixture (arrays.json), so Rust bytes
+    //! are cross-checked against the Scala suite.
+
+    use constellation_sdk::{canonicalize, hash_bytes};
+    use serde_json::json;
+
+    #[test]
+    fn null_dropping_matches_scala_arrays_fixture() {
+        // metakit src/test/resources/input/arrays.json
+        let data = json!([56, {"d": true, "10": null, "1": []}]);
+        let canonical = canonicalize(&data).unwrap();
+        // null "10" dropped, keys sorted — identical to metakit's canonical form
+        assert_eq!(canonical, r#"[56,{"1":[],"d":true}]"#);
+
+        // sha256 over the canonical bytes — pinned in metakit JsonBinaryHasherSuite:
+        // "arrays.json should produce a known hash"
+        let hash = hash_bytes(canonical.as_bytes());
+        assert_eq!(
+            hash.value,
+            "060ba9d4be65e7b773f67328b6fd6a5360f8f66ef88d57351dbc6e39b46f2ea9"
+        );
+    }
+
+    #[test]
+    fn absent_equals_explicit_null_for_signing_bytes() {
+        use constellation_sdk::to_bytes;
+
+        let with_null = json!({"a": 1, "b": null, "c": {"d": null, "e": 2}, "f": [1, null, 3]});
+        let absent = json!({"a": 1, "c": {"e": 2}, "f": [1, null, 3]});
+
+        assert_eq!(
+            to_bytes(&with_null, true).unwrap(),
+            to_bytes(&absent, true).unwrap()
+        );
+        assert_eq!(
+            to_bytes(&with_null, false).unwrap(),
+            to_bytes(&absent, false).unwrap()
+        );
+    }
+}
