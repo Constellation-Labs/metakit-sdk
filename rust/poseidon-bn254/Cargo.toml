@@ -1,6 +1,6 @@
 [package]
 name = "poseidon-bn254"
-version = "0.1.0"
+version = "1.8.0-rc.1"
 edition = "2021"
 authors = ["Constellation Network"]
 description = "Circomlib-compatible Poseidon hash over BN254 Fr and a fixed-depth sparse Poseidon Merkle tree, byte-compatible with metakit's Scala implementation. Foundation for the zk shielded-transfer VM."

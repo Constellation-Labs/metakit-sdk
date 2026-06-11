@@ -1,6 +1,6 @@
 [package]
 name = "jlvm-core"
-version = "0.1.0"
+version = "1.8.0-rc.1"
 edition = "2021"
 authors = ["Constellation Network"]
 description = "Rust recreation of the metakit JSON Logic VM (JLVM), byte-compatible with the Scala evaluator. Foundation for a future zk-JLVM."
@@ -22,7 +22,10 @@ serde_json = "1.0"
 # --- ZK / crypto opcodes (Tier 1) -------------------------------------------
 # Circomlib-compatible Poseidon over BN254 Fr + fixed-depth Poseidon Merkle tree,
 # already byte-compatible with the Scala reference. Backs `poseidon` and `pmt_verify`.
-poseidon-bn254 = { path = "../poseidon-bn254" }
+# The `version` is required so `cargo package`/`publish` can rewrite this path
+# dependency into a registry dependency. Keep it in lock-step with the crate
+# version (the release workflow checks both against the tag).
+poseidon-bn254 = { path = "../poseidon-bn254", version = "1.8.0-rc.1" }
 # BN254 (alt_bn128) G1 curve arithmetic for `schnorr_verify`. Matches the Besu
 # AltBn128Point semantics used by the Scala `Bn254.G1` (generator (1, 2), affine
 # point-at-infinity = (0, 0)).
