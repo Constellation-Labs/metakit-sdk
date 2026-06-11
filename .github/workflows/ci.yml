@@ -261,6 +261,78 @@ jobs:
             ( cd rust/poseidon-bn254 && cargo test )
           fi
 
+  # Catch publish-time failures (manifest errors, packaging mistakes, the
+  # verify build) on every PR instead of on the release tag — the lesson from
+  # metakit's Maven release failing on scaladoc only at publish time. Mirrors
+  # what .github/workflows/release.yml runs for real. See docs/RELEASING.md.
+  publish-dry-run:
+    needs: changes
+    if: ${{ needs.changes.outputs.typescript == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.jlvm_core == 'true' || needs.changes.outputs.shared == 'true' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: packages/typescript/package-lock.json
+
+      - name: npm pack (build must succeed)
+        working-directory: packages/typescript
+        run: |
+          npm ci
+          npm run build
+          npm pack
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            rust/poseidon-bn254/target/
+            rust/jlvm-core/target/
+            packages/rust/target/
+          key: ${{ runner.os }}-cargo-publish-dry-run-${{ hashFiles('rust/jlvm-core/Cargo.toml', 'rust/poseidon-bn254/Cargo.toml', 'packages/rust/Cargo.toml') }}
+
+      # Same dependency order as release.yml. jlvm-core needs special handling:
+      # its poseidon-bn254 path dependency is rewritten to a registry dependency
+      # at packaging time, and cargo (even `cargo package --no-verify`) refuses
+      # to resolve a registry dependency that has never been published. Until
+      # poseidon-bn254's first real publish we fall back to manifest-only checks
+      # (`cargo package --list` parses/validates the manifest and computes the
+      # file list) plus an assert that the path dep carries the `version` key
+      # publishing requires. The full dry-run activates automatically once the
+      # dependency exists on crates.io.
+      - name: cargo publish --dry-run (dependency order)
+        run: |
+          for dir in rust/poseidon-bn254 rust/jlvm-core packages/rust; do
+            NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
+            echo "::group::cargo publish --dry-run $NAME ($dir)"
+            if out=$(cd "$dir" && cargo publish --dry-run 2>&1); then
+              echo "$out" | tail -n 5
+            elif echo "$out" | grep -q 'no matching package named'; then
+              echo "$out" | tail -n 5
+              echo "::notice file=$dir/Cargo.toml::$NAME: full dry-run skipped — a path dependency is not yet published on crates.io, so cargo cannot rewrite it into a registry dependency. Falling back to manifest-only checks; this becomes a full dry-run automatically after the dependency's first publish (docs/RELEASING.md)."
+              ( cd "$dir" && cargo package --list > /dev/null )
+              grep -Eq 'path *= *"\.\./poseidon-bn254" *, *version *=' "$dir/Cargo.toml" || {
+                echo "::error file=$dir/Cargo.toml::path dependency on poseidon-bn254 is missing the 'version' key required by cargo publish"
+                exit 1
+              }
+            else
+              echo "$out"
+              exit 1
+            fi
+            echo "::endgroup::"
+          done
+
   cross-language:
     needs: [typescript, python, rust, go, java]
     if: always() && !cancelled()
@@ -333,7 +405,7 @@ jobs:
         run: mvn test -Dtest=CrossLanguageTest
 
   all-checks-pass:
-    needs: [typescript, python, rust, go, java, jlvm-core, cross-language]
+    needs: [typescript, python, rust, go, java, jlvm-core, publish-dry-run, cross-language]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -345,6 +417,7 @@ jobs:
                 "${{ needs.go.result }}" == "failure" ||
                 "${{ needs.java.result }}" == "failure" ||
                 "${{ needs.jlvm-core.result }}" == "failure" ||
+                "${{ needs.publish-dry-run.result }}" == "failure" ||
                 "${{ needs.cross-language.result }}" == "failure" ]]; then
             echo "One or more jobs failed"
             exit 1

@@ -1,0 +1,179 @@
+name: Release
+
+# Unified SDK release: one tag publishes the TypeScript package to npm and the
+# three Rust crates to crates.io, all stamped with the same version. See
+# docs/RELEASING.md for the full flow (naming decision, secrets, tag policy).
+#
+# Tag format: vX.Y.Z or vX.Y.Z-rc.N (plain SemVer, no build metadata — npm and
+# crates.io both mishandle `+meta`). The legacy per-language tags
+# (typescript-v*, python-v*) keep their own workflows and do not match `v*`.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write # npm --provenance
+
+env:
+  # Crate directories in dependency order (dependencies before dependents).
+  # The crate *names* are read from each Cargo.toml at runtime, so renaming a
+  # crate (e.g. jlvm-core -> constellation-jlvm-core, see docs/RELEASING.md
+  # step zero) requires no workflow changes.
+  CRATE_DIRS: rust/poseidon-bn254 rust/jlvm-core packages/rust
+  NPM_PACKAGE_DIR: packages/typescript
+
+jobs:
+  # Derive the version from the tag and require every publishable manifest to
+  # already carry it. No auto-rewrite: a mismatch fails the release with a
+  # clear message and you fix the manifests in a PR, then re-tag.
+  version-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Derive version from tag
+        id: version
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          VERSION="${TAG#v}"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Tag '$TAG' is not vX.Y.Z or vX.Y.Z-PRERELEASE (build metadata is not allowed; see docs/RELEASING.md)"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Verify manifest versions match the tag
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          fail=0
+
+          PKG_VERSION=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').version")
+          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+            echo "::error file=${NPM_PACKAGE_DIR}/package.json::npm package version ($PKG_VERSION) does not match tag version ($VERSION). Bump it in a PR before tagging — the release workflow never rewrites versions."
+            fail=1
+          fi
+
+          for dir in $CRATE_DIRS; do
+            CRATE_VERSION=$(grep -m1 '^version' "$dir/Cargo.toml" | sed -E 's/version *= *"(.*)"/\1/')
+            if [[ "$CRATE_VERSION" != "$VERSION" ]]; then
+              echo "::error file=$dir/Cargo.toml::crate version ($CRATE_VERSION) does not match tag version ($VERSION). Bump it in a PR before tagging — the release workflow never rewrites versions."
+              fail=1
+            fi
+          done
+
+          # jlvm-core's path dep on poseidon-bn254 carries an explicit version
+          # (required for the registry rewrite at publish time); keep it in
+          # lock-step too so the published dep requirement is exact.
+          DEP_VERSION=$(grep -m1 -E 'path *= *"\.\./poseidon-bn254"' rust/jlvm-core/Cargo.toml | sed -nE 's/.*version *= *"([^"]*)".*/\1/p')
+          if [[ "$DEP_VERSION" != "$VERSION" ]]; then
+            echo "::error file=rust/jlvm-core/Cargo.toml::poseidon path-dependency version ($DEP_VERSION) does not match tag version ($VERSION)."
+            fail=1
+          fi
+
+          exit $fail
+
+  npm-publish:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          registry-url: 'https://registry.npmjs.org'
+          cache: 'npm'
+          cache-dependency-path: packages/typescript/package-lock.json
+
+      - name: Install dependencies
+        working-directory: packages/typescript
+        run: npm ci
+
+      - name: Build
+        working-directory: packages/typescript
+        run: npm run build
+
+      - name: Test
+        working-directory: packages/typescript
+        run: npm test
+
+      # --provenance needs npm >= 9.5; pin to latest like release-typescript.yml.
+      - name: Upgrade npm for provenance support
+        run: npm install -g npm@latest
+
+      - name: Publish to npm
+        working-directory: packages/typescript
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
+
+      - name: Summarize
+        run: |
+          NAME=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').name")
+          echo "### npm" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://www.npmjs.com/package/$NAME" >> "$GITHUB_STEP_SUMMARY"
+
+  cargo-publish:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      # Publish in dependency order. `cargo publish` (since 1.66) blocks until
+      # the uploaded crate is visible in the sparse index, so each dependent's
+      # verify build can resolve its just-published dependency. No --no-verify:
+      # the full verify build is the point (metakit's Maven release once failed
+      # on scaladoc only at publish time — catch the equivalent here, not after
+      # half the crates are out).
+      - name: Publish crates in dependency order
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          echo "### crates.io" >> "$GITHUB_STEP_SUMMARY"
+          for dir in $CRATE_DIRS; do
+            NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
+            echo "::group::cargo publish $NAME ($dir)"
+            ( cd "$dir" && cargo publish )
+            echo "::endgroup::"
+            echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://crates.io/crates/$NAME" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+  release-summary:
+    needs: [version-check, npm-publish, cargo-publish]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Job summary
+        run: |
+          VERSION="${{ needs.version-check.outputs.version }}"
+          NPM_NAME=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').name")
+          {
+            echo "## Released v$VERSION"
+            echo ""
+            echo "| Registry | Artifact |"
+            echo "|---|---|"
+            echo "| npm | \`$NPM_NAME@$VERSION\` |"
+            for dir in $CRATE_DIRS; do
+              NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
+              echo "| crates.io | \`$NAME@$VERSION\` |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: SDK v${{ needs.version-check.outputs.version }}
+          generate_release_notes: true
+          prerelease: ${{ contains(needs.version-check.outputs.version, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
