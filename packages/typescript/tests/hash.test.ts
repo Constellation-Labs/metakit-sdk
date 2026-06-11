@@ -85,4 +85,25 @@ describe('hash', () => {
       expect(Buffer.from(digest1).toString('hex')).toBe(Buffer.from(digest2).toString('hex'));
     });
   });
+
+  describe('content-hash rule (dropNulls before RFC 8785)', () => {
+    it('explicit-null object fields hash identically to absent fields', () => {
+      const withNulls = hash({ a: 1, b: null, c: { d: null, e: 2 }, f: [1, null, 3] });
+      const withoutNulls = hash({ a: 1, c: { e: 2 }, f: [1, null, 3] });
+      expect(withNulls.value).toBe(withoutNulls.value);
+    });
+
+    it('array nulls are preserved (different hash)', () => {
+      const a = hash({ xs: [1, null, 3] });
+      const b = hash({ xs: [1, 3] });
+      expect(a.value).not.toBe(b.value);
+    });
+
+    it('matches the Scala arrays.json fixture hash (metakit JsonBinaryHasherSuite)', () => {
+      // metakit src/test/resources/input/arrays.json: [56,{"d":true,"10":null,"1":[]}]
+      // canonical after dropNulls: [56,{"1":[],"d":true}]
+      const result = hash([56, { d: true, '10': null, '1': [] }]);
+      expect(result.value).toBe('060ba9d4be65e7b773f67328b6fd6a5360f8f66ef88d57351dbc6e39b46f2ea9');
+    });
+  });
 });

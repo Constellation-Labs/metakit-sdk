@@ -22,7 +22,7 @@ except PackageNotFoundError:
 from .binary import encode_data_update, to_bytes
 
 # Canonicalization
-from .canonicalize import canonicalize, canonicalize_bytes
+from .canonicalize import canonicalize, canonicalize_bytes, drop_null_fields
 
 # Codec utilities
 from .codec import decode_data_update
@@ -110,6 +110,7 @@ __all__ = [
     # Canonicalization
     "canonicalize",
     "canonicalize_bytes",
+    "drop_null_fields",
     # Binary
     "to_bytes",
     "encode_data_update",

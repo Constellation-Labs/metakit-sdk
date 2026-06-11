@@ -278,4 +278,38 @@ describe('Integration tests', () => {
       expect(() => batchSign({ test: 1 }, [])).toThrow('At least one private key');
     });
   });
+
+  describe('Content-hash rule: dropNulls before RFC 8785 (metakit docs/content-hash.md)', () => {
+    const keyPair = generateKeyPair();
+
+    it('absent and explicit-null fields produce identical dataUpdate signatures', () => {
+      const withNull = { id: 'test', value: 42, nested: null };
+      const absent = { id: 'test', value: 42 };
+
+      const proofNull = signDataUpdate(withNull, keyPair.privateKey);
+      const proofAbsent = signDataUpdate(absent, keyPair.privateKey);
+      expect(proofNull.signature).toBe(proofAbsent.signature);
+    });
+
+    it('absent and explicit-null fields produce identical standard signatures', () => {
+      const withNull = { id: 'test', value: 42, nested: null };
+      const absent = { id: 'test', value: 42 };
+
+      const proofNull = sign(withNull, keyPair.privateKey);
+      const proofAbsent = sign(absent, keyPair.privateKey);
+      expect(proofNull.signature).toBe(proofAbsent.signature);
+    });
+
+    it('array nulls are significant (different signature)', () => {
+      const a = signDataUpdate({ xs: [1, null, 3] }, keyPair.privateKey);
+      const b = signDataUpdate({ xs: [1, 3] }, keyPair.privateKey);
+      expect(a.signature).not.toBe(b.signature);
+    });
+
+    it('a null-containing payload signs and verifies round-trip', () => {
+      const data = { id: 'test', meta: null, xs: [null, 1] };
+      const signed = createSignedObject(data, keyPair.privateKey, { mode: 'dataUpdate' });
+      expect(verify(signed).isValid).toBe(true);
+    });
+  });
 });
