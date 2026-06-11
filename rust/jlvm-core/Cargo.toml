@@ -57,6 +57,10 @@ blst = "0.3.16"
 
 [dev-dependencies]
 serde_json = "1.0"
+# Parity pin: `content_hash::drop_nulls` must produce the same cleaned value
+# (and the same canonical bytes / sha256) as the Rust SDK's `drop_null_fields`
+# (packages/rust), which is itself pinned to the TS SDK and the Scala server.
+constellation-metagraph-sdk = { path = "../../packages/rust" }
 
 # Deterministic-VM hardening: a silent two's-complement wrap in release builds
 # would be a consensus/parity hazard, so integer overflow must panic (and be
