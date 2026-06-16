@@ -1122,8 +1122,19 @@ pub fn prove_dhtuple_verify(values: &[Value]) -> Result<Value, String> {
 //     and       := 0x02 ‖ nChildren(4) ‖ child_0 ‖ …
 //     or        := 0x03 ‖ nChildren(4) ‖ child_0 ‖ …
 //     threshold := 0x04 ‖ k(4) ‖ nChildren(4) ‖ child_0 ‖ …
-//   Root challenge := SHA256( DomainSep ‖ serializeTree(root) ‖ message ) mod R,
+//   Root challenge := low31( SHA256( DomainSep ‖ serializeTree(root) ‖ message ) ),
 //   DomainSep = ascii("sigma_verify:v1").
+//
+// CHALLENGE DOMAIN — INJECTIVE BYTE↔SCALAR MAP (audit finding #1, the CDS soundness
+// fix). Challenges are 31-byte (248-bit) values, NOT 32-byte. `2^248 < R` (BN254
+// `R ≈ 2^253.6`), so the byte↔Fr-scalar map `e ↦ BigUint::from_bytes_be(e)` is a
+// BIJECTION onto `[0, 2^248)` — there is NO raw-vs-mod-R duality. Previously
+// challenges were 32 bytes, used RAW for the OR-XOR / GF(2^8) split BUT reduced mod
+// R for the leaf scalar arithmetic, so `e` and `e + R` (both < 2^256) collapsed to
+// the same scalar (a CDS-soundness weakness). Now the SAME 31-byte value is the
+// GF(2)^248 / XOR object AND, unchanged (no mod R), the Fr scalar `z·G − e·pk`.
+// Responses `z` stay 32-byte mod-R; commitments stay 64-byte G1; the serialized
+// transcript is UNCHANGED (challenges are not in it).
 //
 // ERROR-VS-FALSE (lockstep with the leaves): malformed (bad hex/width, off-curve,
 // structurally invalid tree, k<=0 or k>n, prop/proof shape mismatch) => Err.
@@ -1142,8 +1153,28 @@ const SIGMA_TAG_THRESHOLD: u8 = 0x04;
 /// Domain separator for the sigma_verify root hash (distinct from leaf transcripts).
 const SIGMA_DOMAIN_SEP: &[u8] = b"sigma_verify:v1";
 
-/// Fixed challenge width in bytes (32-byte big-endian, reduced mod R where a scalar).
-const SIGMA_CHALLENGE_BYTES: usize = hb::SCALAR_BYTES; // 32
+/// Fixed challenge width in bytes — 31 (248-bit), the INJECTIVE-into-Fr domain
+/// (finding #1). `2^248 < R`, so a 31-byte challenge is always a canonical Fr
+/// element and the byte↔scalar map is a bijection (no `e` vs `e+R` alias). The CDS
+/// XOR / GF(2^8) split operates on these 31 bytes (closed in GF(2)^248), and the
+/// SAME bytes are the Fr scalar for `z·G − e·pk`.
+const SIGMA_CHALLENGE_BYTES: usize = 31;
+
+/// Canonical challenge derivation: the LOW-ORDER 31 bytes of a 32-byte SHA-256
+/// digest, i.e. the least-significant 31 bytes (`&digest[1..]`). The single
+/// SHA-256→challenge rule (root challenge). Result is in `[0, 2^248)`, a canonical
+/// Fr element. Byte-for-byte the Scala `Sigma.low31`.
+fn sigma_low31(digest32: &[u8]) -> &[u8] {
+    &digest32[digest32.len() - SIGMA_CHALLENGE_BYTES..]
+}
+
+/// The 31-byte challenge as its Fr SCALAR, taken DIRECTLY from the bytes (no mod-R
+/// reduction). Injective because `from_bytes_be(e) < 2^248 < R` for any 31-byte `e`
+/// — the point of the 31-byte domain (finding #1). Byte-for-byte the Scala
+/// `Sigma.challengeScalar`.
+fn sigma_challenge_scalar(e: &[u8]) -> BigUint {
+    BigUint::from_bytes_be(e)
+}
 
 // --- Parsed PROPOSITION tree (statement only; no challenges/responses). ---
 // `DhTuple` is intentionally larger than `Dlog` (4 points + 4 canonical-byte
@@ -1209,6 +1240,14 @@ impl ProofNode {
     }
 }
 
+/// Absolute backstop on the proof tree size/depth (audit finding #2, the unpaid-traversal DoS
+/// bound). The PRIMARY bound is structural: the proof must mirror the (already gas-charged)
+/// proposition, so its node count and depth may not exceed the proposition's (checked cheaply
+/// BEFORE the recursive `parse_proof_node` / curve work). Byte-for-byte the Scala
+/// `SigmaMaxProofNodes` / `SigmaMaxProofDepth`.
+const SIGMA_MAX_PROOF_NODES: usize = 4096;
+const SIGMA_MAX_PROOF_DEPTH: usize = 64;
+
 /// `sigma_verify([proposition, proof, messageHex]) -> bool`.
 pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
     match values {
@@ -1216,6 +1255,14 @@ pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
             let msg_hex = expect_str("sigma_verify message", msg_v)?;
             let msg = hb::parse_bytes(msg_hex, None, "sigma_verify message")?;
             let prop = parse_prop_node(prop_v, "sigma_verify.proposition")?;
+            // FINDING #2 (DoS): bound the raw proof shape against the (gas-charged) proposition
+            // BEFORE the expensive recursive proof parse (hex decode, on-curve, scalar mul). A tiny
+            // proposition + huge mismatched proof is rejected here after only a bounded raw-tree
+            // walk. The per-node type/child-count mirror check is still enforced in verify_node.
+            let (prop_nodes, prop_depth) = sigma_raw_shape(prop_v);
+            let max_nodes = prop_nodes.min(SIGMA_MAX_PROOF_NODES);
+            let max_depth = prop_depth.min(SIGMA_MAX_PROOF_DEPTH);
+            bound_proof_shape(proof_v, max_nodes, max_depth)?;
             let proof = parse_proof_node(proof_v, "sigma_verify.proof")?;
             let result = verify_tree(&prop, &proof, &msg)?;
             Ok(Value::Bool(result))
@@ -1224,6 +1271,69 @@ pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
             "sigma_verify: expected [proposition, proof, messageHex], got {values:?}"
         )),
     }
+}
+
+/// Cheap node-count + depth of a RAW sigma tree value (proposition or proof): one node per map,
+/// recursing into a `children` array. Mirrors the Scala `sigmaRawShape`. A non-map / unrecognised
+/// shape counts as a single node (the real parser raises the fault).
+fn sigma_raw_shape(v: &Value) -> (usize, usize) {
+    match v {
+        Value::Map(m) => match m.iter().find(|(k, _)| k == "children").map(|(_, v)| v) {
+            Some(Value::Array(cs)) => {
+                let (n, d) = cs.iter().fold((0usize, 0usize), |(acc_n, acc_d), c| {
+                    let (cn, cd) = sigma_raw_shape(c);
+                    (acc_n + cn, acc_d.max(cd))
+                });
+                (n + 1, d + 1)
+            }
+            _ => (1, 1),
+        },
+        _ => (1, 1),
+    }
+}
+
+/// FINDING #2: reject — BEFORE the recursive proof parse — a proof whose raw node count or depth
+/// exceeds the proposition's (`max_nodes` / `max_depth`). The walk aborts as soon as a bound is
+/// crossed, so the work is O(min(proof_size, max_nodes)). Purely structural (no hex / curve work);
+/// the per-node type/child-count mirror check is still enforced in verify_node. Mirrors the Scala
+/// `boundProofShape`.
+fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<(), String> {
+    fn too_large(max_nodes: usize, max_depth: usize) -> String {
+        format!(
+            "sigma_verify.proof: proof tree exceeds the proposition's structure \
+             (max {max_nodes} nodes, depth {max_depth}) — rejected before traversal (DoS bound)"
+        )
+    }
+    // Returns Ok(nodes_so_far) or Err as soon as a bound is crossed; `depth` is 1-based.
+    fn go(
+        node: &Value,
+        depth: usize,
+        nodes_so_far: usize,
+        max_nodes: usize,
+        max_depth: usize,
+    ) -> Result<usize, String> {
+        if depth > max_depth {
+            return Err(too_large(max_nodes, max_depth));
+        }
+        let n = nodes_so_far + 1;
+        if n > max_nodes {
+            return Err(too_large(max_nodes, max_depth));
+        }
+        match node {
+            Value::Map(m) => match m.iter().find(|(k, _)| k == "children").map(|(_, v)| v) {
+                Some(Value::Array(cs)) => {
+                    let mut running = n;
+                    for c in cs {
+                        running = go(c, depth + 1, running, max_nodes, max_depth)?;
+                    }
+                    Ok(running)
+                }
+                _ => Ok(n),
+            },
+            _ => Ok(n),
+        }
+    }
+    go(v, 1, 0, max_nodes, max_depth).map(|_| ())
 }
 
 // --- Proposition parsing (statement only). Malformed => hard error. ---
@@ -1362,8 +1472,10 @@ fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
 fn sigma_challenge(role: &str, m: &[(String, Value)]) -> Result<Vec<u8>, String> {
     let v = sigma_field(role, m, "e")?;
     let hex = expect_str(&format!("{role}.e"), v)?;
-    // Challenge is a fixed 32-byte big-endian value (canonicity not required: it is
-    // compared byte-wise against the recomputed challenge, also reduced mod R).
+    // Challenge is a fixed 31-byte (248-bit) big-endian value — the injective-into-Fr
+    // domain (finding #1). It is the SAME object the CDS XOR / GF(2^8) split runs over
+    // AND, taken directly (no mod R), the Fr scalar for the leaf reconstruction. The
+    // verifier compares it byte-for-byte against the recomputed 31-byte challenge.
     hb::parse_bytes(hex, Some(SIGMA_CHALLENGE_BYTES), &format!("{role}.e"))
 }
 
@@ -1435,17 +1547,18 @@ fn verify_tree(prop: &PropNode, proof: &ProofNode, msg: &[u8]) -> Result<bool, S
     if !crypto_ok {
         return Ok(false);
     }
-    // Steps 5-6: STRONG Fiat-Shamir over (DomainSep ‖ canonical tree ‖ message),
-    // mod R, compared against the ROOT challenge. Both sides reduced mod R.
+    // Steps 5-6: STRONG Fiat-Shamir over (DomainSep ‖ canonical tree ‖ message). The
+    // root challenge is the LOW-ORDER 31 bytes of the digest (the injective challenge
+    // domain, finding #1) — compared BYTE-FOR-BYTE against the proof's 31-byte root
+    // challenge. No mod-R reduction on EITHER side: both are 31-byte (< 2^248 < R)
+    // values, so byte equality is exactly Fr equality with no `e` vs `e+R` alias.
     let mut hasher = Sha256::new();
     hasher.update(SIGMA_DOMAIN_SEP);
     hasher.update(&serialized);
     hasher.update(msg);
     let digest = hasher.finalize();
-    let group_order = hb::modulus();
-    let recomputed_root = BigUint::from_bytes_be(&digest) % group_order;
-    let claimed_root = BigUint::from_bytes_be(proof.challenge()) % group_order;
-    Ok(recomputed_root == claimed_root)
+    let recomputed_root = sigma_low31(&digest);
+    Ok(constant_time_eq(recomputed_root, proof.challenge()))
 }
 
 /// One recursive node visit. Returns `(crypto_ok, serialized_bytes)`:
@@ -1460,7 +1573,8 @@ fn verify_node(prop: &PropNode, proof: &ProofNode, role: &str) -> Result<(bool, 
             if pk.is_zero() {
                 return Ok((false, Vec::new()));
             }
-            let e_scalar = BigUint::from_bytes_be(e) % group_order;
+            // The 31-byte challenge IS the Fr scalar, taken directly (no mod R — finding #1).
+            let e_scalar = sigma_challenge_scalar(e);
             let z_scalar = z % group_order;
             let a = dlog_compute_commitment(pk, &e_scalar, &z_scalar);
             let a_bytes = encode_g1_bytes(&a, &format!("{role}.dlog.a"))?;
@@ -1489,7 +1603,8 @@ fn verify_node(prop: &PropNode, proof: &ProofNode, role: &str) -> Result<(bool, 
             if g.is_zero() || h.is_zero() || u.is_zero() || v.is_zero() {
                 return Ok((false, Vec::new()));
             }
-            let e_scalar = BigUint::from_bytes_be(e) % group_order;
+            // The 31-byte challenge IS the Fr scalar, taken directly (no mod R — finding #1).
+            let e_scalar = sigma_challenge_scalar(e);
             let z_scalar = z % group_order;
             // The single shared response z is used for BOTH coordinate reconstructions.
             let a1 = dhtuple_compute_commitment(g, u, &e_scalar, &z_scalar);
@@ -1621,14 +1736,15 @@ fn verify_node(prop: &PropNode, proof: &ProofNode, role: &str) -> Result<(bool, 
 
 /// CTHRESHOLD interpolation check (byte-wise GF(2^8)). The `n` child challenges
 /// must be `P(1), …, P(n)` of a degree-`(n-k)` GF(2^8) polynomial with
-/// `P(0) = parent challenge`, computed independently per byte-lane (exactly Ergo).
-/// `false` (not error) on mismatch.
+/// `P(0) = parent challenge`, computed independently per byte-lane (exactly Ergo,
+/// over the 31-byte injective challenge domain, finding #1). `false` (not error) on
+/// mismatch.
 fn threshold_interpolates(parent_e: &[u8], child_es: &[&[u8]], k: usize, n: usize) -> bool {
     let degree = n - k; // (degree + 1) points define the polynomial
     let known_count = degree + 1;
     // Defining x-coords: 0 (parent), then child indices 1..degree.
     let xs: Vec<i32> = (0..known_count as i32).collect();
-    // Each of the 32 byte-lanes must independently interpolate.
+    // Each of the 31 byte-lanes must independently interpolate.
     (0..SIGMA_CHALLENGE_BYTES).all(|lane| {
         let ys: Vec<i32> = (0..known_count)
             .map(|j| {
@@ -1722,7 +1838,8 @@ fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 
 // ---------------------------------------------------------------------------
 // GF(2^8) Shamir arithmetic for the CTHRESHOLD challenge split (AES field 0x11b).
-//   Byte-for-byte port of the Scala gfMul / gfInv / gfLagrangeEval.
+//   Byte-for-byte port of the Scala gfMul / gfInv / gfLagrangeEval. The challenge
+//   is a 31-byte array (finding #1); interpolation runs over 31 independent lanes.
 // ---------------------------------------------------------------------------
 
 /// GF(2^8) multiply (Russian-peasant, AES reduction poly 0x11b).
@@ -2194,26 +2311,26 @@ mod tests {
             (
                 "dlog_leaf",
                 r#"{"type":"dlog","pk":"0x14e2946f9ea29efcd6c8d3bc8ebce97aff2267495f19207d83a5a278b3d1b6750d6d60e75a6a4aef02b7c664972665bbdfa16ef85493ca2cc449eea611b9ed31"}"#,
-                r#"{"type":"dlog","e":"0x172430cab45f89f4b1eaf2d8f5a50e7ad580b7dc16a64b3354112260d86bc256","z":"0x0a68f4fbf7ccbf0385b198387df61d6816ea1da49cee26247af22b5f2ba3a539"}"#,
+                r#"{"type":"dlog","e":"0x2430cab45f89f4b1eaf2d8f5a50e7ad580b7dc16a64b3354112260d86bc256","z":"0x17d5e6804e36b07d0513a88e1752f57f76220e519b54158da168ccc3b3376ef7"}"#,
                 "0x0014e2946f9ea29efcd6c8d3bc8ebce97aff2267495f19207d83a5a278b3d1b6750d6d60e75a6a4aef02b7c664972665bbdfa16ef85493ca2cc449eea611b9ed312a809b6fd67e25c49a02f77a027549454c315f3b2ab5abb9dd1703f58b3e577029f44e34d7780544f048c41a6553ef973c6c7f8ae1c750d4bf3e82292201182b",
             ),
             (
                 "dhtuple_leaf",
                 r#"{"type":"dhtuple","g":"0x0769bf9ac56bea3ff40232bcb1b6bd159315d84715b8e679f2d355961915abf02ab799bee0489429554fdb7c8d086475319e63b40b9c5b57cdf1ff3dd9fe2261","h":"0x17c139df0efee0f766bc0204762b774362e4ded88953a39ce849a8a7fa163fa901e0559bacb160664764a357af8a9fe70baa9258e0b959273ffc5718c6d4cc7c","u":"0x2eba7a08251112136606485e9ef2e55c89618b022ba2026780f015eb009781e320142996aa0765cc8c5ecbc54fe1d745894e84e61a65a8be30e940299d267428","v":"0x1bc98a3a15f93ae006e031b63507c00fd6f754a3d6f3412f8aada736ee976c0218fc62bcab6e3d356c9dd7946c656177f41c17ef2cd02a3955df2c75ab227d70"}"#,
-                r#"{"type":"dhtuple","e":"0x1816982c4fa6a92b71b4144e34979338925a424ce1efe6219bb75f01e079cc77","z":"0x292f02b9bbd8c58230c8c78256b463c8ccdbbd241f117743ee4feaf769febec6"}"#,
+                r#"{"type":"dhtuple","e":"0x16982c4fa6a92b71b4144e34979338925a424ce1efe6219bb75f01e079cc77","z":"0x0b114f46e47439db9ed88df52a196cdda454caa6a6034f868d0a76652b2ac2a8"}"#,
                 "0x010769bf9ac56bea3ff40232bcb1b6bd159315d84715b8e679f2d355961915abf02ab799bee0489429554fdb7c8d086475319e63b40b9c5b57cdf1ff3dd9fe226117c139df0efee0f766bc0204762b774362e4ded88953a39ce849a8a7fa163fa901e0559bacb160664764a357af8a9fe70baa9258e0b959273ffc5718c6d4cc7c2eba7a08251112136606485e9ef2e55c89618b022ba2026780f015eb009781e320142996aa0765cc8c5ecbc54fe1d745894e84e61a65a8be30e940299d2674281bc98a3a15f93ae006e031b63507c00fd6f754a3d6f3412f8aada736ee976c0218fc62bcab6e3d356c9dd7946c656177f41c17ef2cd02a3955df2c75ab227d70295d927e26b6641e0f6a019b9dcf4aed7381a9cd1985f27da31f58d10232e40902c0735a9a98e11fec528e703f5eb70a84ad93726f5ab2e8c51852d6d5ab2a4e1de6f7a27cf74bf33d4650b8488989812960f94391d97a0e19221abdc20172721a49c5d53779e959f9fbb11808d7fbaea6254baeb7892648e382c78d8cc87c7d",
             ),
             (
                 "and_dlog_dhtuple",
                 r#"{"type":"and","children":[{"type":"dlog","pk":"0x17072b2ed3bb8d759a5325f477629386cb6fc6ecb801bd76983a6b86abffe078168ada6cd130dd52017bb54bfa19377aadfe3bf05d18f41b77809f7f60d4af9e"},{"type":"dhtuple","g":"0x030644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd315ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4","h":"0x039730ea8dff1254c0fee9c0ea777d29a9c710b7e616683f194f18c43b43b869073a5ffcc6fc7a28c30723d6e58ce577356982d65b833a5a5c15bf9024b43d98","u":"0x22c54997b1e4f7710df6e925b259327d9bb23b29af52a8ab9d271c846c1f20752a537682cb57be952ce98746dc33229fbcd6bf0d113e45ffd2df20cadcc748e9","v":"0x236ecf67512dd8b3157d61220f369e1ed51043a80aeb449252b4d617386d792716105ce337dce18aa0a9894c354e9365c14d312625d14e3334128af51a477c1f"}]}"#,
-                r#"{"type":"and","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","children":[{"type":"dlog","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","z":"0x2cc02463c7af7fe19e35adc4c9d581f2c443f6424574c55bb8d722538047e7ba"},{"type":"dhtuple","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","z":"0x1467c323675bc578308d71e8cfc7b0a83b58913600c026440da52e6d92bf6d33"}]}"#,
+                r#"{"type":"and","e":"0x96158ab9fbfb4883379451733088a04e894164153fe703469da1e7411adef9","children":[{"type":"dlog","e":"0x96158ab9fbfb4883379451733088a04e894164153fe703469da1e7411adef9","z":"0x057e4987f00ae105a86795c2545eec7eddaf503d9986d9549404d95f1047e7c1"},{"type":"dhtuple","e":"0x96158ab9fbfb4883379451733088a04e894164153fe703469da1e7411adef9","z":"0x071b7085f5af476cd450b676e1d7d5061dc7749bb5716d133c3cb15cd2bf6d3f"}]}"#,
                 "0x02000000020017072b2ed3bb8d759a5325f477629386cb6fc6ecb801bd76983a6b86abffe078168ada6cd130dd52017bb54bfa19377aadfe3bf05d18f41b77809f7f60d4af9e1221f30fef7dc01cf68820287d83aacd34fb18f82e9bf824c7f870a28940ff6d1c9b015ad48983282b472d5e956b000d736aaf8deb4bc8641eeb90403825dce001030644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd315ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4039730ea8dff1254c0fee9c0ea777d29a9c710b7e616683f194f18c43b43b869073a5ffcc6fc7a28c30723d6e58ce577356982d65b833a5a5c15bf9024b43d9822c54997b1e4f7710df6e925b259327d9bb23b29af52a8ab9d271c846c1f20752a537682cb57be952ce98746dc33229fbcd6bf0d113e45ffd2df20cadcc748e9236ecf67512dd8b3157d61220f369e1ed51043a80aeb449252b4d617386d792716105ce337dce18aa0a9894c354e9365c14d312625d14e3334128af51a477c1f1c3a9d42812441f38bfb619ef71bbfbf1074ed691ce1bfdbe46f84e50b5ef93a19a66b5e7152c9f25eac242de91c8a80997a9e74548ab0f007553bc19986c97206958a0da25a2edab55f8882b2ff401d27a52f5b3f102bcb16b6a57710073a9206bb3ad35548d5fad8df9de103f7d0efd53ee750287ab0db0235f87a9042695b",
             ),
             (
                 "threshold_2of3",
                 r#"{"type":"threshold","k":2,"children":[{"type":"dlog","pk":"0x003994af9546cdff40006d2c4f32dbb004d348f9a97dfeb88d6cf1671c2e3d932e0191fc912a1eb50c10abd503e81b1a53bfb2605c6689117d9a561bf85fed3c"},{"type":"dlog","pk":"0x276869d833946d4b8d9155cc4264a4f5216b8c87afadfaaf1e8d290ecbd8c7a306d915e47e5908cdad1ccd5f092b94cf3f0152705e0f737988075b110be63658"},{"type":"dlog","pk":"0x298a2726c54a32c634a63eac47ad9ac9e9ce5773ab17a7d2cb0d6361e0fa12d92e0485223f68b741ca1b5a1aea8e040318c2c6a33becbcfa04667d7eeec0d43b"}]}"#,
-                r#"{"type":"threshold","e":"0x09a94d5ba38ca064dad710b8d9bdaf9f319530dc68192034779979fc3cc4a90c","k":2,"children":[{"type":"dlog","e":"0x09bfa5385b45370623e1f2635498d20e3b92617e1a8f22a426b9f639c8f38d6f","z":"0x21e3cbcae48dc00af2e5389d666eb33d550f780ae5e4fd4e436e05a1cfc3329b"},{"type":"dlog","e":"0x0985869d480595a033bbcf15d8f755a6259b92838c2e240fd5d97c6dcfaae1ca","z":"0x2b07d8ab77a469fe5842788f8b26895a077aaa1212690430a2135eca73a0b3b1"},{"type":"dlog","e":"0x09936efeb0cc02c2ca8d2dce55d228372f9cc321feb8269f84f9f3a83b9dc5a9","z":"0x1447ac4f3a46e201fb12e67cea335017b29cb1388445b387a23dc280d6e522f3"}]}"#,
-                "0x04000000020000000300003994af9546cdff40006d2c4f32dbb004d348f9a97dfeb88d6cf1671c2e3d932e0191fc912a1eb50c10abd503e81b1a53bfb2605c6689117d9a561bf85fed3c25ec8644ab850f14cde799de612d011baf7c929c13cc5021cf37c5fbfc9d30bb05facd1d00c720142fbe951bb0bc1facf79b7e923d895fecda5a50849657819400276869d833946d4b8d9155cc4264a4f5216b8c87afadfaaf1e8d290ecbd8c7a306d915e47e5908cdad1ccd5f092b94cf3f0152705e0f737988075b110be6365821e08dd89f020c7b74dd92ba0e68eb5bca615e04da171dc17952df19f7b99c16074cc2253b6ebedef75eebf94842ea51b4892f1ec1dddc861306f9b97d76536f00298a2726c54a32c634a63eac47ad9ac9e9ce5773ab17a7d2cb0d6361e0fa12d92e0485223f68b741ca1b5a1aea8e040318c2c6a33becbcfa04667d7eeec0d43b2e254519c92e01031a471ddc661f0de592b72bf1bfd8f1e78a7b5ab27d9110f3039b1c8fbb15b43dd31eb67a29300b57f501caccedfee206e5e5d224e05ca71e",
+                r#"{"type":"threshold","e":"0xbaa89e5ee85d41bc0dc0b3a6e30a0399941a8ea2f8370c7a54c3cf42bea722","k":2,"children":[{"type":"dlog","e":"0x53792b5975bfd634aeab8862f43ee4d48004dd95898f2094a1f7c6a924b17f","z":"0x01a83d2fe4629d3a419f70c7ad1a32d1a6ab2a177375252da9bbdc3113266cfe"},{"type":"dlog","e":"0x7311ef50c98274b75016c535cd62d603bc2628cc1a5c54bda5abdd8f918b98","z":"0x00f71e00ee696fb5cedd1c4f83beb6961cafbcf01a9aaf8e58d94b598fa2b062"},{"type":"dlog","e":"0x9ac05a575460e33ff37dfef1da56314ea8387bfb6be47853509fd4640b9dc5","z":"0x1ba8ed8d772a2ce57feb82d9d26c2f9a13b7b378ed3ed9c2010be4dd0096e51f"}]}"#,
+                "0x04000000020000000300003994af9546cdff40006d2c4f32dbb004d348f9a97dfeb88d6cf1671c2e3d932e0191fc912a1eb50c10abd503e81b1a53bfb2605c6689117d9a561bf85fed3c25ec8644ab850f14cde799de612d011baf7c929c13cc5021cf37c5fbfc9d30bb05facd1d00c720142fbe951bb0bc1facf79b7e923d895fecda5a50849657819400276869d833946d4b8d9155cc4264a4f5216b8c87afadfaaf1e8d290ecbd8c7a306d915e47e5908cdad1ccd5f092b94cf3f0152705e0f737988075b110be6365821e08dd89f020c7b74dd92ba0e68eb5bca615e04da171dc17952df19f7b99c16074cc2253b6ebedef75eebf94842ea51b4892f1ec1dddc861306f9b97d76536f00298a2726c54a32c634a63eac47ad9ac9e9ce5773ab17a7d2cb0d6361e0fa12d92e0485223f68b741ca1b5a1aea8e040318c2c6a33becbcfa04667d7eeec0d43b2567890bf5e0dec245624fa4264913003890486700dabd799dcbd93ea66cf41124b2d3087eccefea38ef245878aeb22b9f8be4d3f62169be10ecc77925d8f671",
             ),
         ];
 
@@ -2239,5 +2356,122 @@ mod tests {
                 "SIGMA serialization byte mismatch for KAT `{name}` (Rust verify_node vs Scala serializeTree)"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // FINDING #1: the 31-byte challenge domain is INJECTIVE into Fr (no e vs e+R
+    // alias). 2^248 < R, so every 31-byte challenge is a distinct canonical Fr
+    // element and the byte->scalar map is a bijection. Mirrors the Scala test.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sigma_challenge_domain_is_injective_into_fr() {
+        let r = hb::modulus(); // BN254 group order R
+        let two_pow_248 = BigUint::from(1u8) << (8 * SIGMA_CHALLENGE_BYTES); // 2^248
+                                                                             // (a) the injective domain sits strictly below R.
+        assert!(
+            &two_pow_248 < r,
+            "2^248 must be < R for the challenge domain to be injective into Fr"
+        );
+        // (b) the largest 31-byte challenge is a canonical Fr element (< R).
+        let max_challenge = &two_pow_248 - BigUint::from(1u8);
+        assert!(
+            &max_challenge < r,
+            "the largest 31-byte challenge must be < R (canonical scalar)"
+        );
+        // (c) sigma_challenge_scalar is identity-on-bytes and never reduces: for any 31-byte e,
+        //     from_bytes_be(e) == sigma_challenge_scalar(e) and is < 2^248 < R.
+        let e_bytes = vec![0xffu8; SIGMA_CHALLENGE_BYTES];
+        let e_scalar = sigma_challenge_scalar(&e_bytes);
+        assert_eq!(e_scalar, BigUint::from_bytes_be(&e_bytes));
+        assert!(
+            e_scalar < two_pow_248,
+            "a 31-byte challenge is always < 2^248"
+        );
+        // (d) low31 of a digest drops the top byte -> always 31 bytes / < 2^248.
+        let digest = Sha256::digest(b"sigma_verify:v1 injectivity probe");
+        let c = sigma_low31(&digest);
+        assert_eq!(c.len(), SIGMA_CHALLENGE_BYTES);
+        assert!(BigUint::from_bytes_be(c) < two_pow_248);
+        // (e) the classic alias pair (e, e+R): e+R needs >= 32 bytes, so it can NEVER be a 31-byte
+        //     challenge -> the two can never collide on a 31-byte value (the alias is killed).
+        let e_plus_r = &max_challenge + r;
+        assert!(
+            e_plus_r.to_bytes_be().len() > SIGMA_CHALLENGE_BYTES,
+            "e+R must not fit in 31 bytes, so it can never alias the 31-byte challenge e"
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // FINDING #2 (DoS): a tiny proposition + huge mismatched proof is rejected
+    // by the structural bound BEFORE the recursive proof parse / curve work.
+    // -----------------------------------------------------------------------
+    // The BN254 G1 generator (1, 2) as a canonical 64-byte point (a valid on-curve pk).
+    fn gen_pk_hex() -> String {
+        format!("0x{:064x}{:064x}", 1u8, 2u8)
+    }
+
+    // A structurally-valid 31-byte challenge / 32-byte response leaf proof node.
+    fn dummy_leaf_proof() -> String {
+        format!(
+            r#"{{"type":"dlog","e":"0x{:062x}","z":"0x{:064x}"}}"#,
+            1u8, 1u8
+        )
+    }
+
+    #[test]
+    fn sigma_tiny_prop_huge_proof_is_rejected_fast() {
+        use crate::value::decode_value;
+        // Proposition: a single dlog leaf (1 node, depth 1) — what the gas layer charges for.
+        let prop_json = format!(r#"{{"type":"dlog","pk":"{}"}}"#, gen_pk_hex());
+        let prop_v = decode_value(&serde_json::from_str::<serde_json::Value>(&prop_json).unwrap());
+        // Proof: a wide OR with 5000 children — vastly exceeds the proposition's single node.
+        let child = dummy_leaf_proof();
+        let children: Vec<String> = (0..5000).map(|_| child.clone()).collect();
+        let huge_proof_json = format!(
+            r#"{{"type":"or","e":"0x{:062x}","children":[{}]}}"#,
+            1u8,
+            children.join(",")
+        );
+        let proof_v =
+            decode_value(&serde_json::from_str::<serde_json::Value>(&huge_proof_json).unwrap());
+        let msg_v = Value::Str("0x6869".into());
+        let res = sigma_verify(&[prop_v, proof_v, msg_v]);
+        assert!(
+            res.is_err(),
+            "tiny proposition + huge mismatched proof must be a hard error (DoS bound), got {res:?}"
+        );
+        let e = res.unwrap_err();
+        assert!(
+            e.contains("DoS bound") || e.contains("exceeds the proposition"),
+            "must be rejected by the structural DoS bound, got: {e}"
+        );
+    }
+
+    #[test]
+    fn sigma_deeply_nested_proof_is_rejected_by_depth_cap() {
+        use crate::value::decode_value;
+        // Proposition: a single dlog leaf (depth 1) -> the proof's allowed depth bound is 1.
+        let prop_json = format!(r#"{{"type":"dlog","pk":"{}"}}"#, gen_pk_hex());
+        let prop_v = decode_value(&serde_json::from_str::<serde_json::Value>(&prop_json).unwrap());
+        // Nest 8 AND nodes around a leaf -> depth 9, far beyond the proposition's depth of 1
+        // (and well within serde_json's parse recursion limit). Rejected by the depth bound.
+        let mut nested = dummy_leaf_proof();
+        for _ in 0..8 {
+            nested = format!(
+                r#"{{"type":"and","e":"0x{:062x}","children":[{nested}]}}"#,
+                1u8
+            );
+        }
+        let proof_v = decode_value(&serde_json::from_str::<serde_json::Value>(&nested).unwrap());
+        let msg_v = Value::Str("0x6869".into());
+        let res = sigma_verify(&[prop_v, proof_v, msg_v]);
+        assert!(
+            res.is_err(),
+            "deeply-nested proof beyond the proposition depth must be a hard error (DoS depth cap)"
+        );
+        assert!(
+            res.unwrap_err().contains("exceeds the proposition"),
+            "must be rejected by the structural DoS bound"
+        );
     }
 }
