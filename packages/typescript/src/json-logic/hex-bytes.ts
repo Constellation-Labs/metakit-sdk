@@ -88,6 +88,15 @@ export const parseFr = (hex: string, role: string): bigint => {
 };
 
 /**
+ * Parse a 32-byte hex string into a non-negative big-endian scalar with NO
+ * field-canonicity constraint (any 256-bit value is accepted). Used for
+ * Schnorr / sigma responses and similar values that are reduced mod the group
+ * order by the consuming primitive. Mirrors Rust `hex_bytes::parse_scalar`.
+ */
+export const parseScalar = (hex: string, role: string): bigint =>
+  bytesToBigInt(parseBytes(hex, SCALAR_BYTES, role));
+
+/**
  * Parse a 64-byte hex string into a BN254 G1 affine coordinate pair `(x, y)`.
  * Each 32-byte half is validated as a canonical Fq element (`< P`). The
  * all-zero point `(0, 0)` is the EVM point-at-infinity and is accepted here;
@@ -129,3 +138,14 @@ export const encodeUint = (value: bigint, width: number, role: string): string =
 
 /** Encode a canonical Fr element as a 32-byte `0x`-prefixed hex string. */
 export const encodeFr = (value: bigint): string => encodeUint(value, FR_BYTES, 'encodeFr');
+
+/**
+ * Encode a BN254 G1 point `(x, y)` as a 64-byte `0x`-hex string (`x || y`, 32B
+ * each). Mirrors Rust `hex_bytes::encode_g1`. The all-zero point renders the
+ * EVM point-at-infinity.
+ */
+export const encodeG1 = (x: bigint, y: bigint): string => {
+  const xs = encodeUint(x, FQ_BYTES, 'encodeG1.x');
+  const ys = encodeUint(y, FQ_BYTES, 'encodeG1.y');
+  return '0x' + xs.slice(2) + ys.slice(2);
+};

@@ -93,7 +93,10 @@ export type JsonLogicOpTag =
   | 'ecvrf_verify'
   | 'groth16_verify'
   | 'bls_verify'
-  | 'bls_aggregate_verify';
+  | 'bls_aggregate_verify'
+  | 'prove_dlog_verify'
+  | 'prove_dhtuple_verify'
+  | 'sigma_verify';
 
 // All known operator tags
 export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
@@ -181,6 +184,9 @@ export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
   'groth16_verify',
   'bls_verify',
   'bls_aggregate_verify',
+  'prove_dlog_verify',
+  'prove_dhtuple_verify',
+  'sigma_verify',
 ]);
 
 // Check if a string is a known operator
@@ -250,5 +256,8 @@ export const OPERATOR_CATEGORIES = {
     'groth16_verify',
     'bls_verify',
     'bls_aggregate_verify',
+    'prove_dlog_verify',
+    'prove_dhtuple_verify',
+    'sigma_verify',
   ] as const,
 } as const;

@@ -55,7 +55,10 @@ import {
   opBlsVerify,
   opPmtVerify,
   opPoseidon,
+  opProveDhtupleVerify,
+  opProveDlogVerify,
   opSchnorrVerify,
+  opSigmaVerify,
 } from './crypto-ops';
 
 const MAX_SAFE_EXPONENT = 999n;
@@ -606,6 +609,12 @@ export class Evaluator {
         return opBlsVerify(values);
       case 'bls_aggregate_verify':
         return opBlsAggregateVerify(values);
+      case 'prove_dlog_verify':
+        return opProveDlogVerify(values);
+      case 'prove_dhtuple_verify':
+        return opProveDhtupleVerify(values);
+      case 'sigma_verify':
+        return opSigmaVerify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }

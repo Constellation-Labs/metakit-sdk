@@ -158,6 +158,12 @@ export interface GasSchedule {
   readonly mptPerNode: bigint;
   readonly mptPrefixVerify: bigint;
   readonly mptPrefixPerEntry: bigint;
+  readonly proveDlogVerify: bigint;
+  readonly proveDhtupleVerify: bigint;
+  readonly sigmaVerify: bigint;
+  readonly sigmaVerifyPerDlogLeaf: bigint;
+  readonly sigmaVerifyPerDhtupleLeaf: bigint;
+  readonly sigmaVerifyPerNode: bigint;
   readonly constCost: bigint;
   readonly varAccess: bigint;
   readonly depthPenaltyMultiplier: bigint;
@@ -246,6 +252,12 @@ export const DEFAULT_GAS_SCHEDULE: GasSchedule = {
   mptPerNode: 400n,
   mptPrefixVerify: 1_000n,
   mptPrefixPerEntry: 800n,
+  proveDlogVerify: 45_000n,
+  proveDhtupleVerify: 85_000n,
+  sigmaVerify: 45_000n,
+  sigmaVerifyPerDlogLeaf: 45_000n,
+  sigmaVerifyPerDhtupleLeaf: 85_000n,
+  sigmaVerifyPerNode: 2_000n,
   constCost: 0n,
   varAccess: 2n,
   depthPenaltyMultiplier: 5n,
@@ -418,6 +430,12 @@ export const opBaseCost = (c: GasSchedule, op: string): bigint | null => {
       return c.mptVerify;
     case 'mpt_prefix_verify':
       return c.mptPrefixVerify;
+    case 'prove_dlog_verify':
+      return c.proveDlogVerify;
+    case 'prove_dhtuple_verify':
+      return c.proveDhtupleVerify;
+    case 'sigma_verify':
+      return c.sigmaVerify;
     default:
       return null;
   }
@@ -502,6 +520,43 @@ const bigintMagnitudeSaturating = (v: bigint): bigint => sat(v < 0n ? -v : v);
 
 const mapGet = (m: Map<string, JsonLogicValue>, key: string): JsonLogicValue | undefined =>
   m.get(key);
+
+/**
+ * Count `[dlogLeaves, dhtupleLeaves, connectiveNodes]` in a `sigma_verify`
+ * proposition tree, to pre-charge per-leaf / per-node gas from the shape.
+ * Recognises the same node schema the verifier parses
+ * (`{"type": dlog|dhtuple|and|or|threshold, ...}`); any unrecognised shape
+ * contributes `[0, 0, 0]`. A connective counts as ONE node INCLUDING the root,
+ * then folds its `children`. Byte-for-byte mirror of Rust `sigma_prop_shape`.
+ */
+const sigmaPropShape = (v: JsonLogicValue): [bigint, bigint, bigint] => {
+  if (v.tag === 'map') {
+    const t = v.value.get('type');
+    if (t !== undefined && t.tag === 'string') {
+      if (t.value === 'dlog') {
+        return [1n, 0n, 0n];
+      }
+      if (t.value === 'dhtuple') {
+        return [0n, 1n, 0n];
+      }
+      if (t.value === 'and' || t.value === 'or' || t.value === 'threshold') {
+        const children = v.value.get('children');
+        const cs = children !== undefined && children.tag === 'array' ? children.value : [];
+        let d = 0n;
+        let th = 0n;
+        let n = 1n;
+        for (const c of cs) {
+          const [cd, ct, cn] = sigmaPropShape(c);
+          d += cd;
+          th += ct;
+          n += cn;
+        }
+        return [d, th, n];
+      }
+    }
+  }
+  return [0n, 0n, 0n];
+};
 
 /** An evaluated value together with its metric depth (see module docs). */
 type Outcome = readonly [JsonLogicValue, number];
@@ -1125,6 +1180,25 @@ class Metered {
           return satMul(c.mptPrefixPerEntry, BigInt(args[2].value.size));
         }
         return 0n;
+      case 'sigma_verify': {
+        // sigma_verify scales with the PROPOSITION-TREE shape: one per-leaf
+        // charge per DLog / DHTuple leaf + one per-node charge per connective.
+        // Derived from the first argument (the proposition tree) ALONE and
+        // pre-charged BEFORE any curve arithmetic (the DoS bound). A
+        // malformed/non-tree first arg charges 0 here and the verifier raises
+        // the encoding fault. Mirrors Rust `sigma_prop_shape`.
+        if (args.length === 3) {
+          const [dlogLeaves, dhtupleLeaves, nodes] = sigmaPropShape(args[0]);
+          return satAdd(
+            satAdd(
+              satMul(c.sigmaVerifyPerDlogLeaf, dlogLeaves),
+              satMul(c.sigmaVerifyPerDhtupleLeaf, dhtupleLeaves)
+            ),
+            satMul(c.sigmaVerifyPerNode, nodes)
+          );
+        }
+        return 0n;
+      }
       default:
         return 0n;
     }
