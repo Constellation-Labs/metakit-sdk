@@ -94,6 +94,20 @@ const TIER3B_CATEGORIES: &[&str] = &["bls_verify", "bls_aggregate_verify"];
 /// byte-identity. They MUST pass.
 const TIER3B_OPS: &[&str] = &["bls_verify", "bls_aggregate_verify"];
 
+/// The SIGMA-protocol categories this Rust JLVM implements and must pass: the two
+/// atomic Σ-leaves (`sigma_dlog` = prove_dlog_verify, `sigma_dhtuple` =
+/// prove_dhtuple_verify) and the recursive CDS tree verifier (`sigma` =
+/// sigma_verify). The `sigma` category IS the FROZEN serialization byte-contract
+/// (docs/sigma-verify.md): every value case's `expected` is what the Scala
+/// reference verifier returns, so reproducing them byte-identically here PROVES
+/// the Rust serialization matches the Scala byte layout for the strong-FS
+/// transcript. Wrong-width / off-curve / structurally-invalid cases MUST error;
+/// soundness negatives MUST verify `false`.
+const SIGMA_CATEGORIES: &[&str] = &["sigma_dlog", "sigma_dhtuple", "sigma"];
+
+/// Sigma opcode tags (for any `known_answer` cross-check that lands later).
+const SIGMA_OPS: &[&str] = &["prove_dlog_verify", "prove_dhtuple_verify", "sigma_verify"];
+
 /// The single top-level operator tag of an expression, if it is an
 /// `{"op": ...}` object. Used to pull Tier-1 ops out of the `known_answer` mix.
 fn top_op(expr: &str) -> Option<String> {
@@ -469,4 +483,30 @@ fn tier3b_zk_differential_against_shared_vectors() {
             ),
         }
     }
+}
+
+#[test]
+fn sigma_zk_differential_against_shared_vectors() {
+    let r = run_differential(SIGMA_CATEGORIES, SIGMA_OPS);
+    report_and_assert("Sigma", SIGMA_CATEGORIES, &r);
+    // The three sigma categories: sigma_dlog (8) + sigma_dhtuple (10) + sigma (21)
+    // = 39 vectors. The `sigma` category is the FROZEN-serialization byte-contract:
+    // its value cases (valid->true, soundness->false) are reproduced byte-identical
+    // ONLY IF the Rust strong-FS transcript serialization matches Scala exactly.
+    assert_eq!(
+        r.total, 39,
+        "expected all 39 sigma vectors (8 dlog + 10 dhtuple + 21 sigma), got {}",
+        r.total
+    );
+    // Every malformed case (off-curve, wrong-width, bad tree, k>n, shape mismatch)
+    // MUST error in Rust where it errors in Scala.
+    assert_eq!(
+        r.error_pass, r.error_cases,
+        "every malformed sigma error case must error in Rust"
+    );
+    assert!(
+        r.error_cases >= 13,
+        "expected at least 13 sigma error cases (3 dlog + 3 dhtuple + 7 sigma), got {}",
+        r.error_cases
+    );
 }

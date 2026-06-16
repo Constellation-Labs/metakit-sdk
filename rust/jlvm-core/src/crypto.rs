@@ -985,6 +985,801 @@ pub fn ecvrf_verify(values: &[Value]) -> Result<Value, String> {
     }
 }
 
+// ===========================================================================
+// SIGMA PROTOCOLS (classical, no-trusted-setup, Ergo / EIP-11 family).
+//   Byte-for-byte port of the Scala CryptoOps Sigma section:
+//     - prove_dlog_verify    : first-class ALIAS for schnorr_verify (DLog leaf).
+//     - prove_dhtuple_verify : the DDH / Diffie-Hellman-tuple Σ-leaf.
+//     - sigma_verify         : the recursive CDS proposition verifier
+//                              (AND / OR / THRESHOLD), strong Fiat-Shamir over
+//                              the FROZEN serialization (docs/sigma-verify.md).
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// prove_dlog_verify: [pkHex(64B G1), msgHex, proofHex(96B)] -> bool.
+//   First-class sigma-leaf ALIAS for schnorr_verify (identical inputs and
+//   semantics). The only difference is the error-message role label, matching
+//   the Scala `.leftMap(_.replace("schnorr_verify", "prove_dlog_verify"))`.
+// ---------------------------------------------------------------------------
+
+/// `prove_dlog_verify([pkHex(64B), msgHex, proofHex(96B)]) -> bool`.
+pub fn prove_dlog_verify(values: &[Value]) -> Result<Value, String> {
+    schnorr_verify(values).map_err(|e| e.replace("schnorr_verify", "prove_dlog_verify"))
+}
+
+// ---------------------------------------------------------------------------
+// prove_dhtuple_verify: [gHex(64B), hHex(64B), uHex(64B), vHex(64B), msgHex, proofHex(160B)] -> bool.
+//   DDH / Diffie-Hellman-tuple Σ-leaf on BN254 G1. Statement (g,h,u,v) ∈ G1⁴,
+//   claim ∃w. u = g^w ∧ v = h^w. Convention:
+//     proof = a1(64B) || a2(64B) || z(32B)   (total 160 bytes)
+//     a1 = g^r, a2 = h^r, z = r + e·w
+//     STRONG Fiat-Shamir: e = SHA256(g‖h‖u‖v‖a1‖a2‖msg) mod R
+//     accept iff  z·g == a1 + e·u  AND  z·h == a2 + e·v
+//
+//   STRONG-FS IS THE LOAD-BEARING CORRECTNESS POINT: the challenge binds the FULL
+//   statement (g,h,u,v) AND both commitments (a1,a2) AND the message. Byte-for-
+//   byte port of the Scala CryptoOps.proveDhTupleVerify.
+// ---------------------------------------------------------------------------
+
+/// Total proof width: a1(64B) || a2(64B) || z(32B).
+const DHTUPLE_PROOF_BYTES: usize = hb::G1_BYTES + hb::G1_BYTES + hb::SCALAR_BYTES;
+
+/// `prove_dhtuple_verify([gHex, hHex, uHex, vHex, msgHex, proofHex(160B)]) -> bool`.
+pub fn prove_dhtuple_verify(values: &[Value]) -> Result<Value, String> {
+    match values {
+        [g_v, h_v, u_v, v_v, msg_v, proof_v] => {
+            let g_hex = expect_str("prove_dhtuple_verify g", g_v)?;
+            let h_hex = expect_str("prove_dhtuple_verify h", h_v)?;
+            let u_hex = expect_str("prove_dhtuple_verify u", u_v)?;
+            let v_hex = expect_str("prove_dhtuple_verify v", v_v)?;
+            let msg_hex = expect_str("prove_dhtuple_verify msg", msg_v)?;
+            let proof_hex = expect_str("prove_dhtuple_verify proof", proof_v)?;
+
+            let g_c = hb::parse_g1(g_hex, "prove_dhtuple_verify g")?;
+            let h_c = hb::parse_g1(h_hex, "prove_dhtuple_verify h")?;
+            let u_c = hb::parse_g1(u_hex, "prove_dhtuple_verify u")?;
+            let v_c = hb::parse_g1(v_hex, "prove_dhtuple_verify v")?;
+            let msg = hb::parse_bytes(msg_hex, None, "prove_dhtuple_verify msg")?;
+            // proof = a1(64B) || a2(64B) || z(32B) -> total 160 bytes.
+            let proof = hb::parse_bytes(
+                proof_hex,
+                Some(DHTUPLE_PROOF_BYTES),
+                "prove_dhtuple_verify proof",
+            )?;
+            let a1_bytes = &proof[0..hb::G1_BYTES];
+            let a2_bytes = &proof[hb::G1_BYTES..hb::G1_BYTES * 2];
+            let z_bytes = &proof[hb::G1_BYTES * 2..DHTUPLE_PROOF_BYTES];
+
+            let a1_c = hb::parse_g1(&hb::encode_bytes(a1_bytes), "prove_dhtuple_verify a1")?;
+            let a2_c = hb::parse_g1(&hb::encode_bytes(a2_bytes), "prove_dhtuple_verify a2")?;
+            let z = BigUint::from_bytes_be(z_bytes);
+
+            let g = g1_on_curve(&g_c, "prove_dhtuple_verify g")?;
+            let h = g1_on_curve(&h_c, "prove_dhtuple_verify h")?;
+            let u = g1_on_curve(&u_c, "prove_dhtuple_verify u")?;
+            let v = g1_on_curve(&v_c, "prove_dhtuple_verify v")?;
+            let a1 = g1_on_curve(&a1_c, "prove_dhtuple_verify a1")?;
+            let a2 = g1_on_curve(&a2_c, "prove_dhtuple_verify a2")?;
+
+            // SOUNDNESS: reject the identity / point-at-infinity on ANY of the four
+            // statement points (g/h base => equation collapse, u/v image => degenerate
+            // hiding). a1 / a2 may legitimately be the identity (r ≡ 0), so they are
+            // NOT rejected -- but they are still bound into the transcript below.
+            // Correct-WIDTH but cryptographically invalid -> false, NOT an Err.
+            if g.is_zero() || h.is_zero() || u.is_zero() || v.is_zero() {
+                return Ok(Value::Bool(false));
+            }
+
+            // STRONG Fiat-Shamir: bind the full statement AND both commitments AND
+            // the message. Re-encode each statement point to its canonical fixed-width
+            // 64-byte form (parse_g1 validated width) so the transcript is layout-
+            // deterministic; a1/a2 are taken as their raw proof bytes (already 64B).
+            let g_bytes = hb::parse_bytes(g_hex, Some(hb::G1_BYTES), "prove_dhtuple_verify g")?;
+            let h_bytes = hb::parse_bytes(h_hex, Some(hb::G1_BYTES), "prove_dhtuple_verify h")?;
+            let u_bytes = hb::parse_bytes(u_hex, Some(hb::G1_BYTES), "prove_dhtuple_verify u")?;
+            let v_bytes = hb::parse_bytes(v_hex, Some(hb::G1_BYTES), "prove_dhtuple_verify v")?;
+            let mut hasher = Sha256::new();
+            hasher.update(&g_bytes);
+            hasher.update(&h_bytes);
+            hasher.update(&u_bytes);
+            hasher.update(&v_bytes);
+            hasher.update(a1_bytes);
+            hasher.update(a2_bytes);
+            hasher.update(&msg);
+            let digest = hasher.finalize();
+            let group_order = hb::modulus();
+            let e = BigUint::from_bytes_be(&digest) % group_order;
+
+            // accept iff z·g == a1 + e·u  AND  z·h == a2 + e·v
+            let zr = &z % group_order;
+            let lhs1 = g.mul_biguint(&zr);
+            let rhs1 = (u.mul_biguint(&e) + a1).into_affine();
+            let lhs2 = h.mul_biguint(&zr);
+            let rhs2 = (v.mul_biguint(&e) + a2).into_affine();
+            let ok = affine_eq(&lhs1, &rhs1) && affine_eq(&lhs2, &rhs2);
+            Ok(Value::Bool(ok))
+        }
+        _ => Err(format!(
+            "prove_dhtuple_verify: expected [gHex(64B), hHex(64B), uHex(64B), vHex(64B), msgHex, proofHex(160B)], got {values:?}"
+        )),
+    }
+}
+
+// ===========================================================================
+// sigma_verify: the RECURSIVE CDS Σ-protocol proposition verifier.
+//
+//   {"sigma_verify": [ <proposition>, <proof>, <messageHex> ]} -> bool
+//
+// Byte-for-byte port of the Scala CryptoOps.sigmaVerify (Ergo "Verifier Steps
+// 1-6" for BN254 G1). The FROZEN canonical serialization (docs/sigma-verify.md
+// §4) MUST match the Scala byte layout exactly -- it is the strong-FS transcript.
+//
+//   Node tags: dlog=0x00, dhtuple=0x01, and=0x02, or=0x03, threshold=0x04.
+//   k and every child-count: 4-byte big-endian.
+//   Points (pk,g,h,u,v and reconstructed a/a1/a2): canonical 64-byte x‖y.
+//     dlog      := 0x00 ‖ pk(64) ‖ a(64)
+//     dhtuple   := 0x01 ‖ g(64) ‖ h(64) ‖ u(64) ‖ v(64) ‖ a1(64) ‖ a2(64)
+//     and       := 0x02 ‖ nChildren(4) ‖ child_0 ‖ …
+//     or        := 0x03 ‖ nChildren(4) ‖ child_0 ‖ …
+//     threshold := 0x04 ‖ k(4) ‖ nChildren(4) ‖ child_0 ‖ …
+//   Root challenge := SHA256( DomainSep ‖ serializeTree(root) ‖ message ) mod R,
+//   DomainSep = ascii("sigma_verify:v1").
+//
+// ERROR-VS-FALSE (lockstep with the leaves): malformed (bad hex/width, off-curve,
+// structurally invalid tree, k<=0 or k>n, prop/proof shape mismatch) => Err.
+// Well-formed-but-cryptographically-wrong (root hash != root challenge, OR
+// challenges do not XOR, threshold does not interpolate, identity statement
+// point) => false.
+// ===========================================================================
+
+// One fixed tag byte per node kind (part of the bound transcript).
+const SIGMA_TAG_DLOG: u8 = 0x00;
+const SIGMA_TAG_DHTUPLE: u8 = 0x01;
+const SIGMA_TAG_AND: u8 = 0x02;
+const SIGMA_TAG_OR: u8 = 0x03;
+const SIGMA_TAG_THRESHOLD: u8 = 0x04;
+
+/// Domain separator for the sigma_verify root hash (distinct from leaf transcripts).
+const SIGMA_DOMAIN_SEP: &[u8] = b"sigma_verify:v1";
+
+/// Fixed challenge width in bytes (32-byte big-endian, reduced mod R where a scalar).
+const SIGMA_CHALLENGE_BYTES: usize = hb::SCALAR_BYTES; // 32
+
+// --- Parsed PROPOSITION tree (statement only; no challenges/responses). ---
+// `DhTuple` is intentionally larger than `Dlog` (4 points + 4 canonical-byte
+// vectors vs 1). The tree is built once per `sigma_verify` call and walked
+// recursively -- it is never stored in a large homogeneous collection -- so the
+// per-variant size gap is irrelevant; boxing would add indirection to the
+// crypto-critical reconstruction path for no benefit.
+#[allow(clippy::large_enum_variant)]
+enum PropNode {
+    Dlog {
+        pk: G1Projective,
+        pk_bytes: Vec<u8>,
+    },
+    DhTuple {
+        g: G1Projective,
+        h: G1Projective,
+        u: G1Projective,
+        v: G1Projective,
+        g_bytes: Vec<u8>,
+        h_bytes: Vec<u8>,
+        u_bytes: Vec<u8>,
+        v_bytes: Vec<u8>,
+    },
+    And(Vec<PropNode>),
+    Or(Vec<PropNode>),
+    Threshold(usize, Vec<PropNode>),
+}
+
+// --- Parsed PROOF tree (per-node challenge `e`; per-leaf response `z`). ---
+enum ProofNode {
+    Dlog {
+        e: Vec<u8>,
+        z: BigUint,
+    },
+    DhTuple {
+        e: Vec<u8>,
+        z: BigUint,
+    },
+    And {
+        e: Vec<u8>,
+        children: Vec<ProofNode>,
+    },
+    Or {
+        e: Vec<u8>,
+        children: Vec<ProofNode>,
+    },
+    Threshold {
+        e: Vec<u8>,
+        k: usize,
+        children: Vec<ProofNode>,
+    },
+}
+
+impl ProofNode {
+    fn challenge(&self) -> &[u8] {
+        match self {
+            ProofNode::Dlog { e, .. }
+            | ProofNode::DhTuple { e, .. }
+            | ProofNode::And { e, .. }
+            | ProofNode::Or { e, .. }
+            | ProofNode::Threshold { e, .. } => e,
+        }
+    }
+}
+
+/// `sigma_verify([proposition, proof, messageHex]) -> bool`.
+pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
+    match values {
+        [prop_v, proof_v, msg_v] => {
+            let msg_hex = expect_str("sigma_verify message", msg_v)?;
+            let msg = hb::parse_bytes(msg_hex, None, "sigma_verify message")?;
+            let prop = parse_prop_node(prop_v, "sigma_verify.proposition")?;
+            let proof = parse_proof_node(proof_v, "sigma_verify.proof")?;
+            let result = verify_tree(&prop, &proof, &msg)?;
+            Ok(Value::Bool(result))
+        }
+        _ => Err(format!(
+            "sigma_verify: expected [proposition, proof, messageHex], got {values:?}"
+        )),
+    }
+}
+
+// --- Proposition parsing (statement only). Malformed => hard error. ---
+
+fn sigma_field<'a>(role: &str, m: &'a [(String, Value)], key: &str) -> Result<&'a Value, String> {
+    m.iter()
+        .find(|(k, _)| k == key)
+        .map(|(_, v)| v)
+        .ok_or_else(|| format!("{role}: missing required field '{key}'"))
+}
+
+/// Parse a G1 statement point: on-curve check + canonical 64-byte re-encoding.
+fn sigma_point(
+    role: &str,
+    m: &[(String, Value)],
+    key: &str,
+) -> Result<(G1Projective, Vec<u8>), String> {
+    let v = sigma_field(role, m, key)?;
+    let hex = expect_str(&format!("{role}.{key}"), v)?;
+    let coords = hb::parse_g1(hex, &format!("{role}.{key}"))?;
+    let p = g1_on_curve(&coords, &format!("{role}.{key}"))?;
+    let bytes = hb::parse_bytes(hex, Some(hb::G1_BYTES), &format!("{role}.{key}"))?;
+    Ok((p, bytes))
+}
+
+fn sigma_children_values<'a>(role: &str, m: &'a [(String, Value)]) -> Result<&'a [Value], String> {
+    match sigma_field(role, m, "children")? {
+        Value::Array(arr) if !arr.is_empty() => Ok(arr.as_slice()),
+        Value::Array(_) => Err(format!("{role}: 'children' must be a non-empty array")),
+        other => Err(format!(
+            "{role}: 'children' must be an array, got {}",
+            other.tag()
+        )),
+    }
+}
+
+fn sigma_int(role: &str, m: &[(String, Value)], key: &str) -> Result<usize, String> {
+    match sigma_field(role, m, key)? {
+        Value::Int(i) => {
+            use num_traits::ToPrimitive;
+            // 0 <= i <= Int.MaxValue (the Scala bound). usize on 64-bit holds it.
+            match i.to_i64() {
+                Some(n) if (0..=i64::from(i32::MAX)).contains(&n) => Ok(n as usize),
+                _ => Err(format!("{role}.{key}: out of range: {i}")),
+            }
+        }
+        other => Err(format!(
+            "{role}.{key}: expected an integer, got {}",
+            other.tag()
+        )),
+    }
+}
+
+fn sigma_type<'a>(role: &str, m: &'a [(String, Value)]) -> Result<&'a str, String> {
+    let v = sigma_field(role, m, "type")?;
+    expect_str(&format!("{role}.type"), v)
+}
+
+fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
+    match v {
+        Value::Map(m) => match sigma_type(role, m)? {
+            "dlog" => {
+                let (pk, b) = sigma_point(role, m, "pk")?;
+                Ok(PropNode::Dlog { pk, pk_bytes: b })
+            }
+            "dhtuple" => {
+                let (g, g_bytes) = sigma_point(role, m, "g")?;
+                let (h, h_bytes) = sigma_point(role, m, "h")?;
+                let (u, u_bytes) = sigma_point(role, m, "u")?;
+                let (vv, v_bytes) = sigma_point(role, m, "v")?;
+                Ok(PropNode::DhTuple {
+                    g,
+                    h,
+                    u,
+                    v: vv,
+                    g_bytes,
+                    h_bytes,
+                    u_bytes,
+                    v_bytes,
+                })
+            }
+            "and" => {
+                let cs = sigma_children_values(role, m)?;
+                let children = cs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| parse_prop_node(c, &format!("{role}.and[{i}]")))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(PropNode::And(children))
+            }
+            "or" => {
+                let cs = sigma_children_values(role, m)?;
+                let children = cs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| parse_prop_node(c, &format!("{role}.or[{i}]")))
+                    .collect::<Result<Vec<_>, _>>()?;
+                Ok(PropNode::Or(children))
+            }
+            "threshold" => {
+                let k = sigma_int(role, m, "k")?;
+                let cs = sigma_children_values(role, m)?;
+                let children = cs
+                    .iter()
+                    .enumerate()
+                    .map(|(i, c)| parse_prop_node(c, &format!("{role}.threshold[{i}]")))
+                    .collect::<Result<Vec<_>, _>>()?;
+                let n = children.len();
+                // Structural validity: 1 <= k <= n; n <= 255 (GF(2^8) child indices 1..n).
+                if k < 1 {
+                    return Err(format!("{role}.threshold: k must be >= 1, got {k}"));
+                }
+                if k > n {
+                    return Err(format!(
+                        "{role}.threshold: k ({k}) > number of children ({n})"
+                    ));
+                }
+                if n > 255 {
+                    return Err(format!(
+                        "{role}.threshold: at most 255 children (GF(2^8) indices), got {n}"
+                    ));
+                }
+                Ok(PropNode::Threshold(k, children))
+            }
+            other => Err(format!("{role}: unknown node type '{other}'")),
+        },
+        other => Err(format!(
+            "{role}: expected a proposition node object, got {}",
+            other.tag()
+        )),
+    }
+}
+
+// --- Proof parsing (per-node challenge + per-leaf response). Malformed => hard error. ---
+
+fn sigma_challenge(role: &str, m: &[(String, Value)]) -> Result<Vec<u8>, String> {
+    let v = sigma_field(role, m, "e")?;
+    let hex = expect_str(&format!("{role}.e"), v)?;
+    // Challenge is a fixed 32-byte big-endian value (canonicity not required: it is
+    // compared byte-wise against the recomputed challenge, also reduced mod R).
+    hb::parse_bytes(hex, Some(SIGMA_CHALLENGE_BYTES), &format!("{role}.e"))
+}
+
+fn sigma_response(role: &str, m: &[(String, Value)]) -> Result<BigUint, String> {
+    let v = sigma_field(role, m, "z")?;
+    let hex = expect_str(&format!("{role}.z"), v)?;
+    hb::parse_scalar(hex, &format!("{role}.z"))
+}
+
+fn parse_proof_node(v: &Value, role: &str) -> Result<ProofNode, String> {
+    match v {
+        Value::Map(m) => {
+            let e = sigma_challenge(role, m)?;
+            let typ = sigma_type(role, m)?;
+            match typ {
+                "dlog" => {
+                    let z = sigma_response(role, m)?;
+                    Ok(ProofNode::Dlog { e, z })
+                }
+                "dhtuple" => {
+                    let z = sigma_response(role, m)?;
+                    Ok(ProofNode::DhTuple { e, z })
+                }
+                "and" => {
+                    let cs = sigma_children_values(role, m)?;
+                    let children = cs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| parse_proof_node(c, &format!("{role}.and[{i}]")))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(ProofNode::And { e, children })
+                }
+                "or" => {
+                    let cs = sigma_children_values(role, m)?;
+                    let children = cs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| parse_proof_node(c, &format!("{role}.or[{i}]")))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(ProofNode::Or { e, children })
+                }
+                "threshold" => {
+                    let k = sigma_int(role, m, "k")?;
+                    let cs = sigma_children_values(role, m)?;
+                    let children = cs
+                        .iter()
+                        .enumerate()
+                        .map(|(i, c)| parse_proof_node(c, &format!("{role}.threshold[{i}]")))
+                        .collect::<Result<Vec<_>, _>>()?;
+                    Ok(ProofNode::Threshold { e, k, children })
+                }
+                other => Err(format!("{role}: unknown node type '{other}'")),
+            }
+        }
+        other => Err(format!(
+            "{role}: expected a proof node object, got {}",
+            other.tag()
+        )),
+    }
+}
+
+/// The recursive verifier (Ergo Verifier Steps 1-6).
+///   Err(_)  -> MALFORMED (prop/proof shape mismatch, off-curve, identity base,
+///              bad threshold degree/index) -- a hard encoding fault;
+///   Ok(false) -> well-formed but cryptographically INVALID;
+///   Ok(true)  -> accept.
+fn verify_tree(prop: &PropNode, proof: &ProofNode, msg: &[u8]) -> Result<bool, String> {
+    let (crypto_ok, serialized) = verify_node(prop, proof, "sigma_verify")?;
+    if !crypto_ok {
+        return Ok(false);
+    }
+    // Steps 5-6: STRONG Fiat-Shamir over (DomainSep ‖ canonical tree ‖ message),
+    // mod R, compared against the ROOT challenge. Both sides reduced mod R.
+    let mut hasher = Sha256::new();
+    hasher.update(SIGMA_DOMAIN_SEP);
+    hasher.update(&serialized);
+    hasher.update(msg);
+    let digest = hasher.finalize();
+    let group_order = hb::modulus();
+    let recomputed_root = BigUint::from_bytes_be(&digest) % group_order;
+    let claimed_root = BigUint::from_bytes_be(proof.challenge()) % group_order;
+    Ok(recomputed_root == claimed_root)
+}
+
+/// One recursive node visit. Returns `(crypto_ok, serialized_bytes)`:
+/// `crypto_ok = false` is a well-formed-but-wrong verdict that propagates up;
+/// `Err` is a structural/encoding fault (prop/proof shape mismatch is hard error).
+fn verify_node(prop: &PropNode, proof: &ProofNode, role: &str) -> Result<(bool, Vec<u8>), String> {
+    let group_order = hb::modulus();
+    match (prop, proof) {
+        // --- DLog leaf: reconstruct a = z·G − e·pk, serialize 0x00 ‖ pk ‖ a. ---
+        (PropNode::Dlog { pk, pk_bytes }, ProofNode::Dlog { e, z }) => {
+            // SOUNDNESS: reject the identity pk (universal forgery).
+            if pk.is_zero() {
+                return Ok((false, Vec::new()));
+            }
+            let e_scalar = BigUint::from_bytes_be(e) % group_order;
+            let z_scalar = z % group_order;
+            let a = dlog_compute_commitment(pk, &e_scalar, &z_scalar);
+            let a_bytes = encode_g1_bytes(&a, &format!("{role}.dlog.a"))?;
+            let mut out = Vec::with_capacity(1 + hb::G1_BYTES * 2);
+            out.push(SIGMA_TAG_DLOG);
+            out.extend_from_slice(pk_bytes);
+            out.extend_from_slice(&a_bytes);
+            Ok((true, out))
+        }
+
+        // --- DHTuple leaf: a1 = z·g − e·u, a2 = z·h − e·v; serialize 0x01 ‖ g‖h‖u‖v‖a1‖a2. ---
+        (
+            PropNode::DhTuple {
+                g,
+                h,
+                u,
+                v,
+                g_bytes,
+                h_bytes,
+                u_bytes,
+                v_bytes,
+            },
+            ProofNode::DhTuple { e, z },
+        ) => {
+            // SOUNDNESS: reject identity on any statement point.
+            if g.is_zero() || h.is_zero() || u.is_zero() || v.is_zero() {
+                return Ok((false, Vec::new()));
+            }
+            let e_scalar = BigUint::from_bytes_be(e) % group_order;
+            let z_scalar = z % group_order;
+            // The single shared response z is used for BOTH coordinate reconstructions.
+            let a1 = dhtuple_compute_commitment(g, u, &e_scalar, &z_scalar);
+            let a2 = dhtuple_compute_commitment(h, v, &e_scalar, &z_scalar);
+            let a1_bytes = encode_g1_bytes(&a1, &format!("{role}.dhtuple.a1"))?;
+            let a2_bytes = encode_g1_bytes(&a2, &format!("{role}.dhtuple.a2"))?;
+            let mut out = Vec::with_capacity(1 + hb::G1_BYTES * 6);
+            out.push(SIGMA_TAG_DHTUPLE);
+            out.extend_from_slice(g_bytes);
+            out.extend_from_slice(h_bytes);
+            out.extend_from_slice(u_bytes);
+            out.extend_from_slice(v_bytes);
+            out.extend_from_slice(&a1_bytes);
+            out.extend_from_slice(&a2_bytes);
+            Ok((true, out))
+        }
+
+        // --- CAND: every child challenge MUST equal the node challenge. ---
+        (
+            PropNode::And(p_children),
+            ProofNode::And {
+                e,
+                children: pr_children,
+            },
+        ) => {
+            if p_children.len() != pr_children.len() {
+                return Err(format!(
+                    "{role}.and: proposition/proof child count mismatch ({} vs {})",
+                    p_children.len(),
+                    pr_children.len()
+                ));
+            }
+            let child_challenges_ok = pr_children
+                .iter()
+                .all(|c| constant_time_eq(c.challenge(), e));
+            let mut all_ok = child_challenges_ok;
+            let mut body = Vec::new();
+            for (i, (pc, prc)) in p_children.iter().zip(pr_children.iter()).enumerate() {
+                let (ok, ser) = verify_node(pc, prc, &format!("{role}.and[{i}]"))?;
+                all_ok = all_ok && ok;
+                body.extend_from_slice(&ser);
+            }
+            let mut out = Vec::with_capacity(1 + 4 + body.len());
+            out.push(SIGMA_TAG_AND);
+            out.extend_from_slice(&uint32(p_children.len()));
+            out.extend_from_slice(&body);
+            Ok((all_ok, out))
+        }
+
+        // --- COR: child challenges MUST XOR to the node challenge (CDS XOR). ---
+        (
+            PropNode::Or(p_children),
+            ProofNode::Or {
+                e,
+                children: pr_children,
+            },
+        ) => {
+            if p_children.len() != pr_children.len() {
+                return Err(format!(
+                    "{role}.or: proposition/proof child count mismatch ({} vs {})",
+                    p_children.len(),
+                    pr_children.len()
+                ));
+            }
+            let child_es: Vec<&[u8]> = pr_children.iter().map(|c| c.challenge()).collect();
+            let xor_ok = constant_time_eq(&xor_bytes(&child_es, SIGMA_CHALLENGE_BYTES), e);
+            let mut all_ok = xor_ok;
+            let mut body = Vec::new();
+            for (i, (pc, prc)) in p_children.iter().zip(pr_children.iter()).enumerate() {
+                let (ok, ser) = verify_node(pc, prc, &format!("{role}.or[{i}]"))?;
+                all_ok = all_ok && ok;
+                body.extend_from_slice(&ser);
+            }
+            let mut out = Vec::with_capacity(1 + 4 + body.len());
+            out.push(SIGMA_TAG_OR);
+            out.extend_from_slice(&uint32(p_children.len()));
+            out.extend_from_slice(&body);
+            Ok((all_ok, out))
+        }
+
+        // --- CTHRESHOLD(k,n): child challenges are P(1..n) for a degree-(n-k)
+        //     GF(2^8) poly P with P(0) = node challenge. ---
+        (
+            PropNode::Threshold(p_k, p_children),
+            ProofNode::Threshold {
+                e,
+                k: pr_k,
+                children: pr_children,
+            },
+        ) => {
+            if p_k != pr_k {
+                return Err(format!(
+                    "{role}.threshold: proposition/proof k mismatch ({p_k} vs {pr_k})"
+                ));
+            }
+            if p_children.len() != pr_children.len() {
+                return Err(format!(
+                    "{role}.threshold: proposition/proof child count mismatch ({} vs {})",
+                    p_children.len(),
+                    pr_children.len()
+                ));
+            }
+            let n = p_children.len();
+            let child_es: Vec<&[u8]> = pr_children.iter().map(|c| c.challenge()).collect();
+            let interp_ok = threshold_interpolates(e, &child_es, *p_k, n);
+            let mut all_ok = interp_ok;
+            let mut body = Vec::new();
+            for (i, (pc, prc)) in p_children.iter().zip(pr_children.iter()).enumerate() {
+                let (ok, ser) = verify_node(pc, prc, &format!("{role}.threshold[{i}]"))?;
+                all_ok = all_ok && ok;
+                body.extend_from_slice(&ser);
+            }
+            let mut out = Vec::with_capacity(1 + 8 + body.len());
+            out.push(SIGMA_TAG_THRESHOLD);
+            out.extend_from_slice(&uint32(*p_k));
+            out.extend_from_slice(&uint32(n));
+            out.extend_from_slice(&body);
+            Ok((all_ok, out))
+        }
+
+        // --- Any other (prop, proof) pairing is a structural shape mismatch. ---
+        (p, pr) => Err(format!(
+            "{role}: proposition/proof node-type mismatch ({} vs {})",
+            prop_node_kind(p),
+            proof_node_kind(pr)
+        )),
+    }
+}
+
+/// CTHRESHOLD interpolation check (byte-wise GF(2^8)). The `n` child challenges
+/// must be `P(1), …, P(n)` of a degree-`(n-k)` GF(2^8) polynomial with
+/// `P(0) = parent challenge`, computed independently per byte-lane (exactly Ergo).
+/// `false` (not error) on mismatch.
+fn threshold_interpolates(parent_e: &[u8], child_es: &[&[u8]], k: usize, n: usize) -> bool {
+    let degree = n - k; // (degree + 1) points define the polynomial
+    let known_count = degree + 1;
+    // Defining x-coords: 0 (parent), then child indices 1..degree.
+    let xs: Vec<i32> = (0..known_count as i32).collect();
+    // Each of the 32 byte-lanes must independently interpolate.
+    (0..SIGMA_CHALLENGE_BYTES).all(|lane| {
+        let ys: Vec<i32> = (0..known_count)
+            .map(|j| {
+                if j == 0 {
+                    i32::from(parent_e[lane]) // P(0) = parent challenge
+                } else {
+                    i32::from(child_es[j - 1][lane]) // child (j-1) sits at x = j
+                }
+            })
+            .collect();
+        // Remaining (unconstrained) children: indices degree .. n-1, i.e. x = degree+1 .. n.
+        (degree..n)
+            .all(|c| i32::from(child_es[c][lane]) == gf_lagrange_eval(&xs, &ys, c as i32 + 1))
+    })
+}
+
+/// Node-kind label for shape-mismatch error messages.
+fn prop_node_kind(n: &PropNode) -> &'static str {
+    match n {
+        PropNode::Dlog { .. } => "dlog",
+        PropNode::DhTuple { .. } => "dhtuple",
+        PropNode::And(_) => "and",
+        PropNode::Or(_) => "or",
+        PropNode::Threshold(..) => "threshold",
+    }
+}
+
+fn proof_node_kind(n: &ProofNode) -> &'static str {
+    match n {
+        ProofNode::Dlog { .. } => "dlog",
+        ProofNode::DhTuple { .. } => "dhtuple",
+        ProofNode::And { .. } => "and",
+        ProofNode::Or { .. } => "or",
+        ProofNode::Threshold { .. } => "threshold",
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Commitment-recovery primitives (the sigma_verify tree's bottom-up step).
+//   dlog:    a = z·G − e·pk         (honest: a = R = r·G)
+//   dhtuple: a = z·base − e·image   (honest: a = r·base)
+// ---------------------------------------------------------------------------
+
+/// DLog commitment recovery: `a = z·G − e·pk`. Caller passes `e`, `z` already
+/// reduced mod R (as the Scala tree does). Byte-for-byte: the resulting affine
+/// point's canonical (x,y) is what gets serialized.
+fn dlog_compute_commitment(pk: &G1Projective, e: &BigUint, z: &BigUint) -> G1Affine {
+    // z·G + (−e·pk): computed in projective, converted to affine. The affine
+    // (x,y) (with infinity -> (0,0)) is identical to the Scala manual y-negation.
+    let z_g = generator().mul_biguint(z); // affine
+    let e_pk = pk.mul_biguint(e); // affine
+    (z_g.into_group() - e_pk.into_group()).into_affine()
+}
+
+/// DHTuple commitment recovery for one base: `a = z·base − e·image`.
+fn dhtuple_compute_commitment(
+    base: &G1Projective,
+    image: &G1Projective,
+    e: &BigUint,
+    z: &BigUint,
+) -> G1Affine {
+    let z_base = base.mul_biguint(z);
+    let e_img = image.mul_biguint(e);
+    (z_base.into_group() - e_img.into_group()).into_affine()
+}
+
+/// Re-encode a reconstructed G1 commitment to its canonical 64-byte big-endian
+/// bytes (matching the Scala `encodeG1Bytes`: `HexBytes.encodeG1` then parse to
+/// fixed 64-byte width). Infinity -> 64 zero bytes.
+fn encode_g1_bytes(p: &G1Affine, role: &str) -> Result<Vec<u8>, String> {
+    let hex = encode_g1_point(p)?;
+    hb::parse_bytes(&hex, Some(hb::G1_BYTES), role)
+}
+
+/// Fixed 4-byte big-endian encoding of a non-negative count / threshold k.
+fn uint32(v: usize) -> [u8; 4] {
+    (v as u32).to_be_bytes()
+}
+
+/// XOR a list of equal-width byte arrays into one `width`-byte array (CDS OR fold).
+fn xor_bytes(arrays: &[&[u8]], width: usize) -> Vec<u8> {
+    (0..width)
+        .map(|i| arrays.iter().fold(0u8, |acc, a| acc ^ a[i]))
+        .collect()
+}
+
+/// Length-checked, data-independent byte equality (no early-exit timing leak).
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |diff, (x, y)| diff | (x ^ y)) == 0
+}
+
+// ---------------------------------------------------------------------------
+// GF(2^8) Shamir arithmetic for the CTHRESHOLD challenge split (AES field 0x11b).
+//   Byte-for-byte port of the Scala gfMul / gfInv / gfLagrangeEval.
+// ---------------------------------------------------------------------------
+
+/// GF(2^8) multiply (Russian-peasant, AES reduction poly 0x11b).
+fn gf_mul(a0: i32, b0: i32) -> i32 {
+    let mut prod = 0i32;
+    let mut a = a0 & 0xff;
+    let mut b = b0 & 0xff;
+    for _ in 0..8 {
+        if (b & 1) != 0 {
+            prod ^= a;
+        }
+        let high = a & 0x80;
+        a = (a << 1) & 0xff;
+        if high != 0 {
+            a ^= 0x1b;
+        }
+        b >>= 1;
+    }
+    prod & 0xff
+}
+
+/// GF(2^8) multiplicative inverse via Fermat (a^254 = a^-1 for a != 0). gf_inv(0)=0.
+fn gf_inv(a: i32) -> i32 {
+    if (a & 0xff) == 0 {
+        return 0;
+    }
+    // a^254: square-and-multiply over the 8 bits of 254 = 0b11111110.
+    let mut acc = 1i32;
+    let mut base = a & 0xff;
+    for bit in 0..8 {
+        if ((254 >> bit) & 1) != 0 {
+            acc = gf_mul(acc, base);
+        }
+        base = gf_mul(base, base);
+    }
+    acc & 0xff
+}
+
+/// Lagrange evaluation in GF(2^8): given DISTINCT sample points `(xs, ys)`, return
+/// the interpolating polynomial evaluated at `x_eval`. Subtraction == XOR.
+fn gf_lagrange_eval(xs: &[i32], ys: &[i32], x_eval: i32) -> i32 {
+    let mut acc = 0i32;
+    for i in 0..xs.len() {
+        // basis_i(x_eval) = ∏_{j!=i} (x_eval - xs_j) / (xs_i - xs_j).
+        let mut num = 1i32;
+        let mut den = 1i32;
+        for j in 0..xs.len() {
+            if j != i {
+                num = gf_mul(num, x_eval ^ xs[j]);
+                den = gf_mul(den, xs[i] ^ xs[j]);
+            }
+        }
+        acc ^= gf_mul(ys[i], gf_mul(num, gf_inv(den)));
+    }
+    acc & 0xff
+}
+
 // ---------------------------------------------------------------------------
 // BN254 G1 helpers (matching Besu AltBn128Point / Scala Bn254.G1 semantics).
 // ---------------------------------------------------------------------------
@@ -1378,5 +2173,71 @@ mod tests {
             Value::Str("0xa3f4674d9b713ca0598e394a19c98e5312eafd2b4e3698b41090651332d507d330d5a9e36aa46f8247ec84e1e0302c1c08bdd8f7944dc7a8daa0cb8c07b6c3837015b6c8533247c1c8876102d9650857c00924f9d7999f4df8a2a30af33c48d4".into()),
         ]);
         assert!(err.is_err(), "empty pubkey list must be an opcode error");
+    }
+
+    // -----------------------------------------------------------------------
+    // SIGMA serialization byte-contract (frozen layout, docs/sigma-verify.md §4).
+    //
+    // For a VALID proof the verifier's `verify_node` serialization (over the
+    // RECONSTRUCTED commitments) equals the Scala prover's `serializeWithCommitments`
+    // (over the SAME commitments). These KATs are the Scala-emitted
+    // `serializedHex` (src/test/resources/conformance/sigma_serialization_kats.json,
+    // produced by metakit's SigmaVectorGen). Asserting `verify_node` reproduces
+    // them DIRECTLY pins the Rust strong-FS transcript byte layout against the
+    // Scala byte layout, independent of the true/false verification outcome --
+    // this is the crown-jewel byte-identity evidence for an external audit.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn sigma_serialization_byte_identity_against_scala_kats() {
+        // (name, proposition JSON, proof JSON, serializedHex) -- Scala SigmaVectorGen output.
+        let kats: &[(&str, &str, &str, &str)] = &[
+            (
+                "dlog_leaf",
+                r#"{"type":"dlog","pk":"0x14e2946f9ea29efcd6c8d3bc8ebce97aff2267495f19207d83a5a278b3d1b6750d6d60e75a6a4aef02b7c664972665bbdfa16ef85493ca2cc449eea611b9ed31"}"#,
+                r#"{"type":"dlog","e":"0x172430cab45f89f4b1eaf2d8f5a50e7ad580b7dc16a64b3354112260d86bc256","z":"0x0a68f4fbf7ccbf0385b198387df61d6816ea1da49cee26247af22b5f2ba3a539"}"#,
+                "0x0014e2946f9ea29efcd6c8d3bc8ebce97aff2267495f19207d83a5a278b3d1b6750d6d60e75a6a4aef02b7c664972665bbdfa16ef85493ca2cc449eea611b9ed312a809b6fd67e25c49a02f77a027549454c315f3b2ab5abb9dd1703f58b3e577029f44e34d7780544f048c41a6553ef973c6c7f8ae1c750d4bf3e82292201182b",
+            ),
+            (
+                "dhtuple_leaf",
+                r#"{"type":"dhtuple","g":"0x0769bf9ac56bea3ff40232bcb1b6bd159315d84715b8e679f2d355961915abf02ab799bee0489429554fdb7c8d086475319e63b40b9c5b57cdf1ff3dd9fe2261","h":"0x17c139df0efee0f766bc0204762b774362e4ded88953a39ce849a8a7fa163fa901e0559bacb160664764a357af8a9fe70baa9258e0b959273ffc5718c6d4cc7c","u":"0x2eba7a08251112136606485e9ef2e55c89618b022ba2026780f015eb009781e320142996aa0765cc8c5ecbc54fe1d745894e84e61a65a8be30e940299d267428","v":"0x1bc98a3a15f93ae006e031b63507c00fd6f754a3d6f3412f8aada736ee976c0218fc62bcab6e3d356c9dd7946c656177f41c17ef2cd02a3955df2c75ab227d70"}"#,
+                r#"{"type":"dhtuple","e":"0x1816982c4fa6a92b71b4144e34979338925a424ce1efe6219bb75f01e079cc77","z":"0x292f02b9bbd8c58230c8c78256b463c8ccdbbd241f117743ee4feaf769febec6"}"#,
+                "0x010769bf9ac56bea3ff40232bcb1b6bd159315d84715b8e679f2d355961915abf02ab799bee0489429554fdb7c8d086475319e63b40b9c5b57cdf1ff3dd9fe226117c139df0efee0f766bc0204762b774362e4ded88953a39ce849a8a7fa163fa901e0559bacb160664764a357af8a9fe70baa9258e0b959273ffc5718c6d4cc7c2eba7a08251112136606485e9ef2e55c89618b022ba2026780f015eb009781e320142996aa0765cc8c5ecbc54fe1d745894e84e61a65a8be30e940299d2674281bc98a3a15f93ae006e031b63507c00fd6f754a3d6f3412f8aada736ee976c0218fc62bcab6e3d356c9dd7946c656177f41c17ef2cd02a3955df2c75ab227d70295d927e26b6641e0f6a019b9dcf4aed7381a9cd1985f27da31f58d10232e40902c0735a9a98e11fec528e703f5eb70a84ad93726f5ab2e8c51852d6d5ab2a4e1de6f7a27cf74bf33d4650b8488989812960f94391d97a0e19221abdc20172721a49c5d53779e959f9fbb11808d7fbaea6254baeb7892648e382c78d8cc87c7d",
+            ),
+            (
+                "and_dlog_dhtuple",
+                r#"{"type":"and","children":[{"type":"dlog","pk":"0x17072b2ed3bb8d759a5325f477629386cb6fc6ecb801bd76983a6b86abffe078168ada6cd130dd52017bb54bfa19377aadfe3bf05d18f41b77809f7f60d4af9e"},{"type":"dhtuple","g":"0x030644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd315ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4","h":"0x039730ea8dff1254c0fee9c0ea777d29a9c710b7e616683f194f18c43b43b869073a5ffcc6fc7a28c30723d6e58ce577356982d65b833a5a5c15bf9024b43d98","u":"0x22c54997b1e4f7710df6e925b259327d9bb23b29af52a8ab9d271c846c1f20752a537682cb57be952ce98746dc33229fbcd6bf0d113e45ffd2df20cadcc748e9","v":"0x236ecf67512dd8b3157d61220f369e1ed51043a80aeb449252b4d617386d792716105ce337dce18aa0a9894c354e9365c14d312625d14e3334128af51a477c1f"}]}"#,
+                r#"{"type":"and","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","children":[{"type":"dlog","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","z":"0x2cc02463c7af7fe19e35adc4c9d581f2c443f6424574c55bb8d722538047e7ba"},{"type":"dhtuple","e":"0x0631c717d8ca5b1ecae74e9af1af30432655591b9b86767202bbac53511adef8","z":"0x1467c323675bc578308d71e8cfc7b0a83b58913600c026440da52e6d92bf6d33"}]}"#,
+                "0x02000000020017072b2ed3bb8d759a5325f477629386cb6fc6ecb801bd76983a6b86abffe078168ada6cd130dd52017bb54bfa19377aadfe3bf05d18f41b77809f7f60d4af9e1221f30fef7dc01cf68820287d83aacd34fb18f82e9bf824c7f870a28940ff6d1c9b015ad48983282b472d5e956b000d736aaf8deb4bc8641eeb90403825dce001030644e72e131a029b85045b68181585d97816a916871ca8d3c208c16d87cfd315ed738c0e0a7c92e7845f96b2ae9c0a68a6a449e3538fc7ff3ebf7a5a18a2c4039730ea8dff1254c0fee9c0ea777d29a9c710b7e616683f194f18c43b43b869073a5ffcc6fc7a28c30723d6e58ce577356982d65b833a5a5c15bf9024b43d9822c54997b1e4f7710df6e925b259327d9bb23b29af52a8ab9d271c846c1f20752a537682cb57be952ce98746dc33229fbcd6bf0d113e45ffd2df20cadcc748e9236ecf67512dd8b3157d61220f369e1ed51043a80aeb449252b4d617386d792716105ce337dce18aa0a9894c354e9365c14d312625d14e3334128af51a477c1f1c3a9d42812441f38bfb619ef71bbfbf1074ed691ce1bfdbe46f84e50b5ef93a19a66b5e7152c9f25eac242de91c8a80997a9e74548ab0f007553bc19986c97206958a0da25a2edab55f8882b2ff401d27a52f5b3f102bcb16b6a57710073a9206bb3ad35548d5fad8df9de103f7d0efd53ee750287ab0db0235f87a9042695b",
+            ),
+            (
+                "threshold_2of3",
+                r#"{"type":"threshold","k":2,"children":[{"type":"dlog","pk":"0x003994af9546cdff40006d2c4f32dbb004d348f9a97dfeb88d6cf1671c2e3d932e0191fc912a1eb50c10abd503e81b1a53bfb2605c6689117d9a561bf85fed3c"},{"type":"dlog","pk":"0x276869d833946d4b8d9155cc4264a4f5216b8c87afadfaaf1e8d290ecbd8c7a306d915e47e5908cdad1ccd5f092b94cf3f0152705e0f737988075b110be63658"},{"type":"dlog","pk":"0x298a2726c54a32c634a63eac47ad9ac9e9ce5773ab17a7d2cb0d6361e0fa12d92e0485223f68b741ca1b5a1aea8e040318c2c6a33becbcfa04667d7eeec0d43b"}]}"#,
+                r#"{"type":"threshold","e":"0x09a94d5ba38ca064dad710b8d9bdaf9f319530dc68192034779979fc3cc4a90c","k":2,"children":[{"type":"dlog","e":"0x09bfa5385b45370623e1f2635498d20e3b92617e1a8f22a426b9f639c8f38d6f","z":"0x21e3cbcae48dc00af2e5389d666eb33d550f780ae5e4fd4e436e05a1cfc3329b"},{"type":"dlog","e":"0x0985869d480595a033bbcf15d8f755a6259b92838c2e240fd5d97c6dcfaae1ca","z":"0x2b07d8ab77a469fe5842788f8b26895a077aaa1212690430a2135eca73a0b3b1"},{"type":"dlog","e":"0x09936efeb0cc02c2ca8d2dce55d228372f9cc321feb8269f84f9f3a83b9dc5a9","z":"0x1447ac4f3a46e201fb12e67cea335017b29cb1388445b387a23dc280d6e522f3"}]}"#,
+                "0x04000000020000000300003994af9546cdff40006d2c4f32dbb004d348f9a97dfeb88d6cf1671c2e3d932e0191fc912a1eb50c10abd503e81b1a53bfb2605c6689117d9a561bf85fed3c25ec8644ab850f14cde799de612d011baf7c929c13cc5021cf37c5fbfc9d30bb05facd1d00c720142fbe951bb0bc1facf79b7e923d895fecda5a50849657819400276869d833946d4b8d9155cc4264a4f5216b8c87afadfaaf1e8d290ecbd8c7a306d915e47e5908cdad1ccd5f092b94cf3f0152705e0f737988075b110be6365821e08dd89f020c7b74dd92ba0e68eb5bca615e04da171dc17952df19f7b99c16074cc2253b6ebedef75eebf94842ea51b4892f1ec1dddc861306f9b97d76536f00298a2726c54a32c634a63eac47ad9ac9e9ce5773ab17a7d2cb0d6361e0fa12d92e0485223f68b741ca1b5a1aea8e040318c2c6a33becbcfa04667d7eeec0d43b2e254519c92e01031a471ddc661f0de592b72bf1bfd8f1e78a7b5ab27d9110f3039b1c8fbb15b43dd31eb67a29300b57f501caccedfee206e5e5d224e05ca71e",
+            ),
+        ];
+
+        for (name, prop_json, proof_json, want_hex) in kats {
+            let prop_v: serde_json::Value =
+                serde_json::from_str(prop_json).expect("KAT proposition is valid JSON");
+            let proof_v: serde_json::Value =
+                serde_json::from_str(proof_json).expect("KAT proof is valid JSON");
+            let prop = parse_prop_node(&crate::value::decode_value(&prop_v), "kat.prop")
+                .unwrap_or_else(|e| panic!("KAT {name} proposition parse: {e}"));
+            let proof = parse_proof_node(&crate::value::decode_value(&proof_v), "kat.proof")
+                .unwrap_or_else(|e| panic!("KAT {name} proof parse: {e}"));
+            let (crypto_ok, serialized) = verify_node(&prop, &proof, "kat")
+                .unwrap_or_else(|e| panic!("KAT {name} verify_node errored: {e}"));
+            // The KATs are all VALID proofs, so the CDS relations hold.
+            assert!(
+                crypto_ok,
+                "KAT {name} should be cryptographically well-formed"
+            );
+            let got_hex = hb::encode_bytes(&serialized);
+            assert_eq!(
+                &got_hex, want_hex,
+                "SIGMA serialization byte mismatch for KAT `{name}` (Rust verify_node vs Scala serializeTree)"
+            );
+        }
     }
 }
