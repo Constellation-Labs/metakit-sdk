@@ -25,6 +25,9 @@ export const FQ_BYTES = 32;
 /** Byte width of a serialized BN254 G1 point (`x || y`, 32B each). */
 export const G1_BYTES = 64;
 
+/** Byte width of a serialized BN254 G2 point (EIP-197: `x.c1||x.c0||y.c1||y.c0`). */
+export const G2_BYTES = 128;
+
 /** Byte width of a 256-bit big-endian scalar (e.g. a Schnorr response `s`). */
 export const SCALAR_BYTES = 32;
 
@@ -113,6 +116,40 @@ export const parseG1 = (hex: string, role: string): { x: bigint; y: bigint } => 
     return fail(`${role}: y not in base field (>= P): ${y}`);
   }
   return { x, y };
+};
+
+/**
+ * Parse a 128-byte hex string into a BN254 G2 affine point in EIP-197 byte
+ * order: each Fp2 coordinate is serialized imaginary-part-first
+ * (`x.c1 || x.c0 || y.c1 || y.c0`). Returns `(xReal, xImag, yReal, yImag)` — the
+ * `(real, imag)` / `(c0, c1)` convention — so the caller can build a G2 point
+ * `(Fq2(c0=xReal, c1=xImag), Fq2(c0=yReal, c1=yImag))` directly. Each 32-byte
+ * limb is validated as a canonical Fq element (`< P`). Mirrors Rust
+ * `hex_bytes::parse_g2`.
+ */
+export const parseG2 = (
+  hex: string,
+  role: string
+): { xReal: bigint; xImag: bigint; yReal: bigint; yImag: bigint } => {
+  const bytes = parseBytes(hex, G2_BYTES, role);
+  const limb = (i: number): bigint =>
+    bytesToBigInt(bytes.subarray(i * FQ_BYTES, (i + 1) * FQ_BYTES));
+  // EIP-197 order: imaginary-before-real for each Fp2 coordinate.
+  const xImag = limb(0);
+  const xReal = limb(1);
+  const yImag = limb(2);
+  const yReal = limb(3);
+  for (const [name, v] of [
+    ['x.imag', xImag],
+    ['x.real', xReal],
+    ['y.imag', yImag],
+    ['y.real', yReal],
+  ] as const) {
+    if (v >= FQ_MODULUS) {
+      return fail(`${role}: ${name} not in base field (>= P): ${v}`);
+    }
+  }
+  return { xReal, xImag, yReal, yImag };
 };
 
 /** Encode raw bytes as a lowercase `0x`-prefixed hex string. */

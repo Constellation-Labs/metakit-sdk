@@ -53,12 +53,20 @@ import {
 import {
   opBlsAggregateVerify,
   opBlsVerify,
+  opBn254Add,
+  opBn254Mul,
+  opBn254Pairing,
+  opEcvrfVerify,
+  opGroth16Verify,
+  opMptPrefixVerify,
+  opMptVerify,
   opPmtVerify,
   opPoseidon,
   opProveDhtupleVerify,
   opProveDlogVerify,
   opSchnorrVerify,
   opSigmaVerify,
+  opSmtVerify,
 } from './crypto-ops';
 
 const MAX_SAFE_EXPONENT = 999n;
@@ -596,9 +604,8 @@ export class Evaluator {
       case 'missing_some':
         return this.opMissingSome(values, ctx);
       // ZK / crypto opcodes. Pure precompiles over already-parsed hex args;
-      // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs / Scala
-      // CryptoOps. Tags that decode but are not yet ported (smt/mpt/bn254/
-      // ecvrf/groth16) fall through to the default error.
+      // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs /
+      // auth_db.rs / ecvrf.rs and the Scala CryptoOps / AuthDbOps.
       case 'poseidon':
         return opPoseidon(values);
       case 'pmt_verify':
@@ -615,6 +622,22 @@ export class Evaluator {
         return opProveDhtupleVerify(values);
       case 'sigma_verify':
         return opSigmaVerify(values);
+      case 'bn254_add':
+        return opBn254Add(values);
+      case 'bn254_mul':
+        return opBn254Mul(values);
+      case 'bn254_pairing':
+        return opBn254Pairing(values);
+      case 'groth16_verify':
+        return opGroth16Verify(values);
+      case 'smt_verify':
+        return opSmtVerify(values);
+      case 'mpt_verify':
+        return opMptVerify(values);
+      case 'mpt_prefix_verify':
+        return opMptPrefixVerify(values);
+      case 'ecvrf_verify':
+        return opEcvrfVerify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }

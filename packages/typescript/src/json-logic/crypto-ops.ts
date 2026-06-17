@@ -20,12 +20,16 @@
  */
 
 import { bls12_381 } from '@noble/curves/bls12-381.js';
-import { sha256 } from '@noble/hashes/sha2.js';
+import { bn254 } from '@noble/curves/bn254.js';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
 
 import { JsonLogicRuntimeError } from './errors';
 import type { JsonLogicValue } from './value';
-import { boolValue, strValue } from './value';
+import { boolValue, mapValue, nullValue, strValue } from './value';
+import { encodeValue, parseValue } from './codec';
 import * as hb from './hex-bytes';
+import { canonicalizeNoDropNulls } from './canonical-json';
 import { MAX_INPUTS, merkleVerifyInclusion, poseidonHash } from './poseidon';
 
 const fail = (message: string): never => {
@@ -251,6 +255,456 @@ export const opSchnorrVerify = (values: JsonLogicValue[]): JsonLogicValue => {
   const lhs = g1Mul(G1_GEN, s % GROUP_ORDER);
   const rhs = g1Add(r, g1Mul(pk, c));
   return boolValue(g1Eq(lhs, rhs));
+};
+
+// ===========================================================================
+// TIER-2b: BN254 (alt_bn128) curve ops -- bn254_add / bn254_mul / bn254_pairing.
+//   Byte-for-byte port of the Rust crypto.rs bn254_add / bn254_mul /
+//   bn254_pairing (over the Scala Bn254). EIP-196 / EIP-197 encoding:
+//     G1 = 64B  (x || y, big-endian Fq; infinity = all-zero)
+//     G2 = 128B (Fp2 imaginary-first: x.c1 || x.c0 || y.c1 || y.c0)
+//   G1 add/mul reuse the hand-rolled affine arithmetic above (EVM (0,0)-infinity
+//   convention, identical to Rust's ark output). The pairing uses @noble/curves'
+//   bn254 (alt_bn128 + ate pairing). off-curve / wrong-width -> error. For the
+//   pairing G2 inputs we ALSO require order-r subgroup membership (G2 has a
+//   non-trivial cofactor); an on-curve-but-non-subgroup G2 point is rejected as
+//   malformed, identical to off-curve. G1 is prime-order (cofactor 1), so
+//   on-curve already implies subgroup membership.
+// ===========================================================================
+
+const G1Point = bn254.G1.Point;
+const G2Point = bn254.G2.Point;
+const Fp2 = bn254.fields.Fp2;
+const Fp12 = bn254.fields.Fp12;
+
+/**
+ * The BN254 G2 twist `b` coefficient, derived once from the curve generator
+ * (`b = y^2 - x^3` in Fp2). Deriving it from `@noble/curves`' own generator
+ * guarantees the `(c0, c1)` Fp2 representation matches noble's internal tower,
+ * so the on-curve check below agrees with `assertValidity` / the pairing.
+ */
+const G2_B = (() => {
+  const { x, y } = G2Point.BASE;
+  return Fp2.sub(Fp2.sqr(y), Fp2.mul(Fp2.sqr(x), x));
+})();
+
+/** Build a @noble G1 point from parsed `(x, y)`, rejecting off-curve points. */
+const nobleG1OnCurve = (
+  coords: { x: bigint; y: bigint },
+  role: string
+): InstanceType<typeof G1Point> => {
+  const { x, y } = coords;
+  if (x === 0n && y === 0n) {
+    return G1Point.ZERO;
+  }
+  // y^2 == x^3 + 3 over Fq (cofactor 1 => on-curve implies in-subgroup).
+  const fp = bn254.fields.Fp;
+  const lhs = fp.sqr(y);
+  const rhs = fp.add(fp.mul(fp.sqr(x), x), 3n);
+  if (!fp.eql(lhs, rhs)) {
+    return fail(`${role}: point is not on the BN254 curve`);
+  }
+  return G1Point.fromAffine({ x, y });
+};
+
+/**
+ * Build a @noble G2 point from the parsed `(real, imag)` Fp2 limbs, mirroring the
+ * Rust `g2_on_curve` two-step validation: (1) curve membership, (2) order-r
+ * subgroup membership (G2 has a non-trivial cofactor, so on-curve is NOT
+ * sufficient). Both failures are a malformed-input error (identical to off-curve).
+ */
+const nobleG2OnCurve = (
+  coords: { xReal: bigint; xImag: bigint; yReal: bigint; yImag: bigint },
+  role: string
+): InstanceType<typeof G2Point> => {
+  const x = { c0: coords.xReal, c1: coords.xImag };
+  const y = { c0: coords.yReal, c1: coords.yImag };
+  // (1) on-curve: y^2 == x^3 + b in Fp2.
+  const lhs = Fp2.sqr(y);
+  const rhs = Fp2.add(Fp2.mul(Fp2.sqr(x), x), G2_B);
+  if (!Fp2.eql(lhs, rhs)) {
+    return fail(`${role}: point is not on the BN254 G2 curve`);
+  }
+  const point = G2Point.fromAffine({ x, y });
+  // (2) order-r subgroup membership ([r]P == O).
+  if (!point.isTorsionFree()) {
+    return fail(`${role}: point is not in the BN254 G2 order-r subgroup`);
+  }
+  return point;
+};
+
+/** `bn254_add([aHex(64B), bHex(64B)]) -> 64B G1`. */
+export const opBn254Add = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('bn254_add: expected [aHex(64B), bHex(64B)]');
+  }
+  const aHex = expectStr('bn254_add a', values[0]);
+  const bHex = expectStr('bn254_add b', values[1]);
+  const a = g1OnCurve(hb.parseG1(aHex, 'bn254_add a'), 'bn254_add a');
+  const b = g1OnCurve(hb.parseG1(bHex, 'bn254_add b'), 'bn254_add b');
+  const sum = g1Add(a, b);
+  return strValue(hb.encodeBytes(encodeG1Bytes(sum)));
+};
+
+/** `bn254_mul([pointHex(64B), scalarHex(32B)]) -> 64B G1`. */
+export const opBn254Mul = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('bn254_mul: expected [pointHex(64B), scalarHex(32B)]');
+  }
+  const pHex = expectStr('bn254_mul point', values[0]);
+  const sHex = expectStr('bn254_mul scalar', values[1]);
+  // Scalar is any 256-bit value; multiplication reduces it mod R.
+  const s = hb.parseScalar(sHex, 'bn254_mul scalar');
+  const p = g1OnCurve(hb.parseG1(pHex, 'bn254_mul point'), 'bn254_mul point');
+  const prod = g1Mul(p, s % GROUP_ORDER);
+  return strValue(hb.encodeBytes(encodeG1Bytes(prod)));
+};
+
+/**
+ * `bn254_pairing([[g1Hex(64B), g2Hex(128B)], ...]) -> bool`. `true` iff the
+ * product of `e(g1_i, g2_i) == 1` in GT; the empty product is the identity, so
+ * an empty input yields `true`. Accepts the natural EIP-197 shape (a single
+ * array of pairs) as well as variadic pairs, matching the Scala disambiguation:
+ * unwrap the outer array only when every element is itself an array (a pair).
+ */
+export const opBn254Pairing = (values: JsonLogicValue[]): JsonLogicValue => {
+  let rawPairs: JsonLogicValue[];
+  if (
+    values.length === 1 &&
+    values[0].tag === 'array' &&
+    values[0].value.every((v) => v.tag === 'array')
+  ) {
+    rawPairs = values[0].value;
+  } else {
+    rawPairs = values;
+  }
+
+  const g1s: InstanceType<typeof G1Point>[] = [];
+  const g2s: InstanceType<typeof G2Point>[] = [];
+  for (let i = 0; i < rawPairs.length; i++) {
+    const p = rawPairs[i];
+    if (p.tag !== 'array' || p.value.length !== 2) {
+      return fail(`bn254_pairing[${i}]: expected [g1Hex(64B), g2Hex(128B)]`);
+    }
+    const g1Hex = expectStr(`bn254_pairing[${i}].g1`, p.value[0]);
+    const g2Hex = expectStr(`bn254_pairing[${i}].g2`, p.value[1]);
+    const g1 = nobleG1OnCurve(
+      hb.parseG1(g1Hex, `bn254_pairing[${i}].g1`),
+      `bn254_pairing[${i}].g1`
+    );
+    const g2 = nobleG2OnCurve(
+      hb.parseG2(g2Hex, `bn254_pairing[${i}].g2`),
+      `bn254_pairing[${i}].g2`
+    );
+    g1s.push(g1);
+    g2s.push(g2);
+  }
+
+  // Empty product is the GT identity => true (matches EVM ECPAIRING / Rust).
+  if (g1s.length === 0) {
+    return boolValue(true);
+  }
+  const product = bn254.pairingBatch(g1s.map((g1, i) => ({ g1, g2: g2s[i] })));
+  return boolValue(Fp12.eql(product, Fp12.ONE));
+};
+
+// ===========================================================================
+// TIER-3a: SP1 Groth16-BN254 verifier (`groth16_verify`).
+//   Byte-for-byte port of the Rust crypto.rs groth16 module (itself a port of
+//   the Scala Sp1Groth16Verifier + Groth16Verifier, SP1 groth16 circuit v6.1.0).
+//     groth16_verify([vkeyHex(32B), publicValuesHex, proofHex]) -> bool
+//   * vkey MUST be exactly 32 bytes (wrong width -> error);
+//   * publicValues / proof are arbitrary-width byte strings;
+//   * a non-canonical (>= P) proof coordinate is a hard ENCODING error;
+//   * any other invalidity (off-curve / non-subgroup / wrong pairing / bad
+//     framing) verifies to `false`.
+// ===========================================================================
+
+/** First 4 bytes of `VERIFIER_HASH()` from SP1VerifierGroth16.sol (v6.1.0). */
+const GROTH16_VERIFIER_SELECTOR = Uint8Array.of(0x43, 0x88, 0xa2, 0x1c);
+
+/** `4 + 32 * 11` = selector + (exitCode, vkRoot, nonce, proof[8]). */
+const GROTH16_EXPECTED_PROOF_LENGTH = 4 + 32 * 11;
+
+/** `VK_ROOT()` from SP1VerifierGroth16.sol (v6.1.0). */
+const GROTH16_VK_ROOT = BigInt(
+  '0x002f850ee998974d6cc00e50cd0814b098c05bfade466d28573240d057f25352'
+);
+
+/** Mask `(1 << 253) - 1` applied to the public-values sha256 digest. */
+const GROTH16_DIGEST_MASK = (1n << 253n) - 1n;
+
+/** Number of public inputs the SP1 v6.1.0 verifier expects. */
+const GROTH16_NUM_PUBLIC_INPUTS = 5;
+
+/**
+ * Sentinel prefix marking a MALFORMED-ENCODING error (a proof coordinate `>= P`,
+ * a non-canonical field-element encoding). The opcode layer maps an ENCODING
+ * error to a hard error and any other invalidity to `false`. Kept in lockstep
+ * with the Scala `Groth16Verifier.EncodingErrorPrefix` / Rust ENCODING_ERROR_PREFIX.
+ */
+const GROTH16_ENCODING_ERROR_PREFIX = 'ENCODING: ';
+
+const bi = (s: string): bigint => BigInt(s);
+
+// Hardcoded Groth16 VK (Groth16Verifier, SP1 groth16 v6.1.0). G2 constants are
+// already negated (BETA/GAMMA/DELTA). _0 = real (c0), _1 = imag (c1).
+const groth16Vk = (() => {
+  const g1 = (x: string, y: string): InstanceType<typeof G1Point> =>
+    nobleG1OnCurve({ x: bi(x), y: bi(y) }, 'groth16 vk G1');
+  const g2 = (x0: string, x1: string, y0: string, y1: string): InstanceType<typeof G2Point> =>
+    nobleG2OnCurve({ xReal: bi(x0), xImag: bi(x1), yReal: bi(y0), yImag: bi(y1) }, 'groth16 vk G2');
+  return {
+    alpha: g1(
+      '15279411540481963483749982645131486879260751823620651493692884460296130891713',
+      '15872895802316430142046488442363778159164596024024981740547841316113839677454'
+    ),
+    betaNeg: g2(
+      '6145571844528009385227270901181311049451968424667282936975270874464890915386',
+      '12771786691609444002416405093387705070206640282801320788762089789398249455552',
+      '4488883874756188982949192438322346627006627895205628031405236004639323835517',
+      '1735169520034591855846686229876971881413094324547255227368057137445726296809'
+    ),
+    gammaNeg: g2(
+      '10857046999023057135944570762232829481370756359578518086990519993285655852781',
+      '11559732032986387107991004021392285783925812861821192530917403151452391805634',
+      '13392588948715843804641432497768002650278120570034223513918757245338268106653',
+      '17805874995975841540914202342111839520379459829704422454583296818431106115052'
+    ),
+    deltaNeg: g2(
+      '10465707362494635227101096813108413078937487707553051407465224907243675430929',
+      '8014260607368773541998918215611927658290278403999176336697043972644519659243',
+      '19389283139277148919245778864125350153699493315071306268776225113374776030523',
+      '16335894885742905444968709132584769120387318573561090701871591658625758958113'
+    ),
+    constant: g1(
+      '20281192269339458123687070687118212311775320590888414619062163734024177320592',
+      '4733327396113282720944079206751955104965328647794767422434462962576999295035'
+    ),
+    pubPoints: [
+      g1(
+        '6933777020392885277709527453058337947310422411038083362275568070104688005311',
+        '981134475045095331624771061624185350383934842154508663637397442918499383708'
+      ),
+      g1(
+        '4994703368938944727583784298191985234033403433117347198670233075674015451426',
+        '8251219283963080431419977720140972699009004688253176317231536639169726973868'
+      ),
+      g1(
+        '4290838847096051522936899065591427041691227664160185228987863596451823131267',
+        '20588566735491008722164159313316540988426258906449040460220495569364391658476'
+      ),
+      g1(
+        '10868099250506113890234768256645470833285719586092080686774540776807380789751',
+        '481415511937576118656966359026147167555048629225366340770167496559184060449'
+      ),
+      g1(
+        '248210862999154995000539012177951057105481472135341820587821789934938975214',
+        '4435539404843896136682123140600986858809597152596796648926707165831171499457'
+      ),
+    ],
+  };
+})();
+
+/** `sha256(publicValues) & ((1 << 253) - 1)`. */
+const groth16HashPublicValues = (publicValues: Uint8Array): bigint =>
+  hb.bytesToBigInt(sha256(publicValues)) & GROTH16_DIGEST_MASK;
+
+/**
+ * Public-input MSM `L = CONSTANT + sum_i input_i * PUB_i`. Each scalar must
+ * already be reduced (`< R`); unreduced scalars are rejected (mirrors Solidity's
+ * `lt(s, R)` checks). Throws an ENCODING-free invalidity error on bad input.
+ */
+const groth16PublicInputMsm = (input: bigint[]): InstanceType<typeof G1Point> => {
+  if (input.length !== GROTH16_NUM_PUBLIC_INPUTS) {
+    throw new Error(`expected ${GROTH16_NUM_PUBLIC_INPUTS} public inputs, got ${input.length}`);
+  }
+  if (input.some((s) => s >= GROUP_ORDER)) {
+    throw new Error('public input not in scalar field');
+  }
+  let acc = groth16Vk.constant;
+  for (let i = 0; i < input.length; i++) {
+    const s = input[i];
+    // G1.multiply reduces the scalar mod R; s is already < R here. Use
+    // multiplyUnsafe to admit s == 0 (multiply throws on 0 / out-of-range).
+    acc = acc.add(groth16Vk.pubPoints[i].multiplyUnsafe(s));
+  }
+  return acc;
+};
+
+/**
+ * Reject a non-canonical (`>= P`) proof coordinate. A coordinate `>= P` is a
+ * malformed ENCODING (ark / Besu would silently reduce mod P) and is thrown with
+ * the [`GROTH16_ENCODING_ERROR_PREFIX`] sentinel. Otherwise returns the value.
+ */
+const groth16CheckedFq = (value: bigint, role: string): bigint => {
+  if (value >= P) {
+    throw new Error(
+      `${GROTH16_ENCODING_ERROR_PREFIX}${role}: coordinate not in base field (>= P): ${value}`
+    );
+  }
+  return value;
+};
+
+/** Decode `count` consecutive big-endian uint256 words starting at `offset`. */
+const groth16DecodeWords = (bytes: Uint8Array, offset: number, count: number): bigint[] => {
+  const out: bigint[] = [];
+  for (let i = 0; i < count; i++) {
+    const start = offset + i * 32;
+    out.push(hb.bytesToBigInt(bytes.subarray(start, start + 32)));
+  }
+  return out;
+};
+
+/**
+ * Verify an uncompressed Groth16 proof against five public inputs. `proof` is
+ * `(A.x, A.y, B.x_imag, B.x_real, B.y_imag, B.y_real, C.x, C.y)` in EIP-197
+ * order. Throws (ENCODING-prefixed for non-canonical coordinates, otherwise a
+ * plain invalidity reason) on any failure; returns normally on a valid proof.
+ */
+const groth16VerifyProof = (proof: bigint[], input: bigint[]): void => {
+  if (proof.length !== 8) {
+    throw new Error(`expected 8 proof elements, got ${proof.length}`);
+  }
+  const l = groth16PublicInputMsm(input);
+
+  // (1) Canonical-encoding check on every coordinate (>= P -> ENCODING error).
+  const aX = groth16CheckedFq(proof[0], 'proof A.x');
+  const aY = groth16CheckedFq(proof[1], 'proof A.y');
+  const bXImag = groth16CheckedFq(proof[2], 'proof B.x_imag');
+  const bXReal = groth16CheckedFq(proof[3], 'proof B.x_real');
+  const bYImag = groth16CheckedFq(proof[4], 'proof B.y_imag');
+  const bYReal = groth16CheckedFq(proof[5], 'proof B.y_real');
+  const cX = groth16CheckedFq(proof[6], 'proof C.x');
+  const cY = groth16CheckedFq(proof[7], 'proof C.y');
+
+  // (2)+(3) On-curve, subgroup, and non-identity checks (cryptographic
+  // invalidity -> error WITHOUT the encoding prefix -> `false` at the opcode).
+  const a = groth16CheckG1(aX, aY, 'proof A');
+  // B in G2; EIP-197 order in `proof`: imag before real.
+  const b = groth16CheckG2(bXReal, bXImag, bYReal, bYImag, 'proof B');
+  const c = groth16CheckG1(cX, cY, 'proof C');
+
+  // e(A, B) * e(C, -delta) * e(alpha, -beta) * e(L, -gamma) == 1
+  const product = bn254.pairingBatch([
+    { g1: a, g2: b },
+    { g1: c, g2: groth16Vk.deltaNeg },
+    { g1: groth16Vk.alpha, g2: groth16Vk.betaNeg },
+    { g1: l, g2: groth16Vk.gammaNeg },
+  ]);
+  if (!Fp12.eql(product, Fp12.ONE)) {
+    throw new Error('pairing check failed');
+  }
+};
+
+/**
+ * G1 proof-point validation: on-curve and non-identity. BN254 G1 has cofactor 1,
+ * so on-curve implies correct-subgroup; the identity is a degenerate proof point.
+ */
+const groth16CheckG1 = (x: bigint, y: bigint, role: string): InstanceType<typeof G1Point> => {
+  if (x === 0n && y === 0n) {
+    throw new Error(`${role}: point is the identity (degenerate)`);
+  }
+  const fp = bn254.fields.Fp;
+  if (!fp.eql(fp.sqr(y), fp.add(fp.mul(fp.sqr(x), x), 3n))) {
+    throw new Error(`${role}: point is not on the BN254 G1 curve`);
+  }
+  return G1Point.fromAffine({ x, y });
+};
+
+/**
+ * G2 proof-point validation: on-curve, non-identity, AND order-r subgroup
+ * membership (G2 has a non-trivial cofactor). Cryptographic invalidity -> error.
+ */
+const groth16CheckG2 = (
+  xReal: bigint,
+  xImag: bigint,
+  yReal: bigint,
+  yImag: bigint,
+  role: string
+): InstanceType<typeof G2Point> => {
+  const x = { c0: xReal, c1: xImag };
+  const y = { c0: yReal, c1: yImag };
+  if (Fp2.is0(x) && Fp2.is0(y)) {
+    throw new Error(`${role}: point is the identity (degenerate)`);
+  }
+  if (!Fp2.eql(Fp2.sqr(y), Fp2.add(Fp2.mul(Fp2.sqr(x), x), G2_B))) {
+    throw new Error(`${role}: point is not on the BN254 G2 curve`);
+  }
+  const point = G2Point.fromAffine({ x, y });
+  if (!point.isTorsionFree()) {
+    throw new Error(`${role}: G2 point is not in the order-r subgroup`);
+  }
+  return point;
+};
+
+/**
+ * Full SP1 verify: returns normally on success, throws `Error(reason)` on any
+ * failure. `programVkey` is the (already width-checked, 32-byte) program VK.
+ */
+const groth16Verify = (
+  programVkey: Uint8Array,
+  publicValues: Uint8Array,
+  proofBytes: Uint8Array
+): void => {
+  if (programVkey.length !== 32) {
+    throw new Error(`programVKey must be 32 bytes, got ${programVkey.length}`);
+  }
+  if (proofBytes.length !== GROTH16_EXPECTED_PROOF_LENGTH) {
+    throw new Error(
+      `proofBytes must be ${GROTH16_EXPECTED_PROOF_LENGTH} bytes, got ${proofBytes.length}`
+    );
+  }
+  // Selector check.
+  const selectorOk =
+    proofBytes.length >= 4 && GROTH16_VERIFIER_SELECTOR.every((b, i) => proofBytes[i] === b);
+  if (!selectorOk) {
+    throw new Error('wrong verifier selector');
+  }
+  // abi.decode(proofBytes[4:], (uint256, uint256, uint256, uint256[8]))
+  const words = groth16DecodeWords(proofBytes, 4, 11);
+  const exitCode = words[0];
+  const vkRootWord = words[1];
+  const nonce = words[2];
+  const proof = words.slice(3, 11);
+
+  if (exitCode !== 0n) {
+    throw new Error('invalid exit code');
+  }
+  if (vkRootWord !== GROTH16_VK_ROOT) {
+    throw new Error('invalid vk root');
+  }
+  const programVkeyInt = hb.bytesToBigInt(programVkey);
+  const publicValuesDigest = groth16HashPublicValues(publicValues);
+  const inputs = [programVkeyInt, publicValuesDigest, exitCode, vkRootWord, nonce];
+  groth16VerifyProof(proof, inputs);
+};
+
+/** `groth16_verify([vkeyHex(32B), publicValuesHex, proofHex]) -> bool`. */
+export const opGroth16Verify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 3) {
+    return fail('groth16_verify: expected [vkeyHex, publicValuesHex, proofHex]');
+  }
+  const vkeyHex = expectStr('groth16_verify vkey', values[0]);
+  const pubHex = expectStr('groth16_verify publicValues', values[1]);
+  const proofHex = expectStr('groth16_verify proof', values[2]);
+  const vkey = hb.parseBytes(vkeyHex, 32, 'groth16_verify vkey');
+  const publicValues = hb.parseBytes(pubHex, null, 'groth16_verify publicValues');
+  const proof = hb.parseBytes(proofHex, null, 'groth16_verify proof');
+  // Error-vs-false discipline (lockstep with the Scala/Rust opcode layer):
+  //   * success            -> true
+  //   * ENCODING: ... error -> hard opcode error (non-canonical encoding);
+  //   * any other error     -> false (well-formed but cryptographically invalid).
+  try {
+    groth16Verify(vkey, publicValues, proof);
+    return boolValue(true);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.startsWith(GROTH16_ENCODING_ERROR_PREFIX)) {
+      return fail(`groth16_verify: ${msg}`);
+    }
+    return boolValue(false);
+  }
 };
 
 // ===========================================================================
@@ -1171,4 +1625,1151 @@ export const opBlsAggregateVerify = (values: JsonLogicValue[]): JsonLogicValue =
     return boolValue(blsFastAggregateVerifyRaw(pks, msg, agg));
   }
   return fail('bls_aggregate_verify: expected [[pkHex(48B), ...], msgHex, aggSigHex(96B)]');
+};
+
+// ===========================================================================
+// TIER-2a: authenticated-database opcodes -- smt_verify / mpt_verify /
+//   mpt_prefix_verify. Byte-for-byte port of rust/jlvm-core/src/auth_db.rs
+//   (itself a port of the Scala AuthDbOps + the SMT / MPT verifiers).
+//
+//   Hashing substrate: every node / value digest is
+//     Hash.fromBytes(prefix ++ canonicalBytes(json))
+//   where canonicalBytes is the RFC-8785 (no-null-drop) encoding of the value's
+//   circe Json (sorted keys, numbers via f64) and Hash.fromBytes is
+//   lowercase-hex SHA-256. Digest equality is exact string equality on the
+//   64-char lowercase hex form.
+//
+//   Error discipline: undecodable input (bad hex, a proof not matching its
+//   declared shape, wrong arg count/type) throws; a WELL-FORMED proof that does
+//   not verify is a `false` / `valid:false` value.
+// ===========================================================================
+
+/** Lowercase-hex SHA-256 of `bytes` (`Hash.fromBytes`); the 64-char hex digest. */
+const hashFromBytes = (bytes: Uint8Array): string => {
+  const digest = sha256(bytes);
+  let s = '';
+  for (const b of digest) {
+    s += b.toString(16).padStart(2, '0');
+  }
+  return s;
+};
+
+/** UTF-8 bytes of a string. */
+const utf8Bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+/** `Hash.empty`: 64 ASCII '0' characters (32 zero bytes read as hex). */
+const HASH_EMPTY = '0'.repeat(64);
+
+/**
+ * `JsonBinaryHasher.computeDigest(json, prefix)` for a circe-Json-shaped plain
+ * value: `Hash.fromBytes(prefix ++ canonicalBytes(json))`.
+ */
+const computeDigestPrefixed = (json: unknown, prefix: Uint8Array): string => {
+  let canon: Uint8Array;
+  try {
+    canon = utf8Bytes(canonicalizeNoDropNulls(json));
+  } catch {
+    // Unreachable for the auth-DB proof/value JSONs (no NaN/Infinity); an empty
+    // digest can never equal a real 64-hex digest, so this degrades to invalid.
+    return '';
+  }
+  const pre = new Uint8Array(prefix.length + canon.length);
+  pre.set(prefix, 0);
+  pre.set(canon, prefix.length);
+  return hashFromBytes(pre);
+};
+
+/** `computeDigest(json)` with the empty prefix: an MPT value digest. */
+const computeValueDigest = (json: unknown): string =>
+  computeDigestPrefixed(json, new Uint8Array(0));
+
+/** Lowercase-hex / `0x`-prefix validation: `^0x[0-9a-f]*$`. */
+const isValidHex = (hex: string): boolean => /^0x[0-9a-f]*$/.test(hex);
+
+/**
+ * `parseBytes(hex, None)` then `Hash(Hex.fromBytes(bytes).value)`: validate
+ * `0x`-lowercase + even-length and return the raw lowercase hex body (no `0x`) —
+ * the `Hash.value` form the SMT/MPT roots compare on. Wrong WIDTH is permitted;
+ * it simply fails the verify (RootMismatch). Mirrors Rust `parse_hash_hex`.
+ */
+const parseHashHex = (hex: string, role: string): string => {
+  if (!isValidHex(hex)) {
+    return fail(`${role}: malformed hex (expected lowercase ^0x[0-9a-f]*$): '${hex}'`);
+  }
+  const body = hex.slice(2);
+  if (body.length % 2 !== 0) {
+    return fail(`${role}: odd-length hex body (${body.length} nibbles): '${hex}'`);
+  }
+  return body;
+};
+
+/**
+ * `parseNibbleHex(hex)`: validate `0x`-lowercase (odd nibble counts ALLOWED —
+ * MPT keys/prefixes are nibble-granular) and return the raw hex body (no `0x`).
+ */
+const parseNibbleHex = (hex: string, role: string): string => {
+  if (!isValidHex(hex)) {
+    return fail(`${role}: malformed hex (expected lowercase ^0x[0-9a-f]*$): '${hex}'`);
+  }
+  return hex.slice(2);
+};
+
+/** Bridge a JLVM value to its plain-JSON (circe-Json-equivalent) form. */
+const toJson = (v: JsonLogicValue): unknown => encodeValue(v);
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const asStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+// ---------------------------------------------------------------------------
+// SMT verifier (port of crypto/smt + api/SparseMerkleVerifier).
+// ---------------------------------------------------------------------------
+
+/** Total number of SMT position bits (256 -- a SHA-256 hash). */
+const SMT_POSITION_BITS = 256;
+const SMT_LEAF_PREFIX = Uint8Array.of(0);
+const SMT_INTERNAL_PREFIX = Uint8Array.of(1);
+
+interface SmtSibling {
+  digest: string;
+}
+
+type SmtProof =
+  | {
+      kind: 'inclusion';
+      key: string;
+      value: Uint8Array;
+      valueDigest: string;
+      siblings: SmtSibling[];
+    }
+  | { kind: 'absenceDefault'; key: string; siblings: SmtSibling[] }
+  | {
+      kind: 'absenceOtherLeaf';
+      key: string;
+      occupyingKey: string;
+      occupyingDataDigest: string;
+      siblings: SmtSibling[];
+    };
+
+const smtProofKey = (p: SmtProof): string => p.key;
+
+const fieldStr = (obj: Record<string, unknown>, key: string, role: string): string => {
+  const v = asStr(obj[key]);
+  if (v === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing/typed-wrong '${key}')`);
+  }
+  return v;
+};
+
+const decodeSmtSiblings = (v: unknown, role: string): SmtSibling[] => {
+  if (!Array.isArray(v)) {
+    return fail(`${role}: undecodable proof JSON (siblings not an array)`);
+  }
+  return v.map((s) => {
+    if (isPlainObject(s)) {
+      const d = asStr(s.digest);
+      if (d !== undefined) {
+        return { digest: d };
+      }
+    }
+    return fail(`${role}: undecodable proof JSON (bad sibling)`);
+  });
+};
+
+/** `SparseMerkleProof.valueDecoder`: a raw (no `0x`) hex string -> bytes. */
+const decodeHexValue = (hex: string, role: string): Uint8Array => {
+  const lower = hex.toLowerCase();
+  if (lower.length % 2 !== 0 || !/^[0-9a-f]*$/.test(lower)) {
+    return fail(`${role}: undecodable proof JSON (value not hex): '${hex}'`);
+  }
+  const out = new Uint8Array(lower.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(lower.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
+
+/** Decode an SMT proof from a plain object, mirroring `SparseMerkleProof.decoder`. */
+const decodeSmtProof = (j: unknown): SmtProof => {
+  const role = 'smt_verify proof';
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  const ty = asStr(j.type);
+  if (ty === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing type)`);
+  }
+  const key = fieldStr(j, 'key', role);
+  const siblings = decodeSmtSiblings(j.siblings, role);
+  if (ty === 'Inclusion') {
+    const valueHex = fieldStr(j, 'value', role);
+    const value = decodeHexValue(valueHex, role);
+    const valueDigest = fieldStr(j, 'valueDigest', role);
+    return { kind: 'inclusion', key, value, valueDigest, siblings };
+  }
+  if (ty === 'Absence') {
+    if (!isPlainObject(j.witness)) {
+      return fail(`${role}: undecodable proof JSON (missing witness)`);
+    }
+    const wty = asStr(j.witness.type);
+    if (wty === undefined) {
+      return fail(`${role}: undecodable proof JSON (missing witness type)`);
+    }
+    if (wty === 'Default') {
+      return { kind: 'absenceDefault', key, siblings };
+    }
+    if (wty === 'OtherLeaf') {
+      const occupyingKey = fieldStr(j.witness, 'occupyingKey', role);
+      const occupyingDataDigest = fieldStr(j.witness, 'occupyingDataDigest', role);
+      return { kind: 'absenceOtherLeaf', key, occupyingKey, occupyingDataDigest, siblings };
+    }
+    return fail(`${role}: Unknown AbsenceWitness type: ${wty}`);
+  }
+  return fail(`${role}: Unknown SparseMerkleProof type: ${ty}`);
+};
+
+/** SMT `position(key) = Hash.fromBytes(key.value.getBytes(UTF_8))`. */
+const smtPosition = (key: string): string => hashFromBytes(utf8Bytes(key));
+
+/** SMT `valueDigest(value) = Hash.fromBytes(value)` (raw-bytes SHA-256). */
+const smtValueDigest = (value: Uint8Array): string => hashFromBytes(value);
+
+/** SMT `leafDigest` = `computeDigest(Leaf{position,valueDigest}, LeafPrefix)`. */
+const smtLeafDigest = (position: string, valueDigest: string): string =>
+  computeDigestPrefixed({ position, valueDigest }, SMT_LEAF_PREFIX);
+
+/** SMT `internalDigest` = `computeDigest(Internal{left,right}, InternalPrefix)`. */
+const smtInternalDigest = (left: string, right: string): string =>
+  computeDigestPrefixed({ left, right }, SMT_INTERNAL_PREFIX);
+
+/** SMT `combine(bit, cur, sibling)`: bit=false -> LEFT, bit=true -> RIGHT. */
+const smtCombine = (bit: boolean, cur: string, sibling: string): string =>
+  bit ? smtInternalDigest(sibling, cur) : smtInternalDigest(cur, sibling);
+
+/** SMT `bit(position, index)`: bit `index` (0 = MSB of first byte), big-endian. */
+const smtBit = (position: string, index: number): boolean => {
+  let bytes: Uint8Array;
+  try {
+    bytes = decodeHexValue(position, 'smt position');
+  } catch {
+    return false;
+  }
+  const byteIdx = Math.floor(index / 8);
+  if (byteIdx >= bytes.length) {
+    return false;
+  }
+  const bitInByte = 7 - (index % 8);
+  return ((bytes[byteIdx] >> bitInByte) & 1) === 1;
+};
+
+/** Fold a terminating digest up to the root, choosing left/right by position bits. */
+const smtFoldUp = (position: string, start: string, siblings: SmtSibling[]): string => {
+  const depth = siblings.length;
+  let cur = start;
+  // (level, sibling) pairs, deepest level first: level d-1 down to 0.
+  for (let i = 0; i < siblings.length; i++) {
+    const sib = siblings[depth - 1 - i];
+    const level = depth - 1 - i;
+    cur = smtCombine(smtBit(position, level), cur, sib.digest);
+  }
+  return cur;
+};
+
+type SmtVerified =
+  | { kind: 'present'; key: string; value: Uint8Array }
+  | { kind: 'absent'; key: string };
+
+/** `SparseMerkleVerifier.verify`: the verified outcome, or `null` if invalid. */
+const smtVerifyProof = (root: string, proof: SmtProof): SmtVerified | null => {
+  if (
+    (proof.kind === 'inclusion' ||
+      proof.kind === 'absenceDefault' ||
+      proof.kind === 'absenceOtherLeaf') &&
+    proof.siblings.length > SMT_POSITION_BITS
+  ) {
+    return null; // MalformedProof: PathTooDeep
+  }
+  if (proof.kind === 'inclusion') {
+    const computed = smtValueDigest(proof.value);
+    if (computed !== proof.valueDigest) {
+      return null; // ValueBindingFailed
+    }
+    const pos = smtPosition(proof.key);
+    const leaf = smtLeafDigest(pos, proof.valueDigest);
+    const recomputed = smtFoldUp(pos, leaf, proof.siblings);
+    return recomputed === root ? { kind: 'present', key: proof.key, value: proof.value } : null;
+  }
+  if (proof.kind === 'absenceDefault') {
+    const pos = smtPosition(proof.key);
+    const recomputed = smtFoldUp(pos, HASH_EMPTY, proof.siblings);
+    return recomputed === root ? { kind: 'absent', key: proof.key } : null;
+  }
+  // absenceOtherLeaf
+  const pos = smtPosition(proof.key);
+  const occPos = smtPosition(proof.occupyingKey);
+  if (occPos === pos) {
+    return null; // MalformedProof: OtherLeafCollidesWithKey
+  }
+  const leaf = smtLeafDigest(occPos, proof.occupyingDataDigest);
+  const recomputed = smtFoldUp(pos, leaf, proof.siblings);
+  return recomputed === root ? { kind: 'absent', key: proof.key } : null;
+};
+
+/** `keyHex(key) = "0x" + key.value.toLowerCase`. */
+const keyHex = (key: string): string => '0x' + key.toLowerCase();
+
+/**
+ * Bridge raw value bytes to a JLVM value: parse as UTF-8 JSON and decode; on
+ * failure, fall back to the `0x`-hex of the bytes. Mirrors `AuthDbOps.valueToJlv`.
+ */
+const valueToJlv = (value: Uint8Array): JsonLogicValue => {
+  try {
+    const s = new TextDecoder('utf-8', { fatal: true }).decode(value);
+    try {
+      return parseValue(JSON.parse(s));
+    } catch {
+      // not JSON -> fall through to hex.
+    }
+  } catch {
+    // not valid UTF-8 -> fall through to hex.
+  }
+  return strValue(hb.encodeBytes(value));
+};
+
+/** Build the `smt_verify` result object `{valid, included, key, value}`. */
+const smtResult = (
+  valid: boolean,
+  included: boolean,
+  key: string,
+  value: JsonLogicValue
+): JsonLogicValue =>
+  mapValue(
+    new Map<string, JsonLogicValue>([
+      ['valid', boolValue(valid)],
+      ['included', boolValue(included)],
+      ['key', strValue(key)],
+      ['value', value],
+    ])
+  );
+
+/** `smt_verify([rootHex, proofJson]) -> {valid, included, key, value}`. */
+export const opSmtVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('smt_verify: expected [rootHex, proofJson]');
+  }
+  const rootHex = expectStr('smt_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'smt_verify root');
+  const proof = decodeSmtProof(toJson(values[1]));
+  const verified = smtVerifyProof(root, proof);
+  if (verified === null) {
+    return smtResult(false, false, keyHex(smtProofKey(proof)), nullValue());
+  }
+  if (verified.kind === 'present') {
+    return smtResult(true, true, keyHex(verified.key), valueToJlv(verified.value));
+  }
+  return smtResult(true, false, keyHex(verified.key), nullValue());
+};
+
+// ---------------------------------------------------------------------------
+// MPT verifier (port of crypto/mpt + api/MerklePatriciaVerifier).
+// ---------------------------------------------------------------------------
+
+const MPT_LEAF_PREFIX = Uint8Array.of(0);
+const MPT_BRANCH_PREFIX = Uint8Array.of(1);
+const MPT_EXTENSION_PREFIX = Uint8Array.of(2);
+
+type MptCommitment =
+  | { kind: 'leaf'; remaining: string; dataDigest: string }
+  | { kind: 'branch'; pathsDigest: [string, string][] }
+  | { kind: 'extension'; shared: string; childDigest: string };
+
+/** The commitment's prefixed digest via the concrete-type circe encoder shape. */
+const mptCommitmentDigest = (c: MptCommitment): string => {
+  if (c.kind === 'leaf') {
+    return computeDigestPrefixed(
+      { remaining: c.remaining, dataDigest: c.dataDigest },
+      MPT_LEAF_PREFIX
+    );
+  }
+  if (c.kind === 'branch') {
+    const obj: Record<string, string> = {};
+    for (const [k, v] of c.pathsDigest) {
+      obj[k] = v;
+    }
+    return computeDigestPrefixed({ pathsDigest: obj }, MPT_BRANCH_PREFIX);
+  }
+  return computeDigestPrefixed(
+    { shared: c.shared, childDigest: c.childDigest },
+    MPT_EXTENSION_PREFIX
+  );
+};
+
+/** Decode a nibble-sequence field: a string of hex chars (one per nibble). */
+const nibbleStr = (v: unknown, role: string): string => {
+  const s = asStr(v);
+  if (s === undefined) {
+    return fail(`${role}: undecodable proof JSON (nibble field not a string)`);
+  }
+  if (!/^[0-9a-fA-F]*$/.test(s)) {
+    return fail(`${role}: undecodable proof JSON (bad nibble seq '${s}')`);
+  }
+  return s;
+};
+
+const objFieldStr = (obj: Record<string, unknown>, key: string, role: string): string => {
+  const v = asStr(obj[key]);
+  if (v === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing/typed-wrong '${key}')`);
+  }
+  return v;
+};
+
+/** Decode a single `MerklePatriciaCommitment` from `{type, contents}` JSON. */
+const decodeMptCommitment = (j: unknown, role: string): MptCommitment => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (commitment not an object)`);
+  }
+  const ty = asStr(j.type);
+  if (ty === undefined) {
+    return fail(`${role}: undecodable proof JSON (commitment missing type)`);
+  }
+  if (!isPlainObject(j.contents)) {
+    return fail(`${role}: undecodable proof JSON (commitment missing contents)`);
+  }
+  const contents = j.contents;
+  if (ty === 'Leaf') {
+    const remaining = nibbleStr(contents.remaining, role);
+    const dataDigest = objFieldStr(contents, 'dataDigest', role);
+    return { kind: 'leaf', remaining, dataDigest };
+  }
+  if (ty === 'Branch') {
+    if (!isPlainObject(contents.pathsDigest)) {
+      return fail(`${role}: undecodable proof JSON (bad pathsDigest)`);
+    }
+    const pd = contents.pathsDigest;
+    const pathsDigest: [string, string][] = [];
+    for (const k of Object.keys(pd)) {
+      if (k.length !== 1 || !/^[0-9a-fA-F]$/.test(k)) {
+        return fail(`${role}: undecodable proof JSON (bad nibble key '${k}')`);
+      }
+      const h = asStr(pd[k]);
+      if (h === undefined) {
+        return fail(`${role}: undecodable proof JSON (bad pathsDigest value)`);
+      }
+      pathsDigest.push([k, h]);
+    }
+    return { kind: 'branch', pathsDigest };
+  }
+  if (ty === 'Extension') {
+    const shared = nibbleStr(contents.shared, role);
+    const childDigest = objFieldStr(contents, 'childDigest', role);
+    return { kind: 'extension', shared, childDigest };
+  }
+  return fail(`${role}: Unknown type: ${ty}`);
+};
+
+interface MptInclusionProof {
+  path: string;
+  witness: MptCommitment[];
+}
+
+const decodeMptInclusionProof = (j: unknown, role: string): MptInclusionProof => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  const path = objFieldStr(j, 'path', role);
+  if (!Array.isArray(j.witness)) {
+    return fail(`${role}: undecodable proof JSON (witness not an array)`);
+  }
+  const witness = j.witness.map((c) => decodeMptCommitment(c, role));
+  return { path, witness };
+};
+
+/** `Nibble(hex)`: one nibble per char; hex chars map to 0..15, else `char & 0x0f`. */
+const pathNibbles = (path: string): number[] => {
+  const out: number[] = [];
+  for (const ch of path) {
+    const code = ch.charCodeAt(0);
+    if (ch >= '0' && ch <= '9') {
+      out.push(code - 48);
+    } else if (ch >= 'a' && ch <= 'f') {
+      out.push(code - 97 + 10);
+    } else if (ch >= 'A' && ch <= 'F') {
+      out.push(code - 65 + 10);
+    } else {
+      out.push(code & 0x0f);
+    }
+  }
+  return out;
+};
+
+/** Render a 0..15 nibble value as its lowercase hex char. */
+const nibbleChar = (n: number): string => (n & 0x0f).toString(16);
+
+/** Render a nibble slice as a hex string (one char per nibble). */
+const nibblesToStr = (nibbles: number[]): string => nibbles.map(nibbleChar).join('');
+
+/**
+ * `MerklePatriciaVerifier.confirm`: walk the leaf-first witness (`witness.reverse`)
+ * from the root, folding through extension/branch nodes and terminating at a
+ * single leaf. `true` iff the proof reproduces the root for `path`.
+ */
+const mptConfirm = (root: string, proof: MptInclusionProof): boolean => {
+  const commitments: MptCommitment[] = [...proof.witness].reverse();
+  let currentDigest = root;
+  let remaining = pathNibbles(proof.path);
+
+  for (;;) {
+    const head = commitments[0];
+    if (head === undefined) {
+      return false; // InvalidWitness (empty)
+    }
+    if (head.kind === 'leaf' && commitments.length === 1) {
+      const digest = mptCommitmentDigest(head);
+      return digest === currentDigest && nibblesToStr(remaining) === head.remaining;
+    }
+    if (head.kind === 'extension') {
+      const digest = mptCommitmentDigest(head);
+      if (digest !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      currentDigest = head.childDigest;
+      const drop = head.shared.length;
+      remaining = drop > remaining.length ? [] : remaining.slice(drop);
+      commitments.shift();
+      continue;
+    }
+    if (head.kind === 'branch') {
+      // verifyBranch: select child by remainingPath.head BEFORE hashing.
+      if (remaining.length === 0) {
+        return false; // remainingPath.head on empty -> false
+      }
+      const nib = nibbleChar(remaining[0]);
+      const entry = head.pathsDigest.find(([k]) => k === nib);
+      if (entry === undefined) {
+        return false; // InvalidPath
+      }
+      const digest = mptCommitmentDigest(head);
+      if (digest !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      currentDigest = entry[1];
+      remaining = remaining.slice(1);
+      commitments.shift();
+      continue;
+    }
+    // A Leaf that is not the sole remaining commitment, or any other shape.
+    return false;
+  }
+};
+
+/** `mpt_verify([rootHex, keyHex, valueJson, proofJson]) -> bool`. */
+export const opMptVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 4) {
+    return fail('mpt_verify: expected [rootHex, keyHex, valueJson, proofJson]');
+  }
+  const rootHex = expectStr('mpt_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'mpt_verify root');
+  const keyHexS = expectStr('mpt_verify key', values[1]);
+  const key = parseNibbleHex(keyHexS, 'mpt_verify key');
+  const valueJs = toJson(values[2]);
+  const proof = decodeMptInclusionProof(toJson(values[3]), 'mpt_verify proof');
+
+  // The proof's path must be exactly the queried key (case-insensitive).
+  if (proof.path.toLowerCase() !== key.toLowerCase()) {
+    return boolValue(false);
+  }
+  // The leaf commitment must bind the queried value.
+  const valueDigest = computeValueDigest(valueJs);
+  const leafBinds = proof.witness.some((c) => c.kind === 'leaf' && c.dataDigest === valueDigest);
+  if (!leafBinds) {
+    return boolValue(false);
+  }
+  return boolValue(mptConfirm(root, proof));
+};
+
+// ---------------------------------------------------------------------------
+// MPT batch / prefix verifier (port of api/MerklePatriciaBatchInclusionVerifier).
+// ---------------------------------------------------------------------------
+
+interface MptBatchProof {
+  paths: string[];
+  witness: MptCommitment[];
+}
+
+const decodeMptBatchProof = (j: unknown, role: string): MptBatchProof => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  if (!Array.isArray(j.paths)) {
+    return fail(`${role}: undecodable proof JSON (paths not an array)`);
+  }
+  const paths = j.paths.map((p) => {
+    const s = asStr(p);
+    if (s === undefined) {
+      return fail(`${role}: undecodable proof JSON (bad path)`);
+    }
+    return s;
+  });
+  if (!Array.isArray(j.witness)) {
+    return fail(`${role}: undecodable proof JSON (witness not an array)`);
+  }
+  const witness = j.witness.map((c) => decodeMptCommitment(c, role));
+  return { paths, witness };
+};
+
+/** Hand a reconstructed (leaf-first) witness to the single-path verifier. */
+const singleConfirmReconstructed = (
+  root: string,
+  path: string,
+  witness: MptCommitment[]
+): boolean => mptConfirm(root, { path, witness });
+
+/**
+ * Reconstruct the per-path witness from the shared batch witness by walking from
+ * the root, then hand the (leaf-first) reconstructed witness to the single-path
+ * verifier. `true` iff the path verifies. Mirrors `mpt_reconstruct_and_confirm`.
+ */
+const mptReconstructAndConfirm = (
+  root: string,
+  path: string,
+  sharedWitness: MptCommitment[]
+): boolean => {
+  let remaining = pathNibbles(path);
+  let expectedDigest = root;
+  const acc: MptCommitment[] = []; // built leaf-first (commitment :: acc)
+
+  for (;;) {
+    if (remaining.length === 0) {
+      break; // reconstruction succeeded with whatever acc we have
+    }
+    let matched: { c: MptCommitment; next: string; nextPath: number[]; terminal: boolean } | null =
+      null;
+    for (const c of sharedWitness) {
+      if (c.kind === 'leaf') {
+        if (mptCommitmentDigest(c) === expectedDigest && nibblesToStr(remaining) === c.remaining) {
+          matched = { c, next: expectedDigest, nextPath: [], terminal: true };
+          break;
+        }
+      } else if (c.kind === 'extension') {
+        const sharedN = pathNibbles(c.shared);
+        if (mptCommitmentDigest(c) === expectedDigest && startsWith(remaining, sharedN)) {
+          matched = {
+            c,
+            next: c.childDigest,
+            nextPath: remaining.slice(sharedN.length),
+            terminal: false,
+          };
+          break;
+        }
+      } else {
+        // branch
+        if (mptCommitmentDigest(c) === expectedDigest && remaining.length > 0) {
+          const nib = nibbleChar(remaining[0]);
+          const entry = c.pathsDigest.find(([k]) => k === nib);
+          if (entry !== undefined) {
+            matched = { c, next: entry[1], nextPath: remaining.slice(1), terminal: false };
+            break;
+          }
+        }
+      }
+    }
+    if (matched === null) {
+      return false; // InvalidWitness: no matching commitment
+    }
+    if (matched.terminal) {
+      acc.unshift(matched.c);
+      return singleConfirmReconstructed(root, path, acc);
+    }
+    acc.unshift(matched.c);
+    expectedDigest = matched.next;
+    remaining = matched.nextPath;
+  }
+  // remainingPath emptied without hitting a Leaf: hand acc (leaf-first) to verify.
+  return singleConfirmReconstructed(root, path, acc);
+};
+
+/** Array prefix check (`a` starts with `prefix`). */
+const startsWith = (a: number[], prefix: number[]): boolean => {
+  if (prefix.length > a.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i++) {
+    if (a[i] !== prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** Every path must reconstruct and verify; empty paths list -> false. */
+const mptBatchConfirm = (root: string, proof: MptBatchProof): boolean => {
+  if (proof.paths.length === 0) {
+    return false;
+  }
+  return proof.paths.every((p) => mptReconstructAndConfirm(root, p, proof.witness));
+};
+
+interface ReconstructedLeaf {
+  nodeDigest: string;
+  dataDigest: string;
+}
+
+/** Reconstruct `path` from the shared witness, returning its terminal Leaf or null. */
+const reconstructTerminalLeaf = (
+  root: string,
+  path: string,
+  sharedWitness: MptCommitment[]
+): ReconstructedLeaf | null => {
+  let remaining = pathNibbles(path);
+  let expectedDigest = root;
+
+  for (;;) {
+    if (remaining.length === 0) {
+      return null; // path exhausted without a Leaf
+    }
+    let step: { next: string; nextPath: number[] } | null = null;
+    let leaf: ReconstructedLeaf | null = null;
+    for (const c of sharedWitness) {
+      if (c.kind === 'leaf') {
+        if (mptCommitmentDigest(c) === expectedDigest && nibblesToStr(remaining) === c.remaining) {
+          leaf = { nodeDigest: expectedDigest, dataDigest: c.dataDigest };
+          break;
+        }
+      } else if (c.kind === 'extension') {
+        const sharedN = pathNibbles(c.shared);
+        if (mptCommitmentDigest(c) === expectedDigest && startsWith(remaining, sharedN)) {
+          step = { next: c.childDigest, nextPath: remaining.slice(sharedN.length) };
+          break;
+        }
+      } else {
+        if (mptCommitmentDigest(c) === expectedDigest && remaining.length > 0) {
+          const nib = nibbleChar(remaining[0]);
+          const entry = c.pathsDigest.find(([k]) => k === nib);
+          if (entry !== undefined) {
+            step = { next: entry[1], nextPath: remaining.slice(1) };
+            break;
+          }
+        }
+      }
+    }
+    if (leaf !== null) {
+      return leaf;
+    }
+    if (step === null) {
+      return null;
+    }
+    expectedDigest = step.next;
+    remaining = step.nextPath;
+  }
+};
+
+/** PER-KEY binding: each (key, value) must bind to the leaf the KEY's path reaches. */
+const valuesBindPerKey = (
+  root: string,
+  entries: [string, unknown][],
+  witness: MptCommitment[]
+): boolean =>
+  entries.every(([keyHexS, valueJs]) => {
+    const expected = computeValueDigest(valueJs).toLowerCase();
+    const leaf = reconstructTerminalLeaf(root, keyHexS, witness);
+    return leaf !== null && leaf.dataDigest.toLowerCase() === expected;
+  });
+
+/** First witness commitment whose prefixed digest equals `digest` (first-match). */
+const commitmentByDigest = (witness: MptCommitment[], digest: string): MptCommitment | undefined =>
+  witness.find((c) => mptCommitmentDigest(c) === digest);
+
+/**
+ * Recursively require that every leaf reachable in the subtree rooted at `digest`
+ * is an attested terminal. At a Branch, EVERY child must be complete.
+ */
+const subtreeAllLeavesAttested = (
+  witness: MptCommitment[],
+  digest: string,
+  attested: Set<string>
+): boolean => {
+  const c = commitmentByDigest(witness, digest);
+  if (c === undefined) {
+    return false;
+  }
+  if (c.kind === 'leaf') {
+    return attested.has(digest);
+  }
+  if (c.kind === 'extension') {
+    return subtreeAllLeavesAttested(witness, c.childDigest, attested);
+  }
+  return c.pathsDigest.every(([, child]) => subtreeAllLeavesAttested(witness, child, attested));
+};
+
+/** COMPLETENESS check: the attested set must be ALL keys under the prefix. */
+const prefixSubtreeComplete = (root: string, prefix: string, proof: MptBatchProof): boolean => {
+  const witness = proof.witness;
+
+  // Leaf-commitment digests the attested paths actually terminate at.
+  const attestedLeafDigests = new Set<string>();
+  for (const path of proof.paths) {
+    const leaf = reconstructTerminalLeaf(root, path, witness);
+    if (leaf === null) {
+      return false;
+    }
+    attestedLeafDigests.add(leaf.nodeDigest);
+  }
+
+  // 1. Walk root -> prefix point.
+  let remaining = pathNibbles(prefix);
+  let cur = root;
+  for (;;) {
+    if (remaining.length === 0) {
+      break;
+    }
+    const c = commitmentByDigest(witness, cur);
+    if (c === undefined) {
+      return proof.paths.length === 0;
+    }
+    if (c.kind === 'branch') {
+      const nib = nibbleChar(remaining[0]);
+      const entry = c.pathsDigest.find(([k]) => k === nib);
+      if (entry === undefined) {
+        return proof.paths.length === 0;
+      }
+      cur = entry[1];
+      remaining = remaining.slice(1);
+    } else if (c.kind === 'extension') {
+      const sharedN = pathNibbles(c.shared);
+      if (startsWith(remaining, sharedN)) {
+        cur = c.childDigest;
+        remaining = remaining.slice(sharedN.length);
+      } else if (startsWith(sharedN, remaining)) {
+        // Prefix ends MID-extension: the whole subtree below this child is under it.
+        cur = c.childDigest;
+        remaining = [];
+      } else {
+        return proof.paths.length === 0;
+      }
+    } else {
+      // leaf
+      const lremN = pathNibbles(c.remaining);
+      if (startsWith(lremN, remaining)) {
+        remaining = [];
+      } else {
+        return proof.paths.length === 0;
+      }
+    }
+  }
+
+  // 2. Traverse the subtree at `cur`, requiring every reachable leaf is attested.
+  return subtreeAllLeavesAttested(witness, cur, attestedLeafDigests);
+};
+
+/** `expectEntries`: a `{keyHex -> value}` object -> (keyHex, valueJson) pairs. */
+const expectEntries = (role: string, v: JsonLogicValue): [string, unknown][] => {
+  if (v.tag === 'map') {
+    return [...v.value.entries()].map(([k, val]) => [k, toJson(val)] as [string, unknown]);
+  }
+  return fail(`${role}: expected a {keyHex -> value} object, got ${v.tag}`);
+};
+
+/** `mpt_prefix_verify([rootHex, prefixHex, entriesJson, batchProofJson]) -> bool`. */
+export const opMptPrefixVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 4) {
+    return fail('mpt_prefix_verify: expected [rootHex, prefixHex, entriesJson, batchProofJson]');
+  }
+  const rootHex = expectStr('mpt_prefix_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'mpt_prefix_verify root');
+  const prefixHex = expectStr('mpt_prefix_verify prefix', values[1]);
+  const prefix = parseNibbleHex(prefixHex, 'mpt_prefix_verify prefix');
+  const entries = expectEntries('mpt_prefix_verify entries', values[2]);
+  const proof = decodeMptBatchProof(toJson(values[3]), 'mpt_prefix_verify batchProof');
+
+  const prefixLower = prefix.toLowerCase();
+  const claimedKeys = new Set(entries.map(([k]) => k.toLowerCase()));
+  const attestedKeys = new Set(proof.paths.map((p) => p.toLowerCase()));
+
+  // WELL-FORMEDNESS GATE: claimed key-set == attested path-set, all under prefix.
+  const keySetsMatch =
+    claimedKeys.size === attestedKeys.size && [...claimedKeys].every((k) => attestedKeys.has(k));
+  const allUnderPrefix = [...attestedKeys].every((k) => k.startsWith(prefixLower));
+  if (!keySetsMatch || !allUnderPrefix) {
+    return boolValue(false);
+  }
+
+  // PER-KEY VALUE-BINDING.
+  if (!valuesBindPerKey(root, entries, proof.witness)) {
+    return boolValue(false);
+  }
+  // BATCH INCLUSION.
+  if (!mptBatchConfirm(root, proof)) {
+    return boolValue(false);
+  }
+  // COMPLETENESS.
+  return boolValue(prefixSubtreeComplete(root, prefix, proof));
+};
+
+// ===========================================================================
+// ecvrf_verify: ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381 suite 0x03).
+//   Byte-for-byte port of rust/jlvm-core/src/ecvrf.rs (itself a port of the
+//   Scala MiraclEcVrf25519), anchored on the RFC 9381 Appendix B.3 vectors.
+//   Uses @noble/curves ed25519 for the group/scalar arithmetic and the RFC 8032
+//   little-endian point codec; every domain separator / suffix / truncation /
+//   rejection rule is reproduced from the reference.
+//
+//     ecvrf_verify([pkHex(32B), alphaHex, proofHex(80B)])
+//        -> {"valid": bool, "beta": hexOrNull}
+//   Wrong width (pk != 32B, proof != 80B) is an error; a well-formed-but-wrong
+//   proof yields {valid:false, beta:null}.
+// ===========================================================================
+
+const EcPoint = ed25519.Point;
+const EcFn = EcPoint.Fn;
+
+const ECVRF_SUITE_STRING = 0x03;
+const ECVRF_POINT_BYTES = 32;
+const ECVRF_C_BYTES = 16;
+const ECVRF_PROOF_BYTES = ECVRF_POINT_BYTES + ECVRF_C_BYTES + 32; // 80
+/** Ed25519 group order L. */
+const ECVRF_L = EcFn.ORDER;
+/** Ed25519 field prime p = 2^255 - 19. */
+const ECVRF_FIELD_P = EcPoint.Fp.ORDER;
+
+/** Little-endian bytes -> non-negative bigint. */
+const leToBigInt = (bytes: Uint8Array): bigint => {
+  let v = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    v = (v << 8n) | BigInt(bytes[i]);
+  }
+  return v;
+};
+
+/**
+ * string_to_point: parse y (LE, bit 255 = x sign) and recover the point. Adds
+ * the strict rejections (`y >= p`, identity result) on top of dalek/noble's
+ * decompress. Returns `null` on any failure. Mirrors Rust `bytes_to_point`.
+ */
+const ecvrfBytesToPoint = (bytes: Uint8Array): InstanceType<typeof EcPoint> | null => {
+  if (bytes.length !== ECVRF_POINT_BYTES) {
+    return null;
+  }
+  // Reject y >= p (clear the sign bit first, compare the 255-bit y LE).
+  const y = new Uint8Array(bytes);
+  y[31] &= 0x7f;
+  if (leToBigInt(y) >= ECVRF_FIELD_P) {
+    return null;
+  }
+  let point: InstanceType<typeof EcPoint>;
+  try {
+    point = EcPoint.fromBytes(bytes);
+  } catch {
+    return null;
+  }
+  return point.is0() ? null : point;
+};
+
+/** point_to_string: 32-byte little-endian y with x's LSB in bit 255. */
+const ecvrfPointToBytes = (point: InstanceType<typeof EcPoint>): Uint8Array => point.toBytes();
+
+/** [e]*B (basepoint mul); accepts any scalar (incl. 0 / out-of-range reduced). */
+const ecvrfBasepointMul = (e: bigint): InstanceType<typeof EcPoint> =>
+  EcPoint.BASE.multiplyUnsafe(((e % ECVRF_L) + ECVRF_L) % ECVRF_L);
+
+/** [e]*P (variable-base mul); accepts any scalar. */
+const ecvrfPointMul = (p: InstanceType<typeof EcPoint>, e: bigint): InstanceType<typeof EcPoint> =>
+  p.multiplyUnsafe(((e % ECVRF_L) + ECVRF_L) % ECVRF_L);
+
+/** Compare two challenge scalars on their first 16 little-endian bytes. */
+const ecvrfScalarEquals16 = (a: bigint, b: bigint): boolean => {
+  const ab = scalarToLeBytes(a);
+  const bb = scalarToLeBytes(b);
+  for (let i = 0; i < ECVRF_C_BYTES; i++) {
+    if (ab[i] !== bb[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** Serialize a scalar (already reduced mod L) as 32 little-endian bytes. */
+const scalarToLeBytes = (s: bigint): Uint8Array => {
+  const v = ((s % ECVRF_L) + ECVRF_L) % ECVRF_L;
+  const out = new Uint8Array(32);
+  let x = v;
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
+};
+
+/** Concatenate byte arrays. */
+const cat = (...parts: Uint8Array[]): Uint8Array => {
+  let total = 0;
+  for (const p of parts) {
+    total += p.length;
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+};
+
+/**
+ * hash_to_curve = try_and_increment (RFC 9381 §5.4.1.1, draft-10):
+ *   for ctr in 0..256:
+ *     hash = SHA-512(suite || 0x01 || pk || alpha || ctr || 0x00)
+ *     P = string_to_point(hash[0..32]); if it decodes and is non-zero: return [8]*P
+ */
+const ecvrfHashToCurve = (
+  publicKey: Uint8Array,
+  alpha: Uint8Array
+): InstanceType<typeof EcPoint> | null => {
+  for (let ctr = 0; ctr < 256; ctr++) {
+    const hash = sha512(
+      cat(
+        Uint8Array.of(ECVRF_SUITE_STRING),
+        Uint8Array.of(0x01),
+        publicKey,
+        alpha,
+        Uint8Array.of(ctr),
+        Uint8Array.of(0x00)
+      )
+    );
+    const point = ecvrfBytesToPoint(hash.subarray(0, 32));
+    if (point !== null) {
+      // bytes_to_point already rejects the identity; mirror the explicit guard.
+      if (ecvrfPointToBytes(point).some((b) => b !== 0)) {
+        return point.clearCofactor();
+      }
+    }
+  }
+  return null;
+};
+
+/**
+ * ECVRF_challenge_generation (RFC 9381 §5.4.3): hashes FIVE points with the
+ * public key Y first; c = SHA-512(suite||0x02||Y||H||Gamma||U||V||0x00)[0..15] LE.
+ */
+const ecvrfHashPoints = (
+  y: InstanceType<typeof EcPoint>,
+  h: InstanceType<typeof EcPoint>,
+  gamma: InstanceType<typeof EcPoint>,
+  u: InstanceType<typeof EcPoint>,
+  v: InstanceType<typeof EcPoint>
+): bigint => {
+  const hash = sha512(
+    cat(
+      Uint8Array.of(ECVRF_SUITE_STRING),
+      Uint8Array.of(0x02),
+      ecvrfPointToBytes(y),
+      ecvrfPointToBytes(h),
+      ecvrfPointToBytes(gamma),
+      ecvrfPointToBytes(u),
+      ecvrfPointToBytes(v),
+      Uint8Array.of(0x00)
+    )
+  );
+  // First 16 bytes as a little-endian integer (< 2^128 < L).
+  return leToBigInt(hash.subarray(0, ECVRF_C_BYTES));
+};
+
+/**
+ * Decode an 80-byte proof into (Gamma, c, s). `s` must be canonical (`< L`); `c`
+ * is the 16-byte LE challenge. Mirrors Rust `decode_proof`. Returns null on any
+ * failure.
+ */
+const ecvrfDecodeProof = (
+  proof: Uint8Array
+): { gamma: InstanceType<typeof EcPoint>; c: bigint; s: bigint } | null => {
+  if (proof.length !== ECVRF_PROOF_BYTES) {
+    return null;
+  }
+  const gamma = ecvrfBytesToPoint(proof.subarray(0, ECVRF_POINT_BYTES));
+  if (gamma === null) {
+    return null;
+  }
+  const c = leToBigInt(proof.subarray(ECVRF_POINT_BYTES, ECVRF_POINT_BYTES + ECVRF_C_BYTES));
+  const s = leToBigInt(proof.subarray(ECVRF_POINT_BYTES + ECVRF_C_BYTES, ECVRF_PROOF_BYTES));
+  // s must be canonical (< L) for a valid proof.
+  if (s >= ECVRF_L) {
+    return null;
+  }
+  return { gamma, c, s };
+};
+
+/** Verify a VRF proof; `false` on any structural failure or failed check. */
+const ecvrfVerifyRaw = (publicKey: Uint8Array, message: Uint8Array, proof: Uint8Array): boolean => {
+  if (publicKey.length !== ECVRF_POINT_BYTES || proof.length !== ECVRF_PROOF_BYTES) {
+    return false;
+  }
+  const yPoint = ecvrfBytesToPoint(publicKey);
+  if (yPoint === null) {
+    return false;
+  }
+  const decoded = ecvrfDecodeProof(proof);
+  if (decoded === null) {
+    return false;
+  }
+  const { gamma, c, s } = decoded;
+  const hPoint = ecvrfHashToCurve(publicKey, message);
+  if (hPoint === null) {
+    return false;
+  }
+  // U = [s]*B - [c]*Y
+  const uPoint = ecvrfBasepointMul(s).subtract(ecvrfPointMul(yPoint, c));
+  // V = [s]*H - [c]*Gamma
+  const vPoint = ecvrfPointMul(hPoint, s).subtract(ecvrfPointMul(gamma, c));
+  const cPrime = ecvrfHashPoints(yPoint, hPoint, gamma, uPoint, vPoint);
+  return ecvrfScalarEquals16(c, cPrime);
+};
+
+/**
+ * beta = SHA-512(suite || 0x03 || point_to_string([cofactor]*Gamma) || 0x00).
+ * Mirrors Rust `vrf_proof_to_hash`; returns null on a bad gamma.
+ */
+const ecvrfProofToHash = (proof: Uint8Array): Uint8Array | null => {
+  if (proof.length !== ECVRF_PROOF_BYTES) {
+    return null;
+  }
+  const gamma = ecvrfBytesToPoint(proof.subarray(0, ECVRF_POINT_BYTES));
+  if (gamma === null) {
+    return null;
+  }
+  const cofactorGamma = gamma.clearCofactor();
+  return sha512(
+    cat(
+      Uint8Array.of(ECVRF_SUITE_STRING),
+      Uint8Array.of(0x03),
+      ecvrfPointToBytes(cofactorGamma),
+      Uint8Array.of(0x00)
+    )
+  );
+};
+
+/** `ecvrf_verify([pkHex(32B), alphaHex, proofHex(80B)]) -> {valid, beta}`. */
+export const opEcvrfVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 3) {
+    return fail('ecvrf_verify: expected [pkHex(32B), alphaHex, proofHex(80B)]');
+  }
+  const pkHex = expectStr('ecvrf_verify pk', values[0]);
+  const alphaHex = expectStr('ecvrf_verify alpha', values[1]);
+  const proofHex = expectStr('ecvrf_verify proof', values[2]);
+  const pk = hb.parseBytes(pkHex, ECVRF_POINT_BYTES, 'ecvrf_verify pk');
+  const alpha = hb.parseBytes(alphaHex, null, 'ecvrf_verify alpha');
+  const proof = hb.parseBytes(proofHex, ECVRF_PROOF_BYTES, 'ecvrf_verify proof');
+
+  const valid = ecvrfVerifyRaw(pk, alpha, proof);
+  let beta: JsonLogicValue = nullValue();
+  if (valid) {
+    const b = ecvrfProofToHash(proof);
+    beta = b !== null ? strValue(hb.encodeBytes(b)) : nullValue();
+  }
+  return mapValue(
+    new Map<string, JsonLogicValue>([
+      ['valid', boolValue(valid)],
+      ['beta', beta],
+    ])
+  );
 };
