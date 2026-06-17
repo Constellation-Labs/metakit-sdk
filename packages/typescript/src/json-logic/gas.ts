@@ -161,6 +161,12 @@ export interface GasConfig {
   readonly mptPerNode: GasCost;
   readonly mptPrefixVerify: GasCost;
   readonly mptPrefixPerEntry: GasCost;
+  readonly proveDlogVerify: GasCost;
+  readonly proveDhtupleVerify: GasCost;
+  readonly sigmaVerify: GasCost;
+  readonly sigmaVerifyPerDlogLeaf: GasCost;
+  readonly sigmaVerifyPerDhtupleLeaf: GasCost;
+  readonly sigmaVerifyPerNode: GasCost;
 
   // Base costs
   readonly const: GasCost;
@@ -273,6 +279,15 @@ export const DEFAULT_GAS_CONFIG: GasConfig = {
   mptPerNode: gasCost(400),
   mptPrefixVerify: gasCost(1_000),
   mptPrefixPerEntry: gasCost(800),
+  // Sigma protocols (Ergo/EIP-11 family). The two fixed-arity leaves are flat;
+  // sigma_verify is pre-charged from the proposition-tree shape (per-leaf +
+  // per-node), mirroring rust/jlvm-core/src/gas.rs.
+  proveDlogVerify: gasCost(45_000),
+  proveDhtupleVerify: gasCost(85_000),
+  sigmaVerify: gasCost(45_000),
+  sigmaVerifyPerDlogLeaf: gasCost(45_000),
+  sigmaVerifyPerDhtupleLeaf: gasCost(85_000),
+  sigmaVerifyPerNode: gasCost(2_000),
 
   // Base costs
   const: gasCost(0),
@@ -462,6 +477,12 @@ export const getOperatorCost = (op: JsonLogicOpTag, config: GasConfig): GasCost 
       return config.blsVerify;
     case 'bls_aggregate_verify':
       return config.blsAggregateVerify;
+    case 'prove_dlog_verify':
+      return config.proveDlogVerify;
+    case 'prove_dhtuple_verify':
+      return config.proveDhtupleVerify;
+    case 'sigma_verify':
+      return config.sigmaVerify;
   }
 };
 

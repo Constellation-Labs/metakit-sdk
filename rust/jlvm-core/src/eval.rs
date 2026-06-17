@@ -388,6 +388,16 @@ impl<'a> Evaluator<'a> {
             // DST BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_). Byte-matching.
             "bls_verify" => crate::crypto::bls_verify(&values),
             "bls_aggregate_verify" => crate::crypto::bls_aggregate_verify(&values),
+            // Sigma-protocol leaves + recursive CDS verifier (Ergo / EIP-11
+            // family) on BN254 G1. Pure ports of the Scala CryptoOps
+            // proveDlogVerify / proveDhTupleVerify / sigmaVerify. The leaves
+            // share the schnorr_verify conventions (generator (1,2), SHA256 mod R
+            // Fiat-Shamir, 0x-fixed-width hex codec, on-curve/identity + error-vs
+            // -false discipline); sigma_verify is the strong-FS CDS tree with the
+            // FROZEN serialization (docs/sigma-verify.md), byte-matching CryptoOps.
+            "prove_dlog_verify" => crate::crypto::prove_dlog_verify(&values),
+            "prove_dhtuple_verify" => crate::crypto::prove_dhtuple_verify(&values),
+            "sigma_verify" => crate::crypto::sigma_verify(&values),
             other => Err(format!("Unsupported operator: {}", other)),
         }
     }

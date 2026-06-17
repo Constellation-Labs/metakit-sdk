@@ -107,6 +107,12 @@ pub struct GasConfig {
     pub mpt_per_node: u64,
     pub mpt_prefix_verify: u64,
     pub mpt_prefix_per_entry: u64,
+    pub prove_dlog_verify: u64,
+    pub prove_dhtuple_verify: u64,
+    pub sigma_verify: u64,
+    pub sigma_verify_per_dlog_leaf: u64,
+    pub sigma_verify_per_dhtuple_leaf: u64,
+    pub sigma_verify_per_node: u64,
     pub const_cost: u64,
     pub var_access: u64,
     pub depth_penalty_multiplier: u64,
@@ -196,6 +202,18 @@ impl Default for GasConfig {
             mpt_per_node: 400,
             mpt_prefix_verify: 1_000,
             mpt_prefix_per_entry: 800,
+            // Sigma protocols (Ergo/EIP-11 family). The two fixed-arity leaves are
+            // flat (no input-scaled term): prove_dlog_verify is priced identically
+            // to schnorr_verify (thin alias), prove_dhtuple_verify ~2x (4 muls + 2
+            // adds). sigma_verify is the recursive CDS tree verifier: its cost is
+            // pre-charged from the proposition-tree shape (per-leaf + per-node, see
+            // `input_scaled_cost`).
+            prove_dlog_verify: 45_000,
+            prove_dhtuple_verify: 85_000,
+            sigma_verify: 45_000,
+            sigma_verify_per_dlog_leaf: 45_000,
+            sigma_verify_per_dhtuple_leaf: 85_000,
+            sigma_verify_per_node: 2_000,
             const_cost: 0,
             var_access: 2,
             depth_penalty_multiplier: 5,
@@ -299,6 +317,9 @@ impl GasConfig {
             "smt_verify" => self.smt_verify,
             "mpt_verify" => self.mpt_verify,
             "mpt_prefix_verify" => self.mpt_prefix_verify,
+            "prove_dlog_verify" => self.prove_dlog_verify,
+            "prove_dhtuple_verify" => self.prove_dhtuple_verify,
+            "sigma_verify" => self.sigma_verify,
             _ => return None,
         };
         Some(cost)
@@ -393,6 +414,14 @@ mod tests {
         assert_eq!(c.op_base_cost("bls_aggregate_verify"), Some(120_000));
         assert_eq!(c.op_base_cost("smt_verify"), Some(500));
         assert_eq!(c.op_base_cost("mpt_prefix_verify"), Some(1_000));
+        // Sigma opcodes: leaves are flat; sigma_verify base is pre-charged with
+        // per-leaf/per-node terms applied from the proposition shape (see gas_eval).
+        assert_eq!(c.op_base_cost("prove_dlog_verify"), Some(45_000));
+        assert_eq!(c.op_base_cost("prove_dhtuple_verify"), Some(85_000));
+        assert_eq!(c.op_base_cost("sigma_verify"), Some(45_000));
+        assert_eq!(c.sigma_verify_per_dlog_leaf, 45_000);
+        assert_eq!(c.sigma_verify_per_dhtuple_leaf, 85_000);
+        assert_eq!(c.sigma_verify_per_node, 2_000);
         assert_eq!(c.op_base_cost("not_an_op"), None);
         assert_eq!(c.depth_penalty(3), 15);
         assert_eq!(c.size_cost(7), 7);

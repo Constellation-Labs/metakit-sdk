@@ -90,6 +90,11 @@ pub const KNOWN_OPERATORS: &[&str] = &[
     // BLS12-381 signatures (Tier 3b) -- mirrors JsonLogicOp BlsVerifyOp / BlsAggregateVerifyOp
     "bls_verify",
     "bls_aggregate_verify",
+    // Sigma-protocol leaves + CDS tree verifier -- mirrors JsonLogicOp
+    // ProveDlogVerifyOp / ProveDhTupleVerifyOp / SigmaVerifyOp.
+    "prove_dlog_verify",
+    "prove_dhtuple_verify",
+    "sigma_verify",
 ];
 
 pub fn is_known_operator(tag: &str) -> bool {

@@ -663,6 +663,23 @@ impl<'a> Metered<'a> {
             ("mpt_prefix_verify", [_, _, Value::Map(entries), _]) => {
                 c.mpt_prefix_per_entry.saturating_mul(entries.len() as u64)
             }
+            // sigma_verify scales with the PROPOSITION-TREE shape: one per-leaf charge
+            // per DLog / DHTuple leaf + one per-node charge per connective. Derived
+            // from the first argument (the proposition tree) ALONE and pre-charged
+            // BEFORE any curve arithmetic, so out-of-gas is raised before the per-leaf
+            // scalar-mul work (the DoS bound). A malformed/non-tree first arg charges
+            // 0 here and the verifier raises the encoding fault. Mirrors the Scala
+            // `getInputScaledCost(SigmaVerifyOp)` / `sigmaPropShape` exactly.
+            ("sigma_verify", [prop, _, _]) => {
+                let (dlog_leaves, dhtuple_leaves, nodes) = sigma_prop_shape(prop);
+                c.sigma_verify_per_dlog_leaf
+                    .saturating_mul(dlog_leaves)
+                    .saturating_add(
+                        c.sigma_verify_per_dhtuple_leaf
+                            .saturating_mul(dhtuple_leaves),
+                    )
+                    .saturating_add(c.sigma_verify_per_node.saturating_mul(nodes))
+            }
             _ => 0,
         }
     }
@@ -692,8 +709,38 @@ fn is_primitive(v: &Value) -> bool {
     )
 }
 
+// LAST-wins on duplicate keys (== Scala `Map` semantics / parser dedup); see `Value::map_get`.
 fn map_get<'v>(m: &'v [(String, Value)], key: &str) -> Option<&'v Value> {
-    m.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    m.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
+}
+
+/// Count `(dlog_leaves, dhtuple_leaves, connective_nodes)` in a `sigma_verify`
+/// proposition tree, to pre-charge per-leaf / per-node gas from the shape.
+/// Recognises the same node schema the verifier parses
+/// (`{"type": dlog|dhtuple|and|or|threshold, ...}`); any unrecognised shape
+/// contributes `(0, 0, 0)` (the verifier will raise the structural fault). A
+/// connective counts as ONE node INCLUDING the root, then folds its `children`.
+/// Bounded recursion over the already-materialised value tree — a byte-for-byte
+/// mirror of the Scala `GasAwareSemantics.sigmaPropShape`.
+fn sigma_prop_shape(v: &Value) -> (u64, u64, u64) {
+    match v {
+        Value::Map(m) => match map_get(m, "type") {
+            Some(Value::Str(t)) if t == "dlog" => (1, 0, 0),
+            Some(Value::Str(t)) if t == "dhtuple" => (0, 1, 0),
+            Some(Value::Str(t)) if t == "and" || t == "or" || t == "threshold" => {
+                let children = match map_get(m, "children") {
+                    Some(Value::Array(cs)) => cs.as_slice(),
+                    _ => &[],
+                };
+                children.iter().fold((0u64, 0u64, 1u64), |(d, t, n), c| {
+                    let (cd, ct, cn) = sigma_prop_shape(c);
+                    (d + cd, t + ct, n + cn)
+                })
+            }
+            _ => (0, 0, 0),
+        },
+        _ => (0, 0, 0),
+    }
 }
 
 fn utf16_len(s: &str) -> u64 {
@@ -765,6 +812,50 @@ mod tests {
         assert_eq!(java_split_dot_segments("."), 0);
         assert_eq!(java_split_dot_segments(".a"), 2);
         assert_eq!(java_split_dot_segments("a..b"), 3);
+    }
+
+    #[test]
+    fn sigma_prop_shape_counting() {
+        let shape = |json: &str| {
+            let v: serde_json::Value = serde_json::from_str(json).unwrap();
+            sigma_prop_shape(&decode_value(&v))
+        };
+        // Leaves: one of their kind, no node.
+        assert_eq!(shape(r#"{"type":"dlog","pk":"0x00"}"#), (1, 0, 0));
+        assert_eq!(shape(r#"{"type":"dhtuple","g":"0x00"}"#), (0, 1, 0));
+        // A connective counts as one node INCLUDING the root, then folds children.
+        assert_eq!(
+            shape(r#"{"type":"and","children":[{"type":"dlog"},{"type":"dhtuple"}]}"#),
+            (1, 1, 1)
+        );
+        // OR ring n=3: 3 dlog leaves under 1 node.
+        assert_eq!(
+            shape(r#"{"type":"or","children":[{"type":"dlog"},{"type":"dlog"},{"type":"dlog"}]}"#),
+            (3, 0, 1)
+        );
+        // THRESHOLD 2-of-3: same shape as the 3-leaf ring (k is irrelevant to the count).
+        assert_eq!(
+            shape(
+                r#"{"type":"threshold","k":2,"children":[{"type":"dlog"},{"type":"dlog"},{"type":"dlog"}]}"#
+            ),
+            (3, 0, 1)
+        );
+        // Nested (A or B) and (C or D): 4 dlog leaves, 3 nodes (1 and + 2 or).
+        assert_eq!(
+            shape(
+                r#"{"type":"and","children":[{"type":"or","children":[{"type":"dlog"},{"type":"dlog"}]},{"type":"or","children":[{"type":"dlog"},{"type":"dlog"}]}]}"#
+            ),
+            (4, 0, 3)
+        );
+        // Unrecognised / malformed shapes contribute nothing (verifier raises the fault).
+        assert_eq!(
+            shape(r#"{"type":"xor","children":[{"type":"dlog"}]}"#),
+            (0, 0, 0)
+        );
+        assert_eq!(shape(r#"{"foo":"bar"}"#), (0, 0, 0));
+        assert_eq!(shape(r#"42"#), (0, 0, 0));
+        // Connective with no/absent children array: just the root node.
+        assert_eq!(shape(r#"{"type":"and"}"#), (0, 0, 1));
     }
 
     #[test]

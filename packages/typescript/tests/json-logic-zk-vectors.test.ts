@@ -43,6 +43,9 @@ const IMPLEMENTED = new Set([
   'schnorr_verify',
   'bls_verify',
   'bls_aggregate_verify',
+  'sigma_dlog',
+  'sigma_dhtuple',
+  'sigma',
 ]);
 
 const vectorsPath = path.join(__dirname, '../../..', 'shared', 'zk_opcode_test_vectors.json');

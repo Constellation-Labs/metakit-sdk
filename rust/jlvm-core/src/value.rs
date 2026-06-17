@@ -57,9 +57,15 @@ impl Value {
         Value::Int(BigInt::from(i))
     }
 
+    /// Map field lookup, LAST-wins on duplicate keys to match the Scala reference
+    /// (`JsonLogicValue` decodes objects into a `Map` => last-wins) and both JSON parsers
+    /// (circe + serde_json collapse duplicate keys to last-wins at parse). `decode_value`
+    /// only ever yields unique-key maps, so this differs from first-match only for a
+    /// hand-built duplicate-key `Value::Map` — where last-wins keeps Rust identical to
+    /// Scala. (audit #1: cross-runtime duplicate-key determinism)
     pub fn map_get<'a>(&'a self, key: &str) -> Option<&'a Value> {
         match self {
-            Value::Map(m) => m.iter().find(|(k, _)| k == key).map(|(_, v)| v),
+            Value::Map(m) => m.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v),
             _ => None,
         }
     }
