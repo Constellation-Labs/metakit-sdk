@@ -56,7 +56,7 @@ fn default_witness() -> TransferWitness {
     let proof_b = tree.inclusion_proof(&fr(200));
 
     let out_c = Note::new(120, owner_from_nsk(&fr(333)), asset.clone(), fr(8001));
-    let out_d = Note::new(25, owner_from_nsk(&fr(444)), asset, fr(8002));
+    let out_d = Note::new(25, owner_from_nsk(&fr(444)), asset.clone(), fr(8002));
 
     TransferWitness {
         anchor,
@@ -66,6 +66,7 @@ fn default_witness() -> TransferWitness {
         ],
         outputs: vec![OutputNote { note: out_c }, OutputNote { note: out_d }],
         fee: 5,
+        fee_asset: asset, // fee charged in the (single) transfer asset
     }
 }
 

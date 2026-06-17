@@ -42,6 +42,7 @@ jobs:
             jlvm_core:
               - 'rust/jlvm-core/**'
               - 'rust/poseidon-bn254/**'
+              - 'rust/zk-shielded/**'
 
   typescript:
     needs: changes
@@ -259,6 +260,13 @@ jobs:
           ( cd rust/jlvm-core && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings && cargo test )
           if [ -f rust/poseidon-bn254/Cargo.toml ]; then
             ( cd rust/poseidon-bn254 && cargo test )
+          fi
+          # zk-shielded-lib carries the shielded-transfer constraint system (nullifier
+          # uniqueness, per-asset conservation) + its native conformance vector. Test the
+          # lib only: the `program`/`script` crates need the SP1 (succinct) toolchain, which
+          # this job doesn't install. Guarded so it's a no-op until the crate lands.
+          if [ -f rust/zk-shielded/lib/Cargo.toml ]; then
+            ( cd rust/zk-shielded && cargo test -p zk-shielded-lib )
           fi
 
   # Catch publish-time failures (manifest errors, packaging mistakes, the

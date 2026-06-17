@@ -27,18 +27,27 @@
 //! (a) MEMBERSHIP   — each input `cm` is a leaf under the public `anchor` Merkle root.
 //! (b) NULLIFIER    — each `nf` is correctly derived from `(rho, nsk)`; revealed publicly.
 //! (c) AUTHORIZATION— the spender knows `nsk` for each input (`owner == Poseidon([nsk])`).
-//! (d) CONSERVATION — `sum(inputs.value) == sum(outputs.value) + fee`, all u64, no overflow.
+//! (d) CONSERVATION — value is conserved PER ASSET: for every asset label `a`,
+//!     `sum(inputs[a].value) == sum(outputs[a].value) + (fee if a == fee_asset else 0)`,
+//!     all u64, no overflow. A transfer therefore CANNOT mint across assets (burn asset A
+//!     to create asset B), and the transparent `fee` is charged in exactly one declared
+//!     `fee_asset` — which must itself be funded by the inputs.
 //! (e) RANGE        — every value is a u64 (`< 2^64`), so it embeds in Fr.
 //! (f) OUTPUTS      — each output `cm` is computed and revealed publicly.
+//! (g) UNIQUENESS   — the input nullifiers are pairwise-distinct WITHIN the transfer, so the
+//!     same note cannot be listed twice and double-counted (intra-transfer double-spend).
+//!     The on-chain nullifier set still guards INTER-transfer double-spends; this guards the
+//!     one case that set can't see — a single transfer self-colliding.
 //!
-//! Public values: `{ anchor: Fr, nullifiers[N], output_cms[M], fee: u64 }`.
-//! Private witness: input notes + nsk + Merkle paths + output note openings.
+//! Public values: `{ anchor: Fr, nullifiers[N], output_cms[M], fee: u64, fee_asset: Fr }`.
+//! Private witness: input notes + nsk + Merkle paths + output note openings + fee_asset.
 //! An INVALID witness makes [`verify_transfer`] return `Err`; the guest turns that into a
 //! panic (an aborted proof), which is what makes a successful proof meaningful.
 
 use num_bigint::BigUint;
 use poseidon_bn254::merkle::{verify_inclusion, PoseidonMerkleProof};
 use poseidon_bn254::{hash, is_canonical};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub mod pub_values;
 pub mod wire;
@@ -109,6 +118,11 @@ pub struct TransferWitness {
     pub outputs: Vec<OutputNote>,
     /// The (public) transparent fee, in the same u64 value units.
     pub fee: u64,
+    /// The (public) asset label the transparent `fee` is denominated in. Per-asset
+    /// conservation charges `fee` against this asset only; it must be a real, funded asset
+    /// of the transfer whenever `fee > 0`. (When `fee == 0` it is unconstrained but must
+    /// still be canonical; use any canonical value, e.g. `0` or the transfer's asset.)
+    pub fee_asset: BigUint,
 }
 
 /// The public statement the proof attests to (the sol-encoded `bytes` of this are the
@@ -116,11 +130,14 @@ pub struct TransferWitness {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TransferPublic {
     pub anchor: BigUint,
-    /// One nullifier per input, in input order.
+    /// One nullifier per input, in input order. Guaranteed pairwise-distinct (see UNIQUENESS).
     pub nullifiers: Vec<BigUint>,
     /// One commitment per output, in output order.
     pub output_cms: Vec<BigUint>,
     pub fee: u64,
+    /// The asset the transparent `fee` is denominated in (revealed so the chain can credit
+    /// the fee to the right asset).
+    pub fee_asset: BigUint,
 }
 
 /// Reasons a witness can fail to satisfy the transfer constraints.
@@ -136,8 +153,10 @@ pub enum TransferError {
     OwnerMismatch(usize),
     /// MEMBERSHIP: input `i`'s commitment is not included under `anchor`.
     NotMember(usize),
-    /// CONSERVATION: `sum(inputs) != sum(outputs) + fee`.
-    ValueNotConserved { inputs: u128, outputs_plus_fee: u128 },
+    /// UNIQUENESS: input `i`'s nullifier duplicates an earlier input's (intra-transfer double-spend).
+    DuplicateNullifier(usize),
+    /// CONSERVATION: for `asset`, `sum(inputs[asset]) != sum(outputs[asset]) + fee_for_asset`.
+    AssetNotConserved { asset: BigUint, inputs: u128, outputs_plus_fee: u128 },
     /// Arithmetic would overflow even in u128 accumulation (astronomically unlikely with u64s).
     SumOverflow,
 }
@@ -154,9 +173,12 @@ impl core::fmt::Display for TransferError {
             TransferError::NotMember(i) => {
                 write!(f, "membership failed: input[{i}].cm not under anchor")
             }
-            TransferError::ValueNotConserved { inputs, outputs_plus_fee } => write!(
+            TransferError::DuplicateNullifier(i) => {
+                write!(f, "uniqueness failed: input[{i}] reuses an earlier input's nullifier")
+            }
+            TransferError::AssetNotConserved { asset, inputs, outputs_plus_fee } => write!(
                 f,
-                "value not conserved: sum(inputs)={inputs} != sum(outputs)+fee={outputs_plus_fee}"
+                "value not conserved for asset {asset}: sum(inputs)={inputs} != sum(outputs)+fee={outputs_plus_fee}"
             ),
             TransferError::SumOverflow => write!(f, "value sum overflow"),
         }
@@ -176,8 +198,9 @@ fn require_canonical(x: &BigUint, role: &'static str) -> Result<(), TransferErro
 /// native tests and the zkVM guest.
 ///
 /// Checks, in order: well-formedness, per-input AUTHORIZATION (c) + MEMBERSHIP (a) +
-/// NULLIFIER derivation (b), per-output commitment (f), and VALUE CONSERVATION (d).
-/// RANGE (e) is structural: `value: u64` cannot exceed `2^64`, so it always embeds in Fr.
+/// NULLIFIER derivation (b) + intra-transfer UNIQUENESS (g), per-output commitment (f), and
+/// PER-ASSET VALUE CONSERVATION (d). RANGE (e) is structural: `value: u64` cannot exceed
+/// `2^64`, so it always embeds in Fr.
 pub fn verify_transfer(witness: &TransferWitness) -> Result<TransferPublic, TransferError> {
     if witness.inputs.is_empty() {
         return Err(TransferError::NoInputs);
@@ -186,11 +209,14 @@ pub fn verify_transfer(witness: &TransferWitness) -> Result<TransferPublic, Tran
         return Err(TransferError::NoOutputs);
     }
     require_canonical(&witness.anchor, "anchor")?;
+    require_canonical(&witness.fee_asset, "fee_asset")?;
 
-    // --- inputs: authorization, membership, nullifier ---
+    // --- inputs: authorization, membership, nullifier (unique), per-asset value sum ---
     let mut nullifiers = Vec::with_capacity(witness.inputs.len());
-    // u128 accumulator: N * (2^64 - 1) for realistic N never overflows u128.
-    let mut sum_in: u128 = 0;
+    // Distinct-nullifier guard (g): every revealed nullifier must be unique within the transfer.
+    let mut seen_nullifiers: BTreeSet<BigUint> = BTreeSet::new();
+    // Per-asset u128 input sums: N * (2^64 - 1) for realistic N never overflows u128.
+    let mut sum_in: BTreeMap<BigUint, u128> = BTreeMap::new();
     for (i, inp) in witness.inputs.iter().enumerate() {
         require_canonical(&inp.note.owner, "input.owner")?;
         require_canonical(&inp.note.asset, "input.asset")?;
@@ -209,44 +235,57 @@ pub fn verify_transfer(witness: &TransferWitness) -> Result<TransferPublic, Tran
         }
 
         // (b) NULLIFIER: derive and reveal (double-spend prevention).
-        // SECURITY TODO (known gap, deferred): no INTRA-transfer nullifier-uniqueness check.
-        // The same input note can be listed twice and double-counted into sum_in unless every
-        // downstream consumer dedups the revealed nullifier vec. Fix in-circuit: enforce the
-        // nullifiers are pairwise-distinct (require strictly-ascending order, or collect into a
-        // set and assert set.len() == inputs.len()) instead of relying on the on-chain
-        // nullifier-set checker. Not yet enforced.
-        nullifiers.push(nullifier(&inp.note.rho, &inp.nsk));
+        // (g) UNIQUENESS: reject if this nullifier already appeared in THIS transfer, so the
+        // same note cannot be listed twice and double-counted into its asset's input sum. The
+        // revealed `nullifiers` vec stays in INPUT ORDER (the reveal contract) — distinctness is
+        // enforced via a side set, not by reordering. The on-chain nullifier set guards the
+        // INTER-transfer case; this guards the one it can't see (a transfer self-colliding).
+        let nf = nullifier(&inp.note.rho, &inp.nsk);
+        if !seen_nullifiers.insert(nf.clone()) {
+            return Err(TransferError::DuplicateNullifier(i));
+        }
+        nullifiers.push(nf);
 
-        sum_in = sum_in.checked_add(inp.note.value as u128).ok_or(TransferError::SumOverflow)?;
+        let acc = sum_in.entry(inp.note.asset.clone()).or_insert(0u128);
+        *acc = acc.checked_add(inp.note.value as u128).ok_or(TransferError::SumOverflow)?;
     }
 
-    // --- outputs: compute + reveal commitments ---
+    // --- outputs: compute + reveal commitments, per-asset value sum ---
     let mut output_cms = Vec::with_capacity(witness.outputs.len());
-    let mut sum_out: u128 = 0;
+    let mut sum_out: BTreeMap<BigUint, u128> = BTreeMap::new();
     for out in &witness.outputs {
         require_canonical(&out.note.owner, "output.owner")?;
         require_canonical(&out.note.asset, "output.asset")?;
         require_canonical(&out.note.rho, "output.rho")?;
         // (f) OUTPUTS: commitment computed in-guest and revealed.
         output_cms.push(out.note.commitment());
-        sum_out = sum_out.checked_add(out.note.value as u128).ok_or(TransferError::SumOverflow)?;
+        let acc = sum_out.entry(out.note.asset.clone()).or_insert(0u128);
+        *acc = acc.checked_add(out.note.value as u128).ok_or(TransferError::SumOverflow)?;
     }
 
-    // (d) VALUE CONSERVATION: sum(inputs) == sum(outputs) + fee.
-    // SECURITY TODO (known gap, deferred — assumes a SINGLE asset per transfer for now):
-    // this sums values across ALL asset types with no per-asset partition, so a multi-asset
-    // transfer can MINT across assets (e.g. burn 100 of asset A, create 100 of asset B).
-    // `asset` IS bound in each commitment, so the fix is to conserve PER asset: group inputs
-    // and outputs by `note.asset` and require sum_in[asset] == sum_out[asset] (with `fee`
-    // charged to one designated fee-asset), or constrain every input/output to one shared
-    // asset and reject mixed-asset witnesses. Not yet enforced.
-    let outputs_plus_fee =
-        sum_out.checked_add(witness.fee as u128).ok_or(TransferError::SumOverflow)?;
-    if sum_in != outputs_plus_fee {
-        return Err(TransferError::ValueNotConserved {
-            inputs: sum_in,
-            outputs_plus_fee,
-        });
+    // (d) PER-ASSET VALUE CONSERVATION: for every asset, sum(inputs) == sum(outputs) + fee,
+    // where `fee` is charged to `fee_asset` only. `asset` is bound in each commitment, so this
+    // closes the cross-asset MINT hole (burn asset A, create asset B). We check every asset that
+    // appears on either side; when `fee > 0` we also force `fee_asset` into the checked set, so a
+    // fee declared in an asset with NO notes is caught (0 != fee) rather than silently skipped.
+    let mut assets: BTreeSet<BigUint> = BTreeSet::new();
+    assets.extend(sum_in.keys().cloned());
+    assets.extend(sum_out.keys().cloned());
+    if witness.fee > 0 {
+        assets.insert(witness.fee_asset.clone());
+    }
+    for asset in &assets {
+        let in_amt = sum_in.get(asset).copied().unwrap_or(0);
+        let out_amt = sum_out.get(asset).copied().unwrap_or(0);
+        let fee_for_asset = if *asset == witness.fee_asset { witness.fee as u128 } else { 0 };
+        let outputs_plus_fee = out_amt.checked_add(fee_for_asset).ok_or(TransferError::SumOverflow)?;
+        if in_amt != outputs_plus_fee {
+            return Err(TransferError::AssetNotConserved {
+                asset: asset.clone(),
+                inputs: in_amt,
+                outputs_plus_fee,
+            });
+        }
     }
 
     Ok(TransferPublic {
@@ -254,5 +293,6 @@ pub fn verify_transfer(witness: &TransferWitness) -> Result<TransferPublic, Tran
         nullifiers,
         output_cms,
         fee: witness.fee,
+        fee_asset: witness.fee_asset.clone(),
     })
 }
