@@ -1,0 +1,10 @@
+# The SP1 guest (`program`) builds against jlvm-core with `default-features = false`, so the
+# `blst` C backend (no riscv cross-compile) is never pulled — see lib/Cargo.toml. The host
+# (`script`) drives execute/prove/groth16 on the GPU (SP1_PROVER=cuda).
+[workspace]
+members = ["lib", "program", "script"]
+resolver = "2"
+
+[workspace.dependencies]
+alloy-sol-types = "*"
+alloy-primitives = "*"
