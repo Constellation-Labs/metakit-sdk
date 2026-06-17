@@ -85,6 +85,8 @@ pub struct WireWitness {
     pub inputs: Vec<WireSpendInput>,
     pub outputs: Vec<WireOutputNote>,
     pub fee: u64,
+    /// Asset label the `fee` is charged in (decimal Fr string), per-asset conservation.
+    pub fee_asset: String,
 }
 
 impl From<&TransferWitness> for WireWitness {
@@ -102,6 +104,7 @@ impl From<&TransferWitness> for WireWitness {
                 .collect(),
             outputs: w.outputs.iter().map(|o| WireOutputNote { note: (&o.note).into() }).collect(),
             fee: w.fee,
+            fee_asset: fr_to_str(&w.fee_asset),
         }
     }
 }
@@ -120,6 +123,7 @@ impl From<&WireWitness> for TransferWitness {
                 .collect(),
             outputs: w.outputs.iter().map(|o| OutputNote { note: (&o.note).into() }).collect(),
             fee: w.fee,
+            fee_asset: str_to_fr(&w.fee_asset),
         }
     }
 }

@@ -14,13 +14,16 @@ sol! {
     ///
     /// The proof attests: "there exist input notes (with valid Merkle inclusion under
     /// `anchor`), authorised by knowledge of their nullifier secret keys, and output notes,
-    /// such that value is conserved (`sum(inputs) == sum(outputs) + fee`); the revealed
-    /// `nullifiers` are their correct derivations and `outputCms` their correct commitments."
+    /// such that value is conserved PER ASSET (`sum(inputs[a]) == sum(outputs[a]) + fee` for
+    /// `a == feeAsset`, else `== sum(outputs[a])`); the revealed `nullifiers` are their correct
+    /// derivations (pairwise-distinct within the transfer) and `outputCms` their correct
+    /// commitments; the transparent `fee` is charged in `feeAsset`."
     struct ShieldedTransferPublicValues {
         bytes32 anchor;
         bytes32[] nullifiers;
         bytes32[] outputCms;
         uint64 fee;
+        bytes32 feeAsset;
     }
 }
 
@@ -45,6 +48,7 @@ impl From<&TransferPublic> for ShieldedTransferPublicValues {
             nullifiers: p.nullifiers.iter().map(|n| fr_to_bytes32(n).into()).collect(),
             outputCms: p.output_cms.iter().map(|c| fr_to_bytes32(c).into()).collect(),
             fee: p.fee,
+            feeAsset: fr_to_bytes32(&p.fee_asset).into(),
         }
     }
 }
@@ -56,6 +60,7 @@ impl From<&ShieldedTransferPublicValues> for TransferPublic {
             nullifiers: p.nullifiers.iter().map(|n| bytes32_to_fr(&n.0)).collect(),
             output_cms: p.outputCms.iter().map(|c| bytes32_to_fr(&c.0)).collect(),
             fee: p.fee,
+            fee_asset: bytes32_to_fr(&p.feeAsset.0),
         }
     }
 }
