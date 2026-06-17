@@ -56,6 +56,7 @@ import {
   opBn254Add,
   opBn254Mul,
   opBn254Pairing,
+  opEcvrfVerify,
   opGroth16Verify,
   opMptPrefixVerify,
   opMptVerify,
@@ -603,9 +604,8 @@ export class Evaluator {
       case 'missing_some':
         return this.opMissingSome(values, ctx);
       // ZK / crypto opcodes. Pure precompiles over already-parsed hex args;
-      // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs / Scala
-      // CryptoOps. Tags that decode but are not yet ported (smt/mpt/bn254/
-      // ecvrf/groth16) fall through to the default error.
+      // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs /
+      // auth_db.rs / ecvrf.rs and the Scala CryptoOps / AuthDbOps.
       case 'poseidon':
         return opPoseidon(values);
       case 'pmt_verify':
@@ -636,6 +636,8 @@ export class Evaluator {
         return opMptVerify(values);
       case 'mpt_prefix_verify':
         return opMptPrefixVerify(values);
+      case 'ecvrf_verify':
+        return opEcvrfVerify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }

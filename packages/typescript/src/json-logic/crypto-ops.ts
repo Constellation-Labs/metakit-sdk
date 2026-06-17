@@ -21,7 +21,8 @@
 
 import { bls12_381 } from '@noble/curves/bls12-381.js';
 import { bn254 } from '@noble/curves/bn254.js';
-import { sha256 } from '@noble/hashes/sha2.js';
+import { ed25519 } from '@noble/curves/ed25519.js';
+import { sha256, sha512 } from '@noble/hashes/sha2.js';
 
 import { JsonLogicRuntimeError } from './errors';
 import type { JsonLogicValue } from './value';
@@ -2504,4 +2505,271 @@ export const opMptPrefixVerify = (values: JsonLogicValue[]): JsonLogicValue => {
   }
   // COMPLETENESS.
   return boolValue(prefixSubtreeComplete(root, prefix, proof));
+};
+
+// ===========================================================================
+// ecvrf_verify: ECVRF-EDWARDS25519-SHA512-TAI (RFC 9381 suite 0x03).
+//   Byte-for-byte port of rust/jlvm-core/src/ecvrf.rs (itself a port of the
+//   Scala MiraclEcVrf25519), anchored on the RFC 9381 Appendix B.3 vectors.
+//   Uses @noble/curves ed25519 for the group/scalar arithmetic and the RFC 8032
+//   little-endian point codec; every domain separator / suffix / truncation /
+//   rejection rule is reproduced from the reference.
+//
+//     ecvrf_verify([pkHex(32B), alphaHex, proofHex(80B)])
+//        -> {"valid": bool, "beta": hexOrNull}
+//   Wrong width (pk != 32B, proof != 80B) is an error; a well-formed-but-wrong
+//   proof yields {valid:false, beta:null}.
+// ===========================================================================
+
+const EcPoint = ed25519.Point;
+const EcFn = EcPoint.Fn;
+
+const ECVRF_SUITE_STRING = 0x03;
+const ECVRF_POINT_BYTES = 32;
+const ECVRF_C_BYTES = 16;
+const ECVRF_PROOF_BYTES = ECVRF_POINT_BYTES + ECVRF_C_BYTES + 32; // 80
+/** Ed25519 group order L. */
+const ECVRF_L = EcFn.ORDER;
+/** Ed25519 field prime p = 2^255 - 19. */
+const ECVRF_FIELD_P = EcPoint.Fp.ORDER;
+
+/** Little-endian bytes -> non-negative bigint. */
+const leToBigInt = (bytes: Uint8Array): bigint => {
+  let v = 0n;
+  for (let i = bytes.length - 1; i >= 0; i--) {
+    v = (v << 8n) | BigInt(bytes[i]);
+  }
+  return v;
+};
+
+/**
+ * string_to_point: parse y (LE, bit 255 = x sign) and recover the point. Adds
+ * the strict rejections (`y >= p`, identity result) on top of dalek/noble's
+ * decompress. Returns `null` on any failure. Mirrors Rust `bytes_to_point`.
+ */
+const ecvrfBytesToPoint = (bytes: Uint8Array): InstanceType<typeof EcPoint> | null => {
+  if (bytes.length !== ECVRF_POINT_BYTES) {
+    return null;
+  }
+  // Reject y >= p (clear the sign bit first, compare the 255-bit y LE).
+  const y = new Uint8Array(bytes);
+  y[31] &= 0x7f;
+  if (leToBigInt(y) >= ECVRF_FIELD_P) {
+    return null;
+  }
+  let point: InstanceType<typeof EcPoint>;
+  try {
+    point = EcPoint.fromBytes(bytes);
+  } catch {
+    return null;
+  }
+  return point.is0() ? null : point;
+};
+
+/** point_to_string: 32-byte little-endian y with x's LSB in bit 255. */
+const ecvrfPointToBytes = (point: InstanceType<typeof EcPoint>): Uint8Array => point.toBytes();
+
+/** [e]*B (basepoint mul); accepts any scalar (incl. 0 / out-of-range reduced). */
+const ecvrfBasepointMul = (e: bigint): InstanceType<typeof EcPoint> =>
+  EcPoint.BASE.multiplyUnsafe(((e % ECVRF_L) + ECVRF_L) % ECVRF_L);
+
+/** [e]*P (variable-base mul); accepts any scalar. */
+const ecvrfPointMul = (p: InstanceType<typeof EcPoint>, e: bigint): InstanceType<typeof EcPoint> =>
+  p.multiplyUnsafe(((e % ECVRF_L) + ECVRF_L) % ECVRF_L);
+
+/** Compare two challenge scalars on their first 16 little-endian bytes. */
+const ecvrfScalarEquals16 = (a: bigint, b: bigint): boolean => {
+  const ab = scalarToLeBytes(a);
+  const bb = scalarToLeBytes(b);
+  for (let i = 0; i < ECVRF_C_BYTES; i++) {
+    if (ab[i] !== bb[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** Serialize a scalar (already reduced mod L) as 32 little-endian bytes. */
+const scalarToLeBytes = (s: bigint): Uint8Array => {
+  const v = ((s % ECVRF_L) + ECVRF_L) % ECVRF_L;
+  const out = new Uint8Array(32);
+  let x = v;
+  for (let i = 0; i < 32; i++) {
+    out[i] = Number(x & 0xffn);
+    x >>= 8n;
+  }
+  return out;
+};
+
+/** Concatenate byte arrays. */
+const cat = (...parts: Uint8Array[]): Uint8Array => {
+  let total = 0;
+  for (const p of parts) {
+    total += p.length;
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const p of parts) {
+    out.set(p, off);
+    off += p.length;
+  }
+  return out;
+};
+
+/**
+ * hash_to_curve = try_and_increment (RFC 9381 §5.4.1.1, draft-10):
+ *   for ctr in 0..256:
+ *     hash = SHA-512(suite || 0x01 || pk || alpha || ctr || 0x00)
+ *     P = string_to_point(hash[0..32]); if it decodes and is non-zero: return [8]*P
+ */
+const ecvrfHashToCurve = (
+  publicKey: Uint8Array,
+  alpha: Uint8Array
+): InstanceType<typeof EcPoint> | null => {
+  for (let ctr = 0; ctr < 256; ctr++) {
+    const hash = sha512(
+      cat(
+        Uint8Array.of(ECVRF_SUITE_STRING),
+        Uint8Array.of(0x01),
+        publicKey,
+        alpha,
+        Uint8Array.of(ctr),
+        Uint8Array.of(0x00)
+      )
+    );
+    const point = ecvrfBytesToPoint(hash.subarray(0, 32));
+    if (point !== null) {
+      // bytes_to_point already rejects the identity; mirror the explicit guard.
+      if (ecvrfPointToBytes(point).some((b) => b !== 0)) {
+        return point.clearCofactor();
+      }
+    }
+  }
+  return null;
+};
+
+/**
+ * ECVRF_challenge_generation (RFC 9381 §5.4.3): hashes FIVE points with the
+ * public key Y first; c = SHA-512(suite||0x02||Y||H||Gamma||U||V||0x00)[0..15] LE.
+ */
+const ecvrfHashPoints = (
+  y: InstanceType<typeof EcPoint>,
+  h: InstanceType<typeof EcPoint>,
+  gamma: InstanceType<typeof EcPoint>,
+  u: InstanceType<typeof EcPoint>,
+  v: InstanceType<typeof EcPoint>
+): bigint => {
+  const hash = sha512(
+    cat(
+      Uint8Array.of(ECVRF_SUITE_STRING),
+      Uint8Array.of(0x02),
+      ecvrfPointToBytes(y),
+      ecvrfPointToBytes(h),
+      ecvrfPointToBytes(gamma),
+      ecvrfPointToBytes(u),
+      ecvrfPointToBytes(v),
+      Uint8Array.of(0x00)
+    )
+  );
+  // First 16 bytes as a little-endian integer (< 2^128 < L).
+  return leToBigInt(hash.subarray(0, ECVRF_C_BYTES));
+};
+
+/**
+ * Decode an 80-byte proof into (Gamma, c, s). `s` must be canonical (`< L`); `c`
+ * is the 16-byte LE challenge. Mirrors Rust `decode_proof`. Returns null on any
+ * failure.
+ */
+const ecvrfDecodeProof = (
+  proof: Uint8Array
+): { gamma: InstanceType<typeof EcPoint>; c: bigint; s: bigint } | null => {
+  if (proof.length !== ECVRF_PROOF_BYTES) {
+    return null;
+  }
+  const gamma = ecvrfBytesToPoint(proof.subarray(0, ECVRF_POINT_BYTES));
+  if (gamma === null) {
+    return null;
+  }
+  const c = leToBigInt(proof.subarray(ECVRF_POINT_BYTES, ECVRF_POINT_BYTES + ECVRF_C_BYTES));
+  const s = leToBigInt(proof.subarray(ECVRF_POINT_BYTES + ECVRF_C_BYTES, ECVRF_PROOF_BYTES));
+  // s must be canonical (< L) for a valid proof.
+  if (s >= ECVRF_L) {
+    return null;
+  }
+  return { gamma, c, s };
+};
+
+/** Verify a VRF proof; `false` on any structural failure or failed check. */
+const ecvrfVerifyRaw = (publicKey: Uint8Array, message: Uint8Array, proof: Uint8Array): boolean => {
+  if (publicKey.length !== ECVRF_POINT_BYTES || proof.length !== ECVRF_PROOF_BYTES) {
+    return false;
+  }
+  const yPoint = ecvrfBytesToPoint(publicKey);
+  if (yPoint === null) {
+    return false;
+  }
+  const decoded = ecvrfDecodeProof(proof);
+  if (decoded === null) {
+    return false;
+  }
+  const { gamma, c, s } = decoded;
+  const hPoint = ecvrfHashToCurve(publicKey, message);
+  if (hPoint === null) {
+    return false;
+  }
+  // U = [s]*B - [c]*Y
+  const uPoint = ecvrfBasepointMul(s).subtract(ecvrfPointMul(yPoint, c));
+  // V = [s]*H - [c]*Gamma
+  const vPoint = ecvrfPointMul(hPoint, s).subtract(ecvrfPointMul(gamma, c));
+  const cPrime = ecvrfHashPoints(yPoint, hPoint, gamma, uPoint, vPoint);
+  return ecvrfScalarEquals16(c, cPrime);
+};
+
+/**
+ * beta = SHA-512(suite || 0x03 || point_to_string([cofactor]*Gamma) || 0x00).
+ * Mirrors Rust `vrf_proof_to_hash`; returns null on a bad gamma.
+ */
+const ecvrfProofToHash = (proof: Uint8Array): Uint8Array | null => {
+  if (proof.length !== ECVRF_PROOF_BYTES) {
+    return null;
+  }
+  const gamma = ecvrfBytesToPoint(proof.subarray(0, ECVRF_POINT_BYTES));
+  if (gamma === null) {
+    return null;
+  }
+  const cofactorGamma = gamma.clearCofactor();
+  return sha512(
+    cat(
+      Uint8Array.of(ECVRF_SUITE_STRING),
+      Uint8Array.of(0x03),
+      ecvrfPointToBytes(cofactorGamma),
+      Uint8Array.of(0x00)
+    )
+  );
+};
+
+/** `ecvrf_verify([pkHex(32B), alphaHex, proofHex(80B)]) -> {valid, beta}`. */
+export const opEcvrfVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 3) {
+    return fail('ecvrf_verify: expected [pkHex(32B), alphaHex, proofHex(80B)]');
+  }
+  const pkHex = expectStr('ecvrf_verify pk', values[0]);
+  const alphaHex = expectStr('ecvrf_verify alpha', values[1]);
+  const proofHex = expectStr('ecvrf_verify proof', values[2]);
+  const pk = hb.parseBytes(pkHex, ECVRF_POINT_BYTES, 'ecvrf_verify pk');
+  const alpha = hb.parseBytes(alphaHex, null, 'ecvrf_verify alpha');
+  const proof = hb.parseBytes(proofHex, ECVRF_PROOF_BYTES, 'ecvrf_verify proof');
+
+  const valid = ecvrfVerifyRaw(pk, alpha, proof);
+  let beta: JsonLogicValue = nullValue();
+  if (valid) {
+    const b = ecvrfProofToHash(proof);
+    beta = b !== null ? strValue(hb.encodeBytes(b)) : nullValue();
+  }
+  return mapValue(
+    new Map<string, JsonLogicValue>([
+      ['valid', boolValue(valid)],
+      ['beta', beta],
+    ])
+  );
 };

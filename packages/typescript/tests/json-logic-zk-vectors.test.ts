@@ -1,13 +1,11 @@
 /**
  * ZK opcode cross-language conformance for the opcodes the TypeScript
- * evaluator implements: `poseidon`, `pmt_verify`, `schnorr_verify`,
- * `bls_verify`, `bls_aggregate_verify`.
- *
- * Runs the matching categories of `shared/zk_opcode_test_vectors.json` (the
- * cross-language oracle also enforced by Scala `ZkVectorConformanceSuite` and
- * Rust `tests/zk_differential.rs`). Categories for opcodes that are not yet
- * ported to TypeScript (smt/mpt/bn254/ecvrf/groth16 and the mixed
- * `known_answer` programs) are skipped explicitly.
+ * evaluator implements. With the BN254 (add/mul/pairing), groth16, auth-DB
+ * (smt/mpt/mpt_prefix) and ecvrf opcodes ported, this now runs EVERY category
+ * of `shared/zk_opcode_test_vectors.json` (the cross-language oracle also
+ * enforced by Scala `ZkVectorConformanceSuite` and Rust
+ * `tests/zk_differential.rs`), including the mixed `known_answer` programs and
+ * the real SP1-Groth16 fixture.
  *
  * Case convention: ordinary cases define `expected`; `"error": true` cases
  * pin that evaluation MUST fail.
@@ -53,6 +51,8 @@ const IMPLEMENTED = new Set([
   'smt_verify',
   'mpt_verify',
   'mpt_prefix_verify',
+  'ecvrf_verify',
+  'known_answer',
 ]);
 
 const vectorsPath = path.join(__dirname, '../../..', 'shared', 'zk_opcode_test_vectors.json');
