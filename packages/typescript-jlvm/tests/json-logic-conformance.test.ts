@@ -7,7 +7,7 @@
  * safety, and substr/slice index bounds.
  */
 
-import { jsonLogic, parseValue, parseExpression, evaluate, Ratio } from '../src/json-logic';
+import { jsonLogic, parseValue, parseExpression, evaluate, Ratio } from '../src';
 
 const applyTyped = (logic: unknown, data: unknown = {}) => jsonLogic.applyTyped(logic, data);
 

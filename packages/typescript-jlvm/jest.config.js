@@ -5,12 +5,6 @@ module.exports = {
   roots: ['<rootDir>/tests'],
   testMatch: ['**/*.test.ts'],
   moduleFileExtensions: ['ts', 'js', 'json'],
-  // Resolve workspace siblings to their TypeScript source so tests run without
-  // a prior build step (and ts-jest doesn't try to compile their dist .js).
-  moduleNameMapper: {
-    '^@constellation-network/metagraph-sdk-core$': '<rootDir>/../typescript-core/src/index.ts',
-    '^@constellation-network/metagraph-sdk-jlvm$': '<rootDir>/../typescript-jlvm/src/index.ts',
-  },
   collectCoverageFrom: ['src/**/*.ts'],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov'],

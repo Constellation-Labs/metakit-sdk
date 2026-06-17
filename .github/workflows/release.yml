@@ -23,7 +23,8 @@ env:
   # crate (e.g. jlvm-core -> constellation-jlvm-core, see docs/RELEASING.md
   # step zero) requires no workflow changes.
   CRATE_DIRS: rust/poseidon-bn254 rust/jlvm-core packages/rust
-  NPM_PACKAGE_DIR: packages/typescript
+  # npm package dirs in dependency order (metagraph-sdk depends on metagraph-sdk-core).
+  NPM_PACKAGE_DIRS: packages/typescript-core packages/typescript-jlvm packages/typescript
 
 jobs:
   # Derive the version from the tag and require every publishable manifest to
@@ -52,11 +53,13 @@ jobs:
           VERSION="${{ steps.version.outputs.version }}"
           fail=0
 
-          PKG_VERSION=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').version")
-          if [[ "$PKG_VERSION" != "$VERSION" ]]; then
-            echo "::error file=${NPM_PACKAGE_DIR}/package.json::npm package version ($PKG_VERSION) does not match tag version ($VERSION). Bump it in a PR before tagging — the release workflow never rewrites versions."
-            fail=1
-          fi
+          for dir in $NPM_PACKAGE_DIRS; do
+            PKG_VERSION=$(node -p "require('./$dir/package.json').version")
+            if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+              echo "::error file=$dir/package.json::npm package version ($PKG_VERSION) does not match tag version ($VERSION). Bump it in a PR before tagging — the release workflow never rewrites versions."
+              fail=1
+            fi
+          done
 
           for dir in $CRATE_DIRS; do
             CRATE_VERSION=$(grep -m1 '^version' "$dir/Cargo.toml" | sed -E 's/version *= *"(.*)"/\1/')
@@ -89,35 +92,38 @@ jobs:
           node-version: 22
           registry-url: 'https://registry.npmjs.org'
           cache: 'npm'
-          cache-dependency-path: packages/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
-        working-directory: packages/typescript
+      - name: Install workspace
         run: npm ci
 
-      - name: Build
-        working-directory: packages/typescript
-        run: npm run build
+      # Build + test in dependency order (the workspaces array is core -> jlvm ->
+      # metagraph-sdk; metagraph-sdk depends on metagraph-sdk-core).
+      - name: Build (all workspaces, dep order)
+        run: npm run build --workspaces
 
-      - name: Test
-        working-directory: packages/typescript
-        run: npm test
+      - name: Test (all workspaces)
+        run: npm test --workspaces
 
       # --provenance needs npm >= 9.5; pin to latest like release-typescript.yml.
       - name: Upgrade npm for provenance support
         run: npm install -g npm@latest
 
-      - name: Publish to npm
-        working-directory: packages/typescript
+      # `npm publish --workspaces` publishes in the workspaces-array order
+      # (core -> jlvm -> metagraph-sdk), so metagraph-sdk-core is on the registry
+      # before metagraph-sdk (which depends on it) is published.
+      - name: Publish all workspaces to npm
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish --access public --provenance
+        run: npm publish --workspaces --access public --provenance
 
       - name: Summarize
         run: |
-          NAME=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').name")
           echo "### npm" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://www.npmjs.com/package/$NAME" >> "$GITHUB_STEP_SUMMARY"
+          for dir in $NPM_PACKAGE_DIRS; do
+            NAME=$(node -p "require('./$dir/package.json').name")
+            echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://www.npmjs.com/package/$NAME" >> "$GITHUB_STEP_SUMMARY"
+          done
 
   cargo-publish:
     needs: version-check
@@ -156,13 +162,15 @@ jobs:
       - name: Job summary
         run: |
           VERSION="${{ needs.version-check.outputs.version }}"
-          NPM_NAME=$(node -p "require('./${NPM_PACKAGE_DIR}/package.json').name")
           {
             echo "## Released v$VERSION"
             echo ""
             echo "| Registry | Artifact |"
             echo "|---|---|"
-            echo "| npm | \`$NPM_NAME@$VERSION\` |"
+            for dir in $NPM_PACKAGE_DIRS; do
+              NPM_NAME=$(node -p "require('./$dir/package.json').name")
+              echo "| npm | \`$NPM_NAME@$VERSION\` |"
+            done
             for dir in $CRATE_DIRS; do
               NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
               echo "| crates.io | \`$NAME@$VERSION\` |"

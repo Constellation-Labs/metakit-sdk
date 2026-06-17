@@ -11,7 +11,6 @@ const plugins = [
 
 const entries = [
   { input: 'src/index.ts', cjs: 'dist/cjs/index.js', esm: 'dist/esm/index.js' },
-  { input: 'src/network/index.ts', cjs: 'dist/cjs/network/index.js', esm: 'dist/esm/network/index.js' },
 ];
 
 export default entries.map(({ input, cjs, esm }) => ({

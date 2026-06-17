@@ -1,7 +1,9 @@
 /**
- * Namespaced exports
+ * Namespaced exports (metagraph-sdk)
  *
- * Provides organized namespace objects alongside the existing flat exports.
+ * Surfaces the metagraph-specific `currency` and `network` namespaces, and
+ * re-exports the core `wallet` and `data` namespaces so consumers get the
+ * full set from one place.
  *
  * @example
  * ```typescript
@@ -12,8 +14,8 @@
  * ```
  */
 
-import * as wallet from './wallet';
-import * as data from './data';
 import * as currency from './currency';
+import * as network from './network';
+import { wallet, data } from '@constellation-network/metagraph-sdk-core';
 
-export { wallet, data, currency };
+export { wallet, data, currency, network };

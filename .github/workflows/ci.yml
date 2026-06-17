@@ -29,6 +29,10 @@ jobs:
           filters: |
             typescript:
               - 'packages/typescript/**'
+              - 'packages/typescript-core/**'
+              - 'packages/typescript-jlvm/**'
+              - 'package.json'
+              - 'package-lock.json'
             python:
               - 'packages/python/**'
             rust:
@@ -59,33 +63,32 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
           cache: 'npm'
-          cache-dependency-path: packages/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: Install dependencies
-        working-directory: packages/typescript
+      - name: Install workspace
         run: npm ci
 
-      - name: Lint
-        working-directory: packages/typescript
-        run: npm run lint
+      # Build BEFORE test, in dependency order. The `workspaces` array is
+      # core -> jlvm -> metagraph-sdk, and `--workspaces` runs in that order;
+      # metagraph-sdk's type-check + tests resolve metagraph-sdk-core's emitted
+      # types, so core must be built first.
+      - name: Build (all workspaces, dep order)
+        run: npm run build --workspaces
 
-      - name: Format check
-        working-directory: packages/typescript
-        run: npm run format:check
+      - name: Lint (all workspaces)
+        run: npm run lint --workspaces
 
-      - name: Build
-        working-directory: packages/typescript
-        run: npm run build
+      - name: Format check (all workspaces)
+        run: npm run format:check --workspaces
 
-      - name: Test
-        working-directory: packages/typescript
-        run: npm test -- --coverage
+      - name: Test (all workspaces, with coverage)
+        run: npm test --workspaces -- --coverage
 
       - name: Upload coverage
         if: matrix.node-version == 20
         uses: codecov/codecov-action@v5
         with:
-          files: packages/typescript/coverage/lcov.info
+          files: packages/typescript-core/coverage/lcov.info,packages/typescript-jlvm/coverage/lcov.info,packages/typescript/coverage/lcov.info
           flags: typescript
           fail_ci_if_error: false
 
@@ -290,14 +293,13 @@ jobs:
         with:
           node-version: 22
           cache: 'npm'
-          cache-dependency-path: packages/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
-      - name: npm pack (build must succeed)
-        working-directory: packages/typescript
+      - name: npm pack all workspaces (build must succeed)
         run: |
           npm ci
-          npm run build
-          npm pack
+          npm run build --workspaces
+          npm pack --workspaces
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -358,7 +360,7 @@ jobs:
         with:
           node-version: 20
           cache: 'npm'
-          cache-dependency-path: packages/typescript/package-lock.json
+          cache-dependency-path: package-lock.json
 
       - name: Setup Python
         uses: actions/setup-python@v6
@@ -383,8 +385,7 @@ jobs:
           java-version: '17'
           cache: 'maven'
 
-      - name: Install TypeScript dependencies
-        working-directory: packages/typescript
+      - name: Install TypeScript dependencies (workspace)
         run: npm ci
 
       - name: Install Python dependencies
@@ -398,7 +399,7 @@ jobs:
         run: go mod download
 
       - name: Run cross-language tests (TypeScript)
-        working-directory: packages/typescript
+        working-directory: packages/typescript-core
         run: npm test -- --testPathPatterns=cross-language
 
       - name: Run cross-language tests (Python)

@@ -15,15 +15,15 @@
  *      field-for-field with the metered evaluator's `DEFAULT_GAS_SCHEDULE`.
  */
 
-import { jsonLogic, Ratio, MAX_EVAL_DEPTH } from '../src/json-logic';
-import { parseExpression, parseValue } from '../src/json-logic/codec';
+import { jsonLogic, Ratio, MAX_EVAL_DEPTH } from '../src';
+import { parseExpression, parseValue } from '../src/codec';
 import {
   DEFAULT_GAS_SCHEDULE,
   evaluateWithGas,
   GasExhaustedError,
   javaSplitDotSegments,
-} from '../src/json-logic/gas-eval';
-import { DEFAULT_GAS_CONFIG } from '../src/json-logic/gas';
+} from '../src/gas-eval';
+import { DEFAULT_GAS_CONFIG } from '../src/gas';
 
 describe('decimal scale bound (Ratio.MAX_DECIMAL_SCALE)', () => {
   it('accepts |scale| == 10000 (both bound edges)', () => {

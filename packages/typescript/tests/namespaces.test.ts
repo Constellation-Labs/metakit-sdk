@@ -3,7 +3,7 @@
  */
 
 import { wallet, data, currency } from '../src';
-import * as jlvm from '../src/json-logic';
+import * as jlvm from '@constellation-network/metagraph-sdk-jlvm';
 
 describe('Namespaced exports', () => {
   describe('wallet namespace', () => {

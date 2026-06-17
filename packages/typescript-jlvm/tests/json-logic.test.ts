@@ -5,7 +5,7 @@
  * Based on json-logic-js test suite and metakit test vectors.
  */
 
-import { jsonLogic, parseExpression, parseValue, evaluate } from '../src/json-logic';
+import { jsonLogic, parseExpression, parseValue, evaluate } from '../src';
 
 describe('JSON Logic VM', () => {
   describe('Basic Operations', () => {

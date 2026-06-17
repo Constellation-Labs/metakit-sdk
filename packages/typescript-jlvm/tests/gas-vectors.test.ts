@@ -14,8 +14,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseExpression, parseValue } from '../src/json-logic/codec';
-import { evaluateWithGas, GasExhaustedError } from '../src/json-logic/gas-eval';
+import { parseExpression, parseValue } from '../src/codec';
+import { evaluateWithGas, GasExhaustedError } from '../src/gas-eval';
 
 interface GasCase {
   expr: string;

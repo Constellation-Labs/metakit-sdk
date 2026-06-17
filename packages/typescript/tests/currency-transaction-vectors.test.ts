@@ -13,9 +13,8 @@ import {
   hashCurrencyTransaction,
   encodeCurrencyTransaction,
 } from '../src/currency-transaction';
-import { getPublicKeyFromPrivate } from '../src/crypto';
+import { getPublicKeyFromPrivate, getAddress } from '@constellation-network/metagraph-sdk-core';
 import type { CurrencyTransaction } from '../src/currency-types';
-import { getAddress } from '../src/wallet';
 
 // Load test vectors
 const testVectorsPath = path.join(__dirname, '../../../shared/currency_transaction_vectors.json');
