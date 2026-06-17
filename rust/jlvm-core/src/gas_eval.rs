@@ -709,8 +709,9 @@ fn is_primitive(v: &Value) -> bool {
     )
 }
 
+// LAST-wins on duplicate keys (== Scala `Map` semantics / parser dedup); see `Value::map_get`.
 fn map_get<'v>(m: &'v [(String, Value)], key: &str) -> Option<&'v Value> {
-    m.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+    m.iter().rev().find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
 /// Count `(dlog_leaves, dhtuple_leaves, connective_nodes)` in a `sigma_verify`

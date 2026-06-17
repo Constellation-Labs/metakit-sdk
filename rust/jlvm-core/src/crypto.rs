@@ -139,7 +139,7 @@ pub fn schnorr_verify(values: &[Value]) -> Result<Value, String> {
             let s_bytes = &proof[hb::G1_BYTES..hb::G1_BYTES + hb::SCALAR_BYTES];
 
             let r_coords = hb::parse_g1(&hb::encode_bytes(r_bytes), "schnorr_verify R")?;
-            let s = BigUint::from_bytes_be(s_bytes);
+            let s = require_canonical_scalar(BigUint::from_bytes_be(s_bytes), "schnorr_verify s")?;
 
             // On-curve checks (the all-zero point (0,0) is the on-curve infinity).
             let pk = g1_on_curve(&pk_coords, "schnorr_verify pk")?;
@@ -1052,7 +1052,7 @@ pub fn prove_dhtuple_verify(values: &[Value]) -> Result<Value, String> {
 
             let a1_c = hb::parse_g1(&hb::encode_bytes(a1_bytes), "prove_dhtuple_verify a1")?;
             let a2_c = hb::parse_g1(&hb::encode_bytes(a2_bytes), "prove_dhtuple_verify a2")?;
-            let z = BigUint::from_bytes_be(z_bytes);
+            let z = require_canonical_scalar(BigUint::from_bytes_be(z_bytes), "prove_dhtuple_verify z")?;
 
             let g = g1_on_curve(&g_c, "prove_dhtuple_verify g")?;
             let h = g1_on_curve(&h_c, "prove_dhtuple_verify h")?;
@@ -1278,7 +1278,12 @@ pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
 /// shape counts as a single node (the real parser raises the fault).
 fn sigma_raw_shape(v: &Value) -> (usize, usize) {
     match v {
-        Value::Map(m) => match m.iter().find(|(k, _)| k == "children").map(|(_, v)| v) {
+        Value::Map(m) => match m
+            .iter()
+            .rev()
+            .find(|(k, _)| k == "children")
+            .map(|(_, v)| v)
+        {
             Some(Value::Array(cs)) => {
                 let (n, d) = cs.iter().fold((0usize, 0usize), |(acc_n, acc_d), c| {
                     let (cn, cd) = sigma_raw_shape(c);
@@ -1320,7 +1325,12 @@ fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<()
             return Err(too_large(max_nodes, max_depth));
         }
         match node {
-            Value::Map(m) => match m.iter().find(|(k, _)| k == "children").map(|(_, v)| v) {
+            Value::Map(m) => match m
+                .iter()
+                .rev()
+                .find(|(k, _)| k == "children")
+                .map(|(_, v)| v)
+            {
                 Some(Value::Array(cs)) => {
                     let mut running = n;
                     for c in cs {
@@ -1338,8 +1348,10 @@ fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<()
 
 // --- Proposition parsing (statement only). Malformed => hard error. ---
 
+// LAST-wins on duplicate keys (== Scala `Map` semantics / parser dedup); see `Value::map_get` (audit #1).
 fn sigma_field<'a>(role: &str, m: &'a [(String, Value)], key: &str) -> Result<&'a Value, String> {
     m.iter()
+        .rev()
         .find(|(k, _)| k == key)
         .map(|(_, v)| v)
         .ok_or_else(|| format!("{role}: missing required field '{key}'"))
@@ -1479,10 +1491,26 @@ fn sigma_challenge(role: &str, m: &[(String, Value)]) -> Result<Vec<u8>, String>
     hb::parse_bytes(hex, Some(SIGMA_CHALLENGE_BYTES), &format!("{role}.e"))
 }
 
+/// Reject a NON-CANONICAL response scalar (`z`/`s` >= R) as a hard error (audit #4). A response is a
+/// curve scalar, so `z` and `z + R` are congruent mod R and verify identically; accepting raw 32-byte
+/// responses makes the proof bytes malleable. Requiring `z < R` makes the response encoding canonical.
+/// Mirrors the Scala `CryptoOps.requireCanonicalScalar`. (Challenges are already canonical: 31 bytes
+/// < 2^248 < R.)
+fn require_canonical_scalar(z: BigUint, role: &str) -> Result<BigUint, String> {
+    if &z < hb::modulus() {
+        Ok(z)
+    } else {
+        Err(format!(
+            "{role}: non-canonical response scalar (must be < R)"
+        ))
+    }
+}
+
 fn sigma_response(role: &str, m: &[(String, Value)]) -> Result<BigUint, String> {
     let v = sigma_field(role, m, "z")?;
     let hex = expect_str(&format!("{role}.z"), v)?;
-    hb::parse_scalar(hex, &format!("{role}.z"))
+    let z = hb::parse_scalar(hex, &format!("{role}.z"))?;
+    require_canonical_scalar(z, &format!("{role}.z"))
 }
 
 fn parse_proof_node(v: &Value, role: &str) -> Result<ProofNode, String> {
@@ -1995,6 +2023,35 @@ fn expect_index(role: &str, v: &Value) -> Result<BigUint, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_get_last_wins_on_duplicate_keys() {
+        // audit #1: Rust map lookup must match the Scala reference (`Map.get` = last-wins) so a
+        // duplicate-key object resolves identically cross-runtime. `decode_value` never yields
+        // duplicate pairs (serde_json collapses to last at parse); a hand-built `Value::Map` could,
+        // and last-wins keeps Rust == Scala. Pins `value::map_get` (also used by gas_eval / mirrored
+        // by `sigma_field`).
+        use crate::value::decode_value;
+        let m = Value::Map(vec![
+            ("type".to_string(), Value::Str("dlog".to_string())),
+            ("type".to_string(), Value::Str("dhtuple".to_string())),
+        ]);
+        assert!(
+            m.map_get("type")
+                .expect("key present")
+                .deep_eq(&Value::Str("dhtuple".to_string())),
+            "duplicate key must resolve last-wins (dhtuple)"
+        );
+        // JSON path: serde_json already collapses duplicates to last, so decode + lookup agree.
+        let v =
+            decode_value(&serde_json::from_str::<serde_json::Value>(r#"{"a":1,"a":2}"#).unwrap());
+        assert!(
+            v.map_get("a")
+                .expect("key present")
+                .deep_eq(&Value::int_from_i64(2)),
+            "JSON duplicate key must resolve last-wins (2)"
+        );
+    }
 
     #[test]
     fn poseidon_hard_acceptance() {

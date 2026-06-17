@@ -26,6 +26,13 @@ describe('JSON Logic VM', () => {
       expect(jsonLogic.apply({ var: ['missing', 'default'] }, {})).toBe('default');
       expect(jsonLogic.apply({ var: 0 }, ['first', 'second'])).toBe('first');
     });
+
+    it('resolves duplicate object keys last-wins (audit #1: cross-runtime determinism)', () => {
+      // JSON.parse collapses duplicate keys to last-wins, matching the Scala (circe) and Rust
+      // (serde_json) decoders, so a duplicate-key object resolves identically across all three JLVM
+      // runtimes. (Rust additionally hardens its Vec-backed map lookup to last-wins to match.)
+      expect(jsonLogic.apply({ var: 'x' }, JSON.parse('{"x": 1, "x": 2}'))).toBe(2);
+    });
   });
 
   describe('Arithmetic', () => {

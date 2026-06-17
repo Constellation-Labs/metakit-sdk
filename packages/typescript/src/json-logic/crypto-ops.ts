@@ -104,6 +104,15 @@ export const opPmtVerify = (values: JsonLogicValue[]): JsonLogicValue => {
 const P = hb.FQ_MODULUS;
 const GROUP_ORDER = hb.FR_MODULUS;
 
+/**
+ * Reject a NON-CANONICAL response scalar (`z`/`s` >= R) as a hard error (audit #4). A response is a
+ * curve scalar, so `z` and `z + R` are congruent mod R and verify identically; accepting raw 32-byte
+ * responses makes the proof bytes malleable. Requiring `z < R` makes the response encoding canonical.
+ * Mirrors the Scala/Rust `requireCanonicalScalar`. (Challenges are already canonical: 31 bytes < R.)
+ */
+const requireCanonicalScalar = (z: bigint, role: string): bigint =>
+  z < GROUP_ORDER ? z : fail(`${role}: non-canonical response scalar (must be < R)`);
+
 interface G1 {
   readonly x: bigint;
   readonly y: bigint;
@@ -216,7 +225,7 @@ export const opSchnorrVerify = (values: JsonLogicValue[]): JsonLogicValue => {
   const sBytes = proof.subarray(hb.G1_BYTES, hb.G1_BYTES + hb.SCALAR_BYTES);
 
   const rCoords = hb.parseG1(hb.encodeBytes(rBytes), 'schnorr_verify R');
-  const s = hb.bytesToBigInt(sBytes);
+  const s = requireCanonicalScalar(hb.bytesToBigInt(sBytes), 'schnorr_verify s');
 
   // On-curve checks (the all-zero point (0,0) is the on-curve infinity).
   const pk = g1OnCurve(pkCoords, 'schnorr_verify pk');
@@ -314,7 +323,7 @@ export const opProveDhtupleVerify = (values: JsonLogicValue[]): JsonLogicValue =
 
   const a1Coords = hb.parseG1(hb.encodeBytes(a1Bytes), 'prove_dhtuple_verify a1');
   const a2Coords = hb.parseG1(hb.encodeBytes(a2Bytes), 'prove_dhtuple_verify a2');
-  const z = hb.bytesToBigInt(zBytes);
+  const z = requireCanonicalScalar(hb.bytesToBigInt(zBytes), 'prove_dhtuple_verify z');
 
   const g = g1OnCurve(gCoords, 'prove_dhtuple_verify g');
   const h = g1OnCurve(hCoords, 'prove_dhtuple_verify h');
@@ -507,7 +516,10 @@ const sigmaChallenge = (role: string, m: Map<string, JsonLogicValue>): Uint8Arra
 };
 
 const sigmaResponse = (role: string, m: Map<string, JsonLogicValue>): bigint =>
-  hb.parseScalar(expectStr(`${role}.z`, sigmaField(role, m, 'z')), `${role}.z`);
+  requireCanonicalScalar(
+    hb.parseScalar(expectStr(`${role}.z`, sigmaField(role, m, 'z')), `${role}.z`),
+    `${role}.z`
+  );
 
 // --- Proposition parsing (statement only). Malformed => throw. ---
 

@@ -489,13 +489,15 @@ fn tier3b_zk_differential_against_shared_vectors() {
 fn sigma_zk_differential_against_shared_vectors() {
     let r = run_differential(SIGMA_CATEGORIES, SIGMA_OPS);
     report_and_assert("Sigma", SIGMA_CATEGORIES, &r);
-    // The three sigma categories: sigma_dlog (8) + sigma_dhtuple (10) + sigma (21)
-    // = 39 vectors. The `sigma` category is the FROZEN-serialization byte-contract:
-    // its value cases (valid->true, soundness->false) are reproduced byte-identical
-    // ONLY IF the Rust strong-FS transcript serialization matches Scala exactly.
+    // The three sigma categories: sigma_dlog (9) + sigma_dhtuple (11) + sigma (23)
+    // = 43 vectors (audit remediation added non-canonical-response negatives (#4), a
+    // tiny-prop/huge-proof DoS structural-reject (#2), and rebuilt the threshold k-1
+    // negative against real pubkeys). The `sigma` category is the FROZEN-serialization
+    // byte-contract: its value cases (valid->true, soundness->false) are reproduced
+    // byte-identical ONLY IF the Rust strong-FS transcript serialization matches Scala.
     assert_eq!(
-        r.total, 39,
-        "expected all 39 sigma vectors (8 dlog + 10 dhtuple + 21 sigma), got {}",
+        r.total, 43,
+        "expected all 43 sigma vectors (9 dlog + 11 dhtuple + 23 sigma), got {}",
         r.total
     );
     // Every malformed case (off-curve, wrong-width, bad tree, k>n, shape mismatch)
