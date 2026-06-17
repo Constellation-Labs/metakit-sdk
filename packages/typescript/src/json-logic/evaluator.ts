@@ -53,6 +53,9 @@ import {
 import {
   opBlsAggregateVerify,
   opBlsVerify,
+  opBn254Add,
+  opBn254Mul,
+  opBn254Pairing,
   opPmtVerify,
   opPoseidon,
   opProveDhtupleVerify,
@@ -615,6 +618,12 @@ export class Evaluator {
         return opProveDhtupleVerify(values);
       case 'sigma_verify':
         return opSigmaVerify(values);
+      case 'bn254_add':
+        return opBn254Add(values);
+      case 'bn254_mul':
+        return opBn254Mul(values);
+      case 'bn254_pairing':
+        return opBn254Pairing(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }

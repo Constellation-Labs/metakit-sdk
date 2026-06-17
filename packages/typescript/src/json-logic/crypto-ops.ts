@@ -20,6 +20,7 @@
  */
 
 import { bls12_381 } from '@noble/curves/bls12-381.js';
+import { bn254 } from '@noble/curves/bn254.js';
 import { sha256 } from '@noble/hashes/sha2.js';
 
 import { JsonLogicRuntimeError } from './errors';
@@ -251,6 +252,157 @@ export const opSchnorrVerify = (values: JsonLogicValue[]): JsonLogicValue => {
   const lhs = g1Mul(G1_GEN, s % GROUP_ORDER);
   const rhs = g1Add(r, g1Mul(pk, c));
   return boolValue(g1Eq(lhs, rhs));
+};
+
+// ===========================================================================
+// TIER-2b: BN254 (alt_bn128) curve ops -- bn254_add / bn254_mul / bn254_pairing.
+//   Byte-for-byte port of the Rust crypto.rs bn254_add / bn254_mul /
+//   bn254_pairing (over the Scala Bn254). EIP-196 / EIP-197 encoding:
+//     G1 = 64B  (x || y, big-endian Fq; infinity = all-zero)
+//     G2 = 128B (Fp2 imaginary-first: x.c1 || x.c0 || y.c1 || y.c0)
+//   G1 add/mul reuse the hand-rolled affine arithmetic above (EVM (0,0)-infinity
+//   convention, identical to Rust's ark output). The pairing uses @noble/curves'
+//   bn254 (alt_bn128 + ate pairing). off-curve / wrong-width -> error. For the
+//   pairing G2 inputs we ALSO require order-r subgroup membership (G2 has a
+//   non-trivial cofactor); an on-curve-but-non-subgroup G2 point is rejected as
+//   malformed, identical to off-curve. G1 is prime-order (cofactor 1), so
+//   on-curve already implies subgroup membership.
+// ===========================================================================
+
+const G1Point = bn254.G1.Point;
+const G2Point = bn254.G2.Point;
+const Fp2 = bn254.fields.Fp2;
+const Fp12 = bn254.fields.Fp12;
+
+/**
+ * The BN254 G2 twist `b` coefficient, derived once from the curve generator
+ * (`b = y^2 - x^3` in Fp2). Deriving it from `@noble/curves`' own generator
+ * guarantees the `(c0, c1)` Fp2 representation matches noble's internal tower,
+ * so the on-curve check below agrees with `assertValidity` / the pairing.
+ */
+const G2_B = (() => {
+  const { x, y } = G2Point.BASE;
+  return Fp2.sub(Fp2.sqr(y), Fp2.mul(Fp2.sqr(x), x));
+})();
+
+/** Build a @noble G1 point from parsed `(x, y)`, rejecting off-curve points. */
+const nobleG1OnCurve = (
+  coords: { x: bigint; y: bigint },
+  role: string
+): InstanceType<typeof G1Point> => {
+  const { x, y } = coords;
+  if (x === 0n && y === 0n) {
+    return G1Point.ZERO;
+  }
+  // y^2 == x^3 + 3 over Fq (cofactor 1 => on-curve implies in-subgroup).
+  const fp = bn254.fields.Fp;
+  const lhs = fp.sqr(y);
+  const rhs = fp.add(fp.mul(fp.sqr(x), x), 3n);
+  if (!fp.eql(lhs, rhs)) {
+    return fail(`${role}: point is not on the BN254 curve`);
+  }
+  return G1Point.fromAffine({ x, y });
+};
+
+/**
+ * Build a @noble G2 point from the parsed `(real, imag)` Fp2 limbs, mirroring the
+ * Rust `g2_on_curve` two-step validation: (1) curve membership, (2) order-r
+ * subgroup membership (G2 has a non-trivial cofactor, so on-curve is NOT
+ * sufficient). Both failures are a malformed-input error (identical to off-curve).
+ */
+const nobleG2OnCurve = (
+  coords: { xReal: bigint; xImag: bigint; yReal: bigint; yImag: bigint },
+  role: string
+): InstanceType<typeof G2Point> => {
+  const x = { c0: coords.xReal, c1: coords.xImag };
+  const y = { c0: coords.yReal, c1: coords.yImag };
+  // (1) on-curve: y^2 == x^3 + b in Fp2.
+  const lhs = Fp2.sqr(y);
+  const rhs = Fp2.add(Fp2.mul(Fp2.sqr(x), x), G2_B);
+  if (!Fp2.eql(lhs, rhs)) {
+    return fail(`${role}: point is not on the BN254 G2 curve`);
+  }
+  const point = G2Point.fromAffine({ x, y });
+  // (2) order-r subgroup membership ([r]P == O).
+  if (!point.isTorsionFree()) {
+    return fail(`${role}: point is not in the BN254 G2 order-r subgroup`);
+  }
+  return point;
+};
+
+/** `bn254_add([aHex(64B), bHex(64B)]) -> 64B G1`. */
+export const opBn254Add = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('bn254_add: expected [aHex(64B), bHex(64B)]');
+  }
+  const aHex = expectStr('bn254_add a', values[0]);
+  const bHex = expectStr('bn254_add b', values[1]);
+  const a = g1OnCurve(hb.parseG1(aHex, 'bn254_add a'), 'bn254_add a');
+  const b = g1OnCurve(hb.parseG1(bHex, 'bn254_add b'), 'bn254_add b');
+  const sum = g1Add(a, b);
+  return strValue(hb.encodeBytes(encodeG1Bytes(sum)));
+};
+
+/** `bn254_mul([pointHex(64B), scalarHex(32B)]) -> 64B G1`. */
+export const opBn254Mul = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('bn254_mul: expected [pointHex(64B), scalarHex(32B)]');
+  }
+  const pHex = expectStr('bn254_mul point', values[0]);
+  const sHex = expectStr('bn254_mul scalar', values[1]);
+  // Scalar is any 256-bit value; multiplication reduces it mod R.
+  const s = hb.parseScalar(sHex, 'bn254_mul scalar');
+  const p = g1OnCurve(hb.parseG1(pHex, 'bn254_mul point'), 'bn254_mul point');
+  const prod = g1Mul(p, s % GROUP_ORDER);
+  return strValue(hb.encodeBytes(encodeG1Bytes(prod)));
+};
+
+/**
+ * `bn254_pairing([[g1Hex(64B), g2Hex(128B)], ...]) -> bool`. `true` iff the
+ * product of `e(g1_i, g2_i) == 1` in GT; the empty product is the identity, so
+ * an empty input yields `true`. Accepts the natural EIP-197 shape (a single
+ * array of pairs) as well as variadic pairs, matching the Scala disambiguation:
+ * unwrap the outer array only when every element is itself an array (a pair).
+ */
+export const opBn254Pairing = (values: JsonLogicValue[]): JsonLogicValue => {
+  let rawPairs: JsonLogicValue[];
+  if (
+    values.length === 1 &&
+    values[0].tag === 'array' &&
+    values[0].value.every((v) => v.tag === 'array')
+  ) {
+    rawPairs = values[0].value;
+  } else {
+    rawPairs = values;
+  }
+
+  const g1s: InstanceType<typeof G1Point>[] = [];
+  const g2s: InstanceType<typeof G2Point>[] = [];
+  for (let i = 0; i < rawPairs.length; i++) {
+    const p = rawPairs[i];
+    if (p.tag !== 'array' || p.value.length !== 2) {
+      return fail(`bn254_pairing[${i}]: expected [g1Hex(64B), g2Hex(128B)]`);
+    }
+    const g1Hex = expectStr(`bn254_pairing[${i}].g1`, p.value[0]);
+    const g2Hex = expectStr(`bn254_pairing[${i}].g2`, p.value[1]);
+    const g1 = nobleG1OnCurve(
+      hb.parseG1(g1Hex, `bn254_pairing[${i}].g1`),
+      `bn254_pairing[${i}].g1`
+    );
+    const g2 = nobleG2OnCurve(
+      hb.parseG2(g2Hex, `bn254_pairing[${i}].g2`),
+      `bn254_pairing[${i}].g2`
+    );
+    g1s.push(g1);
+    g2s.push(g2);
+  }
+
+  // Empty product is the GT identity => true (matches EVM ECPAIRING / Rust).
+  if (g1s.length === 0) {
+    return boolValue(true);
+  }
+  const product = bn254.pairingBatch(g1s.map((g1, i) => ({ g1, g2: g2s[i] })));
+  return boolValue(Fp12.eql(product, Fp12.ONE));
 };
 
 // ===========================================================================

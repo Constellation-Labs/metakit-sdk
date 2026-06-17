@@ -46,6 +46,9 @@ const IMPLEMENTED = new Set([
   'sigma_dlog',
   'sigma_dhtuple',
   'sigma',
+  'bn254_add',
+  'bn254_mul',
+  'bn254_pairing',
 ]);
 
 const vectorsPath = path.join(__dirname, '../../..', 'shared', 'zk_opcode_test_vectors.json');
