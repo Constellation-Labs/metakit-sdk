@@ -1133,7 +1133,7 @@ pub fn prove_dhtuple_verify(values: &[Value]) -> Result<Value, String> {
 // R for the leaf scalar arithmetic, so `e` and `e + R` (both < 2^256) collapsed to
 // the same scalar (a CDS-soundness weakness). Now the SAME 31-byte value is the
 // GF(2)^248 / XOR object AND, unchanged (no mod R), the Fr scalar `z·G − e·pk`.
-// Responses `z` stay 32-byte mod-R; commitments stay 64-byte G1; the serialized
+// Responses `z` stay canonical 32-byte (< R); commitments stay 64-byte G1; the serialized
 // transcript is UNCHANGED (challenges are not in it).
 //
 // ERROR-VS-FALSE (lockstep with the leaves): malformed (bad hex/width, off-curve,
@@ -1816,9 +1816,10 @@ fn proof_node_kind(n: &ProofNode) -> &'static str {
 //   dhtuple: a = z·base − e·image   (honest: a = r·base)
 // ---------------------------------------------------------------------------
 
-/// DLog commitment recovery: `a = z·G − e·pk`. Caller passes `e`, `z` already
-/// reduced mod R (as the Scala tree does). Byte-for-byte: the resulting affine
-/// point's canonical (x,y) is what gets serialized.
+/// DLog commitment recovery: `a = z·G − e·pk`. The caller passes `e` (the 31-byte
+/// challenge, used DIRECTLY as the Fr scalar — no mod R, finding #1) and a canonical
+/// response `z` (< R). Byte-for-byte: the resulting affine point's canonical (x,y) is
+/// what gets serialized.
 fn dlog_compute_commitment(pk: &G1Projective, e: &BigUint, z: &BigUint) -> G1Affine {
     // z·G + (−e·pk): computed in projective, converted to affine. The affine
     // (x,y) (with infinity -> (0,0)) is identical to the Scala manual y-negation.
