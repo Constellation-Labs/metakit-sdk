@@ -67,7 +67,7 @@ fn main() {
     match args.mode.as_str() {
         "execute" => {
             let (public_values, report) = client.execute(JLVM_ELF, stdin).run().unwrap();
-            let pv = JlvmPublicValues::abi_decode(public_values.as_slice()).unwrap();
+            let pv = JlvmPublicValues::abi_decode(public_values.as_slice(), true).unwrap();
             println!("--- executed in the zkVM ---");
             println!("ok:         {}", pv.ok);
             println!("exprHash:   {}", pv.exprHash);
@@ -102,7 +102,7 @@ fn main() {
             .expect("wrap prove");
             client.verify(&proof, pk.verifying_key(), None).expect("verify");
 
-            let pv = JlvmPublicValues::abi_decode(proof.public_values.as_slice()).unwrap();
+            let pv = JlvmPublicValues::abi_decode(proof.public_values.as_slice(), true).unwrap();
             assert_eq!(pv.outputHash, expected_output_hash, "proven output != native output");
 
             println!("{} proof generated AND verified (output matches native).", args.mode);
