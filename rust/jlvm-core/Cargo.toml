@@ -1,5 +1,5 @@
 [package]
-name = "jlvm-core"
+name = "constellation-metagraph-sdk-jlvm"
 version = "1.8.0-rc.1"
 edition = "2021"
 authors = ["Constellation Network"]
@@ -25,7 +25,7 @@ serde_json = "1.0"
 # The `version` is required so `cargo package`/`publish` can rewrite this path
 # dependency into a registry dependency. Keep it in lock-step with the crate
 # version (the release workflow checks both against the tag).
-poseidon-bn254 = { path = "../poseidon-bn254", version = "1.8.0-rc.1" }
+poseidon-bn254 = { path = "../poseidon-bn254", version = "1.8.0-rc.1", package = "constellation-metagraph-sdk-poseidon-bn254" }
 # BN254 (alt_bn128) G1 curve arithmetic for `schnorr_verify`. Matches the Besu
 # AltBn128Point semantics used by the Scala `Bn254.G1` (generator (1, 2), affine
 # point-at-infinity = (0, 0)).

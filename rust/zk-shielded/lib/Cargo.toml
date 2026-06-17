@@ -1,5 +1,5 @@
 [package]
-name = "zk-shielded-lib"
+name = "constellation-metagraph-sdk-confidential-transfer-lib"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,8 +7,11 @@ edition = "2021"
 alloy-sol-types = { workspace = true }
 num-bigint = "0.4"
 num-traits = "0.2"
-poseidon-bn254 = { path = "../../poseidon-bn254" }
+poseidon-bn254 = { path = "../../poseidon-bn254", package = "constellation-metagraph-sdk-poseidon-bn254" }
 serde = { version = "1.0", features = ["derive"] }
 
 [dev-dependencies]
 serde_json = "1.0"
+
+[lib]
+name = "zk_shielded_lib"

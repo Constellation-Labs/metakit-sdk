@@ -33,7 +33,7 @@ use zk_shielded_lib::{
     owner_from_nsk, verify_transfer, Note, OutputNote, SpendInput, TransferPublic, TransferWitness,
 };
 
-const SHIELDED_ELF: Elf = include_elf!("zk-shielded-program");
+const SHIELDED_ELF: Elf = include_elf!("constellation-metagraph-sdk-confidential-transfer-program");
 
 const DEPTH: usize = 8;
 

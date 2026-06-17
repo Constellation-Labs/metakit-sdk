@@ -1,5 +1,5 @@
 [package]
-name = "zk-jlvm-program"
+name = "constellation-metagraph-sdk-zk-jlvm-program"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,7 +9,7 @@ sp1-zkvm = "6.0.1"
 # cross-compile for the SP1 riscv target). The guest keeps every other JLVM opcode; a program
 # using `bls_verify` / `bls_aggregate_verify` returns "Unsupported operator" rather than failing
 # to build. (BLS verification is a guard/on-chain concern, not part of a proven effect.)
-jlvm-core = { path = "../../jlvm-core", default-features = false }
-zk-jlvm-lib = { path = "../lib" }
+jlvm-core = { path = "../../jlvm-core", default-features = false, package = "constellation-metagraph-sdk-jlvm" }
+zk-jlvm-lib = { path = "../lib", package = "constellation-metagraph-sdk-zk-jlvm-lib" }
 alloy-sol-types = { workspace = true }
 alloy-primitives = { workspace = true }

@@ -1,5 +1,5 @@
 [package]
-name = "zk-jlvm-shielded-program"
+name = "constellation-metagraph-sdk-confidential-state-program"
 version = "0.1.0"
 edition = "2021"
 
@@ -7,6 +7,6 @@ edition = "2021"
 sp1-zkvm = "6.0.1"
 # The guest pulls jlvm-core transitively through zk-jlvm-shielded-lib (default-features = false
 # there), so `blst` is never compiled for the riscv target.
-zk-jlvm-shielded-lib = { path = "../lib" }
+zk-jlvm-shielded-lib = { path = "../lib", package = "constellation-metagraph-sdk-confidential-state-lib" }
 alloy-sol-types = { workspace = true }
 serde_json = "1.0"

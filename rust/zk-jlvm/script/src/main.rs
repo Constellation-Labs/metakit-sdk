@@ -21,7 +21,7 @@ use sp1_sdk::{
     include_elf, Elf, HashableKey, ProvingKey, SP1Stdin,
 };
 
-const JLVM_ELF: Elf = include_elf!("zk-jlvm-program");
+const JLVM_ELF: Elf = include_elf!("constellation-metagraph-sdk-zk-jlvm-program");
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]

@@ -32,7 +32,7 @@ use zk_jlvm_shielded_lib::{
     note_commitment, owner_from_nsk, verify_transition, TransitionPublic, TransitionWitness,
 };
 
-const SHIELDED_ELF: Elf = include_elf!("zk-jlvm-shielded-program");
+const SHIELDED_ELF: Elf = include_elf!("constellation-metagraph-sdk-confidential-state-program");
 
 const DEPTH: usize = 8;
 
