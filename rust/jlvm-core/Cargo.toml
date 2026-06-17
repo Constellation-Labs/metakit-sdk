@@ -56,7 +56,19 @@ curve25519-dalek = { version = "4", default-features = false, features = ["alloc
 # the published ethereum/bls12-381-tests v0.1.2 vectors use. Matching that
 # library + DST is what makes the Rust opcodes byte-identical to the Scala
 # reference (which already reproduces the published vectors).
-blst = "0.3.16"
+#
+# OPTIONAL + default-on: `blst` is the only C-backed dependency, and its C
+# backend does not cross-compile for the SP1 `riscv64im-succinct-zkvm-elf` target
+# with the system `cc`. The `bls` feature gates it (and the `bls_verify` /
+# `bls_aggregate_verify` opcodes) so a zkVM GUEST can depend on jlvm-core with
+# `default-features = false` and still get every other opcode. Native builds keep
+# `bls` on by default, so byte-compatibility with the Scala reference is unchanged.
+blst = { version = "0.3.16", optional = true }
+
+[features]
+default = ["bls"]
+# BLS12-381 signature opcodes (`bls_verify`, `bls_aggregate_verify`), backed by `blst`.
+bls = ["dep:blst"]
 
 [dev-dependencies]
 serde_json = "1.0"

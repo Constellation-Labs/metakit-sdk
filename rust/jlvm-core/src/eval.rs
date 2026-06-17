@@ -386,7 +386,11 @@ impl<'a> Evaluator<'a> {
             // (BouncyCastle 1.85 BLS12_381ProofOfPossession), backed by blst's
             // min_pk module. Eth2 / IETF PoP ciphersuite (minimal-pubkey-size,
             // DST BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_). Byte-matching.
+            // Gated by the `bls` feature (off in the zkVM guest, where `blst`'s C backend
+            // cannot cross-compile). When off, these fall through to "Unsupported operator".
+            #[cfg(feature = "bls")]
             "bls_verify" => crate::crypto::bls_verify(&values),
+            #[cfg(feature = "bls")]
             "bls_aggregate_verify" => crate::crypto::bls_aggregate_verify(&values),
             // Sigma-protocol leaves + recursive CDS verifier (Ergo / EIP-11
             // family) on BN254 G1. Pure ports of the Scala CryptoOps

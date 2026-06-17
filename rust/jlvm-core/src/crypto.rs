@@ -722,6 +722,7 @@ pub fn groth16_verify(values: &[Value]) -> Result<Value, String> {
 //     * empty pubkey list (aggregate) -> Err (Scala `Either.cond(pks.nonEmpty)`).
 // ===========================================================================
 
+#[cfg(feature = "bls")]
 mod bls {
     //! Thin wrapper over `blst::min_pk` fixing the eth2 PoP ciphersuite. Mirrors
     //! the public surface of the Scala `Bls12381` object used by `CryptoOps`.
@@ -821,6 +822,7 @@ mod bls {
 ///   * `msg` is an arbitrary-width byte string;
 ///   * a bad / non-canonical / wrong-subgroup point or a failed check is simply
 ///     `false`, NOT an error.
+#[cfg(feature = "bls")]
 pub fn bls_verify(values: &[Value]) -> Result<Value, String> {
     match values {
         [pk_v, msg_v, sig_v] => {
@@ -853,6 +855,7 @@ pub fn bls_verify(values: &[Value]) -> Result<Value, String> {
 ///   * `msg` is an arbitrary-width byte string;
 ///   * any non-canonical / wrong-subgroup point or a failed pairing check is
 ///     simply `false`, NOT an error.
+#[cfg(feature = "bls")]
 pub fn bls_aggregate_verify(values: &[Value]) -> Result<Value, String> {
     match values {
         [Value::Array(pks_v), msg_v, sig_v] => {
@@ -2322,6 +2325,7 @@ mod tests {
     // -- Tier-3b: BLS12-381 PoP ciphersuite (blst min_pk) --------------------
 
     /// The signature DST MUST be the eth2 / IETF ProofOfPossession suite tag.
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_dst_is_eth2_pop() {
         assert_eq!(bls::DST, b"BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_POP_");
@@ -2332,6 +2336,7 @@ mod tests {
     /// PUBLISHED ethereum/bls12-381-tests v0.1.2 `verify_valid_case_e8a50c445c855360`.
     /// Independent ground truth: matching it (as the eth2-conformant Scala
     /// `Bls12381` already does) proves Scala<->Rust BLS byte-identity.
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_published_verify_valid_case() {
         let ok = bls_verify(&[
@@ -2345,6 +2350,7 @@ mod tests {
 
     /// PUBLISHED `verify_wrong_pubkey_case_2f09d443ab8a3ac2`: a valid signature
     /// checked against the wrong pubkey verifies `false` (NOT an error).
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_published_wrong_pubkey_is_false() {
         let r = bls_verify(&[
@@ -2358,6 +2364,7 @@ mod tests {
 
     /// PUBLISHED `fast_aggregate_verify_valid_3d7576f3c0e3570a`: 3-signer
     /// same-message aggregate verifies `true`.
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_published_fast_aggregate_verify_valid() {
         let ok = bls_aggregate_verify(&[
@@ -2375,6 +2382,7 @@ mod tests {
 
     /// PUBLISHED `fast_aggregate_verify_extra_pubkey_5a38e6b4017fe4dd`: an extra
     /// 4th pubkey (not part of the 3-signer aggregate) verifies `false`.
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_published_fast_aggregate_verify_extra_pubkey() {
         let r = bls_aggregate_verify(&[
@@ -2393,6 +2401,7 @@ mod tests {
 
     /// Wrong-WIDTH pk (47 bytes) is an opcode ERROR (a JsonLogicException), NOT
     /// `false` -- mirrors the Scala `HexBytes.parseBytes(_, Some(48), ...)`.
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_wrong_width_pk_is_error() {
         let bad_pk = format!("0x{}", "ab".repeat(47)); // 47 bytes
@@ -2406,6 +2415,7 @@ mod tests {
 
     /// Empty pubkey list in aggregate verify is an opcode ERROR (matches the
     /// Scala `Either.cond(pks.nonEmpty, ...)`).
+    #[cfg(feature = "bls")]
     #[test]
     fn bls_aggregate_empty_pubkeys_is_error() {
         let err = bls_aggregate_verify(&[

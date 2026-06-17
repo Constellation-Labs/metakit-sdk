@@ -5,7 +5,11 @@ edition = "2021"
 
 [dependencies]
 sp1-zkvm = "6.0.1"
-jlvm-core = { path = "../../jlvm-core" }
+# default-features = false drops the `bls` feature (and its `blst` C backend, which does not
+# cross-compile for the SP1 riscv target). The guest keeps every other JLVM opcode; a program
+# using `bls_verify` / `bls_aggregate_verify` returns "Unsupported operator" rather than failing
+# to build. (BLS verification is a guard/on-chain concern, not part of a proven effect.)
+jlvm-core = { path = "../../jlvm-core", default-features = false }
 zk-jlvm-lib = { path = "../lib" }
 alloy-sol-types = { workspace = true }
 alloy-primitives = { workspace = true }
