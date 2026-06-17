@@ -1,0 +1,11 @@
+# NOTE: the SP1 guest (`program`) + host (`script`) are a follow-up — they depend on
+# jlvm-core, whose `blst` C backend does not yet cross-compile for the SP1 riscv target with
+# the system `cc` (the same blocker affects the existing `zk-jlvm` guest). The native
+# constraint system (`lib`) + its tests stand alone and are the verifiable core.
+[workspace]
+members = ["lib"]
+resolver = "2"
+
+[workspace.dependencies]
+alloy-sol-types = "*"
+alloy-primitives = "*"
