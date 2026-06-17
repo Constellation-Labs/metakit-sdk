@@ -314,7 +314,7 @@ export const opProveDhtupleVerify = (values: JsonLogicValue[]): JsonLogicValue =
   const hCoords = hb.parseG1(hHex, 'prove_dhtuple_verify h');
   const uCoords = hb.parseG1(uHex, 'prove_dhtuple_verify u');
   const vCoords = hb.parseG1(vHex, 'prove_dhtuple_verify v');
-  const msg = hb.parseBytes(msgHex, null, 'prove_dhtuple_verify msg');
+  const msg = parseSigmaMessage(msgHex, 'prove_dhtuple_verify msg');
   // proof = a1(64B) || a2(64B) || z(32B) -> total 160 bytes.
   const proof = hb.parseBytes(proofHex, DHTUPLE_PROOF_BYTES, 'prove_dhtuple_verify proof');
   const a1Bytes = proof.subarray(0, hb.G1_BYTES);
@@ -414,9 +414,21 @@ const SIGMA_DOMAIN_SEP = new TextEncoder().encode('sigma_verify:v1');
  */
 const SIGMA_CHALLENGE_BYTES = 31;
 
-/** Absolute backstop on the proof tree size/depth (DoS bound). */
+/**
+ * Absolute backstop on a sigma tree's size/depth (DoS bound). Applied to BOTH the proposition
+ * (before its recursive parse — IMPL-1) and the proof. The gas estimator bounds its proposition
+ * shape walk with the same depth.
+ */
 const SIGMA_MAX_PROOF_NODES = 4096;
 const SIGMA_MAX_PROOF_DEPTH = 64;
+
+/**
+ * IMPL-3 (DoS): absolute cap on a sigma message length, in bytes. The message is hashed into the
+ * challenge but is NOT part of the gas-priced proposition shape; without a cap a caller could force
+ * unbounded hex-decode + SHA-256 work outside the Sigma-tree pricing. Shared by `sigma_verify` and
+ * `prove_dhtuple_verify`. Byte-for-byte the Scala `CryptoOps.SigmaMaxMessageBytes`.
+ */
+const SIGMA_MAX_MESSAGE_BYTES = 4096;
 
 /**
  * Canonical challenge derivation: the LOW-ORDER 31 bytes of a 32-byte SHA-256
@@ -468,6 +480,38 @@ const sigmaField = (role: string, m: Map<string, JsonLogicValue>, key: string): 
     return fail(`${role}: missing required field '${key}'`);
   }
   return v;
+};
+
+/**
+ * IMPL-2 / IMPL-5: reject any field outside the canonical schema for this node kind, so the raw
+ * proposition / proof encoding is canonical (no ignored field can inflate the DoS shape bound or
+ * leave the bytes ambiguous for logs / caches / external signing layers). Mirrors the Scala
+ * `sigmaRejectUnknownFields` / Rust `sigma_reject_unknown_fields`.
+ */
+const sigmaRejectUnknownFields = (
+  role: string,
+  m: Map<string, JsonLogicValue>,
+  allowed: readonly string[]
+): void => {
+  for (const k of m.keys()) {
+    if (!allowed.includes(k)) {
+      fail(`${role}: unknown field '${k}' (allowed: ${allowed.join(', ')})`);
+    }
+  }
+};
+
+/**
+ * IMPL-3 (DoS): parse a sigma message (arbitrary-width hex) and enforce the absolute length cap.
+ * Shared by `sigma_verify` and `prove_dhtuple_verify`. Mirrors the Scala/Rust `parseSigmaMessage`.
+ */
+const parseSigmaMessage = (hex: string, role: string): Uint8Array => {
+  const bytes = hb.parseBytes(hex, null, role);
+  if (bytes.length > SIGMA_MAX_MESSAGE_BYTES) {
+    return fail(
+      `${role}: message too long (${bytes.length} > ${SIGMA_MAX_MESSAGE_BYTES} bytes) — DoS bound`
+    );
+  }
+  return bytes;
 };
 
 const sigmaType = (role: string, m: Map<string, JsonLogicValue>): string =>
@@ -531,10 +575,12 @@ const parsePropNode = (v: JsonLogicValue, role: string): PropNode => {
   const typ = sigmaType(role, m);
   switch (typ) {
     case 'dlog': {
+      sigmaRejectUnknownFields(role, m, ['type', 'pk']);
       const { point, bytes } = sigmaPoint(role, m, 'pk');
       return { kind: 'dlog', pk: point, pkBytes: bytes };
     }
     case 'dhtuple': {
+      sigmaRejectUnknownFields(role, m, ['type', 'g', 'h', 'u', 'v']);
       const g = sigmaPoint(role, m, 'g');
       const h = sigmaPoint(role, m, 'h');
       const u = sigmaPoint(role, m, 'u');
@@ -552,14 +598,17 @@ const parsePropNode = (v: JsonLogicValue, role: string): PropNode => {
       };
     }
     case 'and': {
+      sigmaRejectUnknownFields(role, m, ['type', 'children']);
       const cs = sigmaChildrenValues(role, m);
       return { kind: 'and', children: cs.map((c, i) => parsePropNode(c, `${role}.and[${i}]`)) };
     }
     case 'or': {
+      sigmaRejectUnknownFields(role, m, ['type', 'children']);
       const cs = sigmaChildrenValues(role, m);
       return { kind: 'or', children: cs.map((c, i) => parsePropNode(c, `${role}.or[${i}]`)) };
     }
     case 'threshold': {
+      sigmaRejectUnknownFields(role, m, ['type', 'k', 'children']);
       const k = sigmaInt(role, m, 'k');
       const cs = sigmaChildrenValues(role, m);
       const children = cs.map((c, i) => parsePropNode(c, `${role}.threshold[${i}]`));
@@ -591,19 +640,26 @@ const parseProofNode = (v: JsonLogicValue, role: string): ProofNode => {
   const e = sigmaChallenge(role, m);
   const typ = sigmaType(role, m);
   switch (typ) {
-    case 'dlog':
+    case 'dlog': {
+      sigmaRejectUnknownFields(role, m, ['type', 'e', 'z']);
       return { kind: 'dlog', e, z: sigmaResponse(role, m) };
-    case 'dhtuple':
+    }
+    case 'dhtuple': {
+      sigmaRejectUnknownFields(role, m, ['type', 'e', 'z']);
       return { kind: 'dhtuple', e, z: sigmaResponse(role, m) };
+    }
     case 'and': {
+      sigmaRejectUnknownFields(role, m, ['type', 'e', 'children']);
       const cs = sigmaChildrenValues(role, m);
       return { kind: 'and', e, children: cs.map((c, i) => parseProofNode(c, `${role}.and[${i}]`)) };
     }
     case 'or': {
+      sigmaRejectUnknownFields(role, m, ['type', 'e', 'children']);
       const cs = sigmaChildrenValues(role, m);
       return { kind: 'or', e, children: cs.map((c, i) => parseProofNode(c, `${role}.or[${i}]`)) };
     }
     case 'threshold': {
+      sigmaRejectUnknownFields(role, m, ['type', 'e', 'k', 'children']);
       const k = sigmaInt(role, m, 'k');
       const cs = sigmaChildrenValues(role, m);
       return {
@@ -621,16 +677,18 @@ const parseProofNode = (v: JsonLogicValue, role: string): ProofNode => {
 // --- DoS shape bound (mirrors Rust sigma_raw_shape / bound_proof_shape). ---
 
 /**
- * Cheap node-count + depth of a RAW sigma tree value: one node per object,
- * recursing into a `children` array. Mirrors Rust `sigma_raw_shape`.
+ * Cheap node-count + depth of a parsed sigma tree (JsonLogicValue): one node per
+ * map, recursing into a `children` array. Traverses the MapValue/ArrayValue tree
+ * DIRECTLY — no plain-object lowering — so the early-abort and prototype-safety
+ * properties are preserved (IMPL-4) and it matches the Scala/Rust raw-shape walk.
  */
-const sigmaRawShape = (v: unknown): [number, number] => {
-  if (v !== null && typeof v === 'object' && !Array.isArray(v)) {
-    const children = (v as Record<string, unknown>)['children'];
-    if (Array.isArray(children)) {
+const sigmaRawShape = (v: JsonLogicValue): [number, number] => {
+  if (v.tag === 'map') {
+    const children = v.value.get('children');
+    if (children !== undefined && children.tag === 'array') {
       let n = 0;
       let d = 0;
-      for (const c of children) {
+      for (const c of children.value) {
         const [cn, cd] = sigmaRawShape(c);
         n += cn;
         d = Math.max(d, cd);
@@ -643,17 +701,26 @@ const sigmaRawShape = (v: unknown): [number, number] => {
 };
 
 /**
- * Reject — BEFORE the recursive proof parse — a proof whose raw node count or
- * depth exceeds the proposition's. Mirrors Rust `bound_proof_shape`.
+ * Reject — BEFORE the recursive parse — a parsed sigma tree whose node count or
+ * depth exceeds (maxNodes / maxDepth). Applied to the proposition with the absolute
+ * caps (IMPL-1) and to the proof with the proposition-derived caps. Traverses the
+ * JsonLogicValue tree DIRECTLY with early abort (IMPL-4): no whole-tree plain-object
+ * conversion, so a huge tree aborts at the first over-bound node and no attacker keys
+ * are written into a plain `{}`. Mirrors the Scala/Rust `boundRawShape`.
  */
-const boundProofShape = (v: unknown, maxNodes: number, maxDepth: number): void => {
+const boundRawShape = (
+  v: JsonLogicValue,
+  maxNodes: number,
+  maxDepth: number,
+  role: string
+): void => {
   const tooLarge = (): never =>
     fail(
-      `sigma_verify.proof: proof tree exceeds the proposition's structure ` +
+      `${role}: sigma tree exceeds the allowed structure ` +
         `(max ${maxNodes} nodes, depth ${maxDepth}) — rejected before traversal (DoS bound)`
     );
   // Returns nodes-so-far or throws as soon as a bound is crossed; depth is 1-based.
-  const go = (node: unknown, depth: number, nodesSoFar: number): number => {
+  const go = (node: JsonLogicValue, depth: number, nodesSoFar: number): number => {
     if (depth > maxDepth) {
       return tooLarge();
     }
@@ -661,11 +728,11 @@ const boundProofShape = (v: unknown, maxNodes: number, maxDepth: number): void =
     if (n > maxNodes) {
       return tooLarge();
     }
-    if (node !== null && typeof node === 'object' && !Array.isArray(node)) {
-      const children = (node as Record<string, unknown>)['children'];
-      if (Array.isArray(children)) {
+    if (node.tag === 'map') {
+      const children = node.value.get('children');
+      if (children !== undefined && children.tag === 'array') {
         let running = n;
-        for (const c of children) {
+        for (const c of children.value) {
           running = go(c, depth + 1, running);
         }
         return running;
@@ -972,38 +1039,25 @@ export const opSigmaVerify = (values: JsonLogicValue[]): JsonLogicValue => {
     return fail('sigma_verify: expected [proposition, proof, messageHex]');
   }
   const msgHex = expectStr('sigma_verify message', values[2]);
-  const msg = hb.parseBytes(msgHex, null, 'sigma_verify message');
+  const msg = parseSigmaMessage(msgHex, 'sigma_verify message');
+  // IMPL-1 (DoS): bound the proposition's raw shape with the absolute caps BEFORE
+  // its recursive parse (parsePropNode + sigmaRawShape both descend it).
+  boundRawShape(
+    values[0],
+    SIGMA_MAX_PROOF_NODES,
+    SIGMA_MAX_PROOF_DEPTH,
+    'sigma_verify.proposition'
+  );
   const prop = parsePropNode(values[0], 'sigma_verify.proposition');
-  // DoS: bound the raw proof shape against the (gas-charged) proposition BEFORE
-  // the expensive recursive proof parse. The per-node type/child-count mirror
-  // check is still enforced in verifyNode.
-  const [propNodes, propDepth] = sigmaRawShape(valueToPlain(values[0]));
+  // FINDING #2 (DoS): the proof must mirror the proposition; bound it BEFORE the
+  // expensive recursive proof parse. Unknown fields are rejected at parse, so the
+  // proposition's raw shape == semantic shape (no bogus children inflates it, IMPL-2).
+  const [propNodes, propDepth] = sigmaRawShape(values[0]);
   const maxNodes = Math.min(propNodes, SIGMA_MAX_PROOF_NODES);
   const maxDepth = Math.min(propDepth, SIGMA_MAX_PROOF_DEPTH);
-  boundProofShape(valueToPlain(values[1]), maxNodes, maxDepth);
+  boundRawShape(values[1], maxNodes, maxDepth, 'sigma_verify.proof');
   const proof = parseProofNode(values[1], 'sigma_verify.proof');
   return boolValue(verifyTree(prop, proof, msg));
-};
-
-/**
- * Lower a parsed JsonLogicValue tree back to a plain JS object/array shape, for
- * the cheap structural DoS-shape walk (which only inspects `children` arrays and
- * object-ness). Only the structure matters here, not leaf values.
- */
-const valueToPlain = (v: JsonLogicValue): unknown => {
-  switch (v.tag) {
-    case 'map': {
-      const out: Record<string, unknown> = {};
-      for (const [k, val] of v.value) {
-        out[k] = valueToPlain(val);
-      }
-      return out;
-    }
-    case 'array':
-      return v.value.map(valueToPlain);
-    default:
-      return null;
-  }
 };
 
 // ---------------------------------------------------------------------------

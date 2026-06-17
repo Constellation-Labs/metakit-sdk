@@ -1039,7 +1039,7 @@ pub fn prove_dhtuple_verify(values: &[Value]) -> Result<Value, String> {
             let h_c = hb::parse_g1(h_hex, "prove_dhtuple_verify h")?;
             let u_c = hb::parse_g1(u_hex, "prove_dhtuple_verify u")?;
             let v_c = hb::parse_g1(v_hex, "prove_dhtuple_verify v")?;
-            let msg = hb::parse_bytes(msg_hex, None, "prove_dhtuple_verify msg")?;
+            let msg = parse_sigma_message(msg_hex, "prove_dhtuple_verify msg")?;
             // proof = a1(64B) || a2(64B) || z(32B) -> total 160 bytes.
             let proof = hb::parse_bytes(
                 proof_hex,
@@ -1240,29 +1240,47 @@ impl ProofNode {
     }
 }
 
-/// Absolute backstop on the proof tree size/depth (audit finding #2, the unpaid-traversal DoS
-/// bound). The PRIMARY bound is structural: the proof must mirror the (already gas-charged)
-/// proposition, so its node count and depth may not exceed the proposition's (checked cheaply
-/// BEFORE the recursive `parse_proof_node` / curve work). Byte-for-byte the Scala
-/// `SigmaMaxProofNodes` / `SigmaMaxProofDepth`.
-const SIGMA_MAX_PROOF_NODES: usize = 4096;
-const SIGMA_MAX_PROOF_DEPTH: usize = 64;
+/// Absolute backstop on a sigma tree's size/depth (the unpaid-traversal DoS bound). Applied to BOTH
+/// the proposition (before its recursive parse — IMPL-1) and the proof. For the proof the PRIMARY
+/// bound is also structural: the proof must mirror the (already gas-charged) proposition, so its node
+/// count and depth may not exceed the proposition's (checked cheaply BEFORE the recursive
+/// `parse_proof_node` / curve work). `pub(crate)` so the gas estimator bounds its proposition-shape
+/// walk with the SAME values. Byte-for-byte the Scala `SigmaMaxProofNodes` / `SigmaMaxProofDepth`.
+pub(crate) const SIGMA_MAX_PROOF_NODES: usize = 4096;
+pub(crate) const SIGMA_MAX_PROOF_DEPTH: usize = 64;
+
+/// IMPL-3 (DoS): absolute cap on a sigma message length, in bytes. The message is hashed into the
+/// challenge but is NOT part of the gas-priced proposition shape; without a cap a caller could force
+/// unbounded hex-decode + SHA-256 work outside the Sigma-tree pricing. Shared by `sigma_verify` and
+/// `prove_dhtuple_verify`. Byte-for-byte the Scala `CryptoOps.SigmaMaxMessageBytes`.
+const SIGMA_MAX_MESSAGE_BYTES: usize = 4096;
 
 /// `sigma_verify([proposition, proof, messageHex]) -> bool`.
 pub fn sigma_verify(values: &[Value]) -> Result<Value, String> {
     match values {
         [prop_v, proof_v, msg_v] => {
             let msg_hex = expect_str("sigma_verify message", msg_v)?;
-            let msg = hb::parse_bytes(msg_hex, None, "sigma_verify message")?;
+            let msg = parse_sigma_message(msg_hex, "sigma_verify message")?;
+            // IMPL-1 (DoS): bound the proposition's RAW shape with the absolute caps BEFORE its
+            // recursive parse. Both parse_prop_node and sigma_raw_shape descend the attacker-supplied
+            // proposition, so a deeply nested / very wide proposition must be rejected here first.
+            bound_raw_shape(
+                prop_v,
+                SIGMA_MAX_PROOF_NODES,
+                SIGMA_MAX_PROOF_DEPTH,
+                "sigma_verify.proposition",
+            )?;
             let prop = parse_prop_node(prop_v, "sigma_verify.proposition")?;
             // FINDING #2 (DoS): bound the raw proof shape against the (gas-charged) proposition
             // BEFORE the expensive recursive proof parse (hex decode, on-curve, scalar mul). A tiny
             // proposition + huge mismatched proof is rejected here after only a bounded raw-tree
-            // walk. The per-node type/child-count mirror check is still enforced in verify_node.
+            // walk. Because unknown fields are rejected at parse, the proposition's raw shape equals
+            // its semantic shape — no leaf-with-bogus-children inflates the bound (IMPL-2). The
+            // per-node type/child-count mirror check is still enforced in verify_node.
             let (prop_nodes, prop_depth) = sigma_raw_shape(prop_v);
             let max_nodes = prop_nodes.min(SIGMA_MAX_PROOF_NODES);
             let max_depth = prop_depth.min(SIGMA_MAX_PROOF_DEPTH);
-            bound_proof_shape(proof_v, max_nodes, max_depth)?;
+            bound_raw_shape(proof_v, max_nodes, max_depth, "sigma_verify.proof")?;
             let proof = parse_proof_node(proof_v, "sigma_verify.proof")?;
             let result = verify_tree(&prop, &proof, &msg)?;
             Ok(Value::Bool(result))
@@ -1297,15 +1315,21 @@ fn sigma_raw_shape(v: &Value) -> (usize, usize) {
     }
 }
 
-/// FINDING #2: reject — BEFORE the recursive proof parse — a proof whose raw node count or depth
-/// exceeds the proposition's (`max_nodes` / `max_depth`). The walk aborts as soon as a bound is
-/// crossed, so the work is O(min(proof_size, max_nodes)). Purely structural (no hex / curve work);
+/// Reject — BEFORE the recursive parse — a raw sigma tree whose node count or depth exceeds
+/// (`max_nodes` / `max_depth`). Applied to the proposition with the absolute caps (IMPL-1) and to
+/// the proof with the proposition-derived caps (FINDING #2). The walk aborts as soon as a bound is
+/// crossed, so the work is O(min(tree_size, max_nodes)). Purely structural (no hex / curve work);
 /// the per-node type/child-count mirror check is still enforced in verify_node. Mirrors the Scala
-/// `boundProofShape`.
-fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<(), String> {
-    fn too_large(max_nodes: usize, max_depth: usize) -> String {
+/// `boundRawShape`.
+fn bound_raw_shape(
+    v: &Value,
+    max_nodes: usize,
+    max_depth: usize,
+    role: &str,
+) -> Result<(), String> {
+    fn too_large(role: &str, max_nodes: usize, max_depth: usize) -> String {
         format!(
-            "sigma_verify.proof: proof tree exceeds the proposition's structure \
+            "{role}: sigma tree exceeds the allowed structure \
              (max {max_nodes} nodes, depth {max_depth}) — rejected before traversal (DoS bound)"
         )
     }
@@ -1316,13 +1340,14 @@ fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<()
         nodes_so_far: usize,
         max_nodes: usize,
         max_depth: usize,
+        role: &str,
     ) -> Result<usize, String> {
         if depth > max_depth {
-            return Err(too_large(max_nodes, max_depth));
+            return Err(too_large(role, max_nodes, max_depth));
         }
         let n = nodes_so_far + 1;
         if n > max_nodes {
-            return Err(too_large(max_nodes, max_depth));
+            return Err(too_large(role, max_nodes, max_depth));
         }
         match node {
             Value::Map(m) => match m
@@ -1334,7 +1359,7 @@ fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<()
                 Some(Value::Array(cs)) => {
                     let mut running = n;
                     for c in cs {
-                        running = go(c, depth + 1, running, max_nodes, max_depth)?;
+                        running = go(c, depth + 1, running, max_nodes, max_depth, role)?;
                     }
                     Ok(running)
                 }
@@ -1343,7 +1368,7 @@ fn bound_proof_shape(v: &Value, max_nodes: usize, max_depth: usize) -> Result<()
             _ => Ok(n),
         }
     }
-    go(v, 1, 0, max_nodes, max_depth).map(|_| ())
+    go(v, 1, 0, max_nodes, max_depth, role).map(|_| ())
 }
 
 // --- Proposition parsing (statement only). Malformed => hard error. ---
@@ -1355,6 +1380,37 @@ fn sigma_field<'a>(role: &str, m: &'a [(String, Value)], key: &str) -> Result<&'
         .find(|(k, _)| k == key)
         .map(|(_, v)| v)
         .ok_or_else(|| format!("{role}: missing required field '{key}'"))
+}
+
+/// IMPL-2 / IMPL-5: reject any field outside the canonical schema for this node kind, so the raw
+/// proposition / proof encoding is canonical (no ignored field can inflate the DoS shape bound or
+/// leave the bytes ambiguous for logs / caches / external signing layers). Mirrors the Scala
+/// `sigmaRejectUnknownFields`.
+fn sigma_reject_unknown_fields(
+    role: &str,
+    m: &[(String, Value)],
+    allowed: &[&str],
+) -> Result<(), String> {
+    match m.iter().find(|(k, _)| !allowed.contains(&k.as_str())) {
+        Some((k, _)) => Err(format!(
+            "{role}: unknown field '{k}' (allowed: {})",
+            allowed.join(", ")
+        )),
+        None => Ok(()),
+    }
+}
+
+/// IMPL-3 (DoS): parse a sigma message (arbitrary-width hex) and enforce the absolute length cap.
+/// Shared by `sigma_verify` and `prove_dhtuple_verify`. Mirrors the Scala `parseSigmaMessage`.
+fn parse_sigma_message(hex: &str, role: &str) -> Result<Vec<u8>, String> {
+    let bytes = hb::parse_bytes(hex, None, role)?;
+    if bytes.len() > SIGMA_MAX_MESSAGE_BYTES {
+        return Err(format!(
+            "{role}: message too long ({} > {SIGMA_MAX_MESSAGE_BYTES} bytes) — DoS bound",
+            bytes.len()
+        ));
+    }
+    Ok(bytes)
 }
 
 /// Parse a G1 statement point: on-curve check + canonical 64-byte re-encoding.
@@ -1408,10 +1464,12 @@ fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
     match v {
         Value::Map(m) => match sigma_type(role, m)? {
             "dlog" => {
+                sigma_reject_unknown_fields(role, m, &["type", "pk"])?;
                 let (pk, b) = sigma_point(role, m, "pk")?;
                 Ok(PropNode::Dlog { pk, pk_bytes: b })
             }
             "dhtuple" => {
+                sigma_reject_unknown_fields(role, m, &["type", "g", "h", "u", "v"])?;
                 let (g, g_bytes) = sigma_point(role, m, "g")?;
                 let (h, h_bytes) = sigma_point(role, m, "h")?;
                 let (u, u_bytes) = sigma_point(role, m, "u")?;
@@ -1428,6 +1486,7 @@ fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
                 })
             }
             "and" => {
+                sigma_reject_unknown_fields(role, m, &["type", "children"])?;
                 let cs = sigma_children_values(role, m)?;
                 let children = cs
                     .iter()
@@ -1437,6 +1496,7 @@ fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
                 Ok(PropNode::And(children))
             }
             "or" => {
+                sigma_reject_unknown_fields(role, m, &["type", "children"])?;
                 let cs = sigma_children_values(role, m)?;
                 let children = cs
                     .iter()
@@ -1446,6 +1506,7 @@ fn parse_prop_node(v: &Value, role: &str) -> Result<PropNode, String> {
                 Ok(PropNode::Or(children))
             }
             "threshold" => {
+                sigma_reject_unknown_fields(role, m, &["type", "k", "children"])?;
                 let k = sigma_int(role, m, "k")?;
                 let cs = sigma_children_values(role, m)?;
                 let children = cs
@@ -1520,14 +1581,17 @@ fn parse_proof_node(v: &Value, role: &str) -> Result<ProofNode, String> {
             let typ = sigma_type(role, m)?;
             match typ {
                 "dlog" => {
+                    sigma_reject_unknown_fields(role, m, &["type", "e", "z"])?;
                     let z = sigma_response(role, m)?;
                     Ok(ProofNode::Dlog { e, z })
                 }
                 "dhtuple" => {
+                    sigma_reject_unknown_fields(role, m, &["type", "e", "z"])?;
                     let z = sigma_response(role, m)?;
                     Ok(ProofNode::DhTuple { e, z })
                 }
                 "and" => {
+                    sigma_reject_unknown_fields(role, m, &["type", "e", "children"])?;
                     let cs = sigma_children_values(role, m)?;
                     let children = cs
                         .iter()
@@ -1537,6 +1601,7 @@ fn parse_proof_node(v: &Value, role: &str) -> Result<ProofNode, String> {
                     Ok(ProofNode::And { e, children })
                 }
                 "or" => {
+                    sigma_reject_unknown_fields(role, m, &["type", "e", "children"])?;
                     let cs = sigma_children_values(role, m)?;
                     let children = cs
                         .iter()
@@ -1546,6 +1611,7 @@ fn parse_proof_node(v: &Value, role: &str) -> Result<ProofNode, String> {
                     Ok(ProofNode::Or { e, children })
                 }
                 "threshold" => {
+                    sigma_reject_unknown_fields(role, m, &["type", "e", "k", "children"])?;
                     let k = sigma_int(role, m, "k")?;
                     let cs = sigma_children_values(role, m)?;
                     let children = cs
@@ -2500,7 +2566,7 @@ mod tests {
         );
         let e = res.unwrap_err();
         assert!(
-            e.contains("DoS bound") || e.contains("exceeds the proposition"),
+            e.contains("DoS bound") || e.contains("exceeds the allowed structure"),
             "must be rejected by the structural DoS bound, got: {e}"
         );
     }
@@ -2528,7 +2594,7 @@ mod tests {
             "deeply-nested proof beyond the proposition depth must be a hard error (DoS depth cap)"
         );
         assert!(
-            res.unwrap_err().contains("exceeds the proposition"),
+            res.unwrap_err().contains("exceeds the allowed structure"),
             "must be rejected by the structural DoS bound"
         );
     }

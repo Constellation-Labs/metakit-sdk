@@ -522,14 +522,31 @@ const mapGet = (m: Map<string, JsonLogicValue>, key: string): JsonLogicValue | u
   m.get(key);
 
 /**
+ * Mirror of crypto-ops `SIGMA_MAX_PROOF_DEPTH` (IMPL-1 gas-side cap). MUST stay in
+ * sync with the verifier's depth cap (gas-eval has no import edge to crypto-ops).
+ */
+const SIGMA_MAX_PROOF_DEPTH = 64;
+
+/**
  * Count `[dlogLeaves, dhtupleLeaves, connectiveNodes]` in a `sigma_verify`
  * proposition tree, to pre-charge per-leaf / per-node gas from the shape.
  * Recognises the same node schema the verifier parses
  * (`{"type": dlog|dhtuple|and|or|threshold, ...}`); any unrecognised shape
  * contributes `[0, 0, 0]`. A connective counts as ONE node INCLUDING the root,
  * then folds its `children`. Byte-for-byte mirror of Rust `sigma_prop_shape`.
+ *
+ * IMPL-1 (gas-side DoS): this walk runs in the pre-charge BEFORE gas is consumed,
+ * on the attacker-supplied proposition. Cap its RECURSION DEPTH with the same
+ * absolute bound the verifier enforces so a deeply nested proposition cannot drive
+ * unbounded stack growth here. Width is naturally priced (wide -> many leaves ->
+ * high cost -> out-of-gas) and the verifier's `boundRawShape` rejects over-cap trees.
  */
-const sigmaPropShape = (v: JsonLogicValue): [bigint, bigint, bigint] => {
+const sigmaPropShape = (v: JsonLogicValue): [bigint, bigint, bigint] => sigmaPropShapeDepth(v, 1);
+
+const sigmaPropShapeDepth = (v: JsonLogicValue, depth: number): [bigint, bigint, bigint] => {
+  if (depth > SIGMA_MAX_PROOF_DEPTH) {
+    return [0n, 0n, 0n];
+  }
   if (v.tag === 'map') {
     const t = v.value.get('type');
     if (t !== undefined && t.tag === 'string') {
@@ -546,7 +563,7 @@ const sigmaPropShape = (v: JsonLogicValue): [bigint, bigint, bigint] => {
         let th = 0n;
         let n = 1n;
         for (const c of cs) {
-          const [cd, ct, cn] = sigmaPropShape(c);
+          const [cd, ct, cn] = sigmaPropShapeDepth(c, depth + 1);
           d += cd;
           th += ct;
           n += cn;
