@@ -13,7 +13,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { jsonLogic } from '../src/json-logic';
+import { jsonLogic } from '../src';
 
 interface TestCase {
   expr: string;

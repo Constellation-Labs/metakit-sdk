@@ -22,8 +22,11 @@ import type {
   TransferResult,
 } from '../currency-types';
 import { createCurrencyTransaction, hashCurrencyTransaction } from '../currency-transaction';
-import { getPublicKeyFromPrivate, getDagAddressFromPublicKey } from '../crypto';
-import type { Signed } from '../types';
+import {
+  getPublicKeyFromPrivate,
+  getDagAddressFromPublicKey,
+} from '@constellation-network/metagraph-sdk-core';
+import type { Signed } from '@constellation-network/metagraph-sdk-core';
 
 /**
  * Supported L1 layer types

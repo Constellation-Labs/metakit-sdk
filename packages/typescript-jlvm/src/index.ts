@@ -6,7 +6,7 @@
  *
  * @example
  * ```typescript
- * import { jsonLogic } from '@constellation-network/metagraph-sdk/json-logic';
+ * import { jsonLogic } from '@constellation-network/metagraph-sdk-jlvm';
  *
  * // Parse and evaluate a JSON Logic expression
  * const result = jsonLogic.apply(

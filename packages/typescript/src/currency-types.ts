@@ -4,7 +4,7 @@
  * @packageDocumentation
  */
 
-import type { Signed } from './types';
+import type { Signed } from '@constellation-network/metagraph-sdk-core';
 
 /**
  * Reference to a previous transaction for chaining

@@ -12,11 +12,11 @@ import {
   getDagAddressFromPublicKey,
   validateDagAddress,
   sha256Hex,
-} from './crypto';
+} from '@constellation-network/metagraph-sdk-core';
 import { encodeTransaction, kryoSerialize, generateSalt } from './transaction-encoding';
 import type { CurrencyTransaction, TransactionReference, TransferParams } from './currency-types';
 import { TOKEN_DECIMALS } from './currency-types';
-import type { VerificationResult, SignatureProof } from './types';
+import type { VerificationResult, SignatureProof } from '@constellation-network/metagraph-sdk-core';
 
 /**
  * Convert token amount to smallest units

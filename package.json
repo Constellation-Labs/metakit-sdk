@@ -1,0 +1,2 @@
+{ "name": "metakit-sdk-monorepo", "private": true,
+  "workspaces": ["packages/typescript-core", "packages/typescript-jlvm", "packages/typescript"] }
