@@ -1,5 +1,5 @@
 [package]
-name = "poseidon-bn254"
+name = "constellation-metagraph-sdk-poseidon-bn254"
 version = "1.8.0-rc.1"
 edition = "2021"
 authors = ["Constellation Network"]

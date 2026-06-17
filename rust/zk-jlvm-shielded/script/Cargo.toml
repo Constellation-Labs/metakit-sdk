@@ -1,5 +1,5 @@
 [package]
-name = "zk-jlvm-shielded-script"
+name = "constellation-metagraph-sdk-confidential-state-script"
 version = "0.1.0"
 edition = "2021"
 default-run = "zk-jlvm-shielded"
@@ -11,8 +11,8 @@ path = "src/main.rs"
 [dependencies]
 # `cuda` enables the SP1 GPU prover when SP1_PROVER=cuda; CPU is the default.
 sp1-sdk = { version = "6.0.1", features = ["blocking", "cuda"] }
-zk-jlvm-shielded-lib = { path = "../lib" }
-poseidon-bn254 = { path = "../../poseidon-bn254" }
+zk-jlvm-shielded-lib = { path = "../lib", package = "constellation-metagraph-sdk-confidential-state-lib" }
+poseidon-bn254 = { path = "../../poseidon-bn254", package = "constellation-metagraph-sdk-poseidon-bn254" }
 alloy-sol-types = { workspace = true }
 num-bigint = "0.4"
 serde_json = "1.0"

@@ -1,5 +1,5 @@
 [package]
-name = "zk-shielded-script"
+name = "constellation-metagraph-sdk-confidential-transfer-script"
 version = "0.1.0"
 edition = "2021"
 default-run = "zk-shielded"
@@ -11,8 +11,8 @@ path = "src/main.rs"
 [dependencies]
 # `cuda` enables the SP1 GPU prover (Moongate) when SP1_PROVER=cuda; CPU is the default.
 sp1-sdk = { version = "6.0.1", features = ["blocking", "cuda"] }
-zk-shielded-lib = { path = "../lib" }
-poseidon-bn254 = { path = "../../poseidon-bn254" }
+zk-shielded-lib = { path = "../lib", package = "constellation-metagraph-sdk-confidential-transfer-lib" }
+poseidon-bn254 = { path = "../../poseidon-bn254", package = "constellation-metagraph-sdk-poseidon-bn254" }
 num-bigint = "0.4"
 alloy-sol-types = { workspace = true }
 serde = { version = "1.0", features = ["derive"] }
