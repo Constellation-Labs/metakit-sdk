@@ -56,6 +56,7 @@ import {
   opBn254Add,
   opBn254Mul,
   opBn254Pairing,
+  opGroth16Verify,
   opPmtVerify,
   opPoseidon,
   opProveDhtupleVerify,
@@ -624,6 +625,8 @@ export class Evaluator {
         return opBn254Mul(values);
       case 'bn254_pairing':
         return opBn254Pairing(values);
+      case 'groth16_verify':
+        return opGroth16Verify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }

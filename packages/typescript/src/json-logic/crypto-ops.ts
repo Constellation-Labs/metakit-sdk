@@ -406,6 +406,305 @@ export const opBn254Pairing = (values: JsonLogicValue[]): JsonLogicValue => {
 };
 
 // ===========================================================================
+// TIER-3a: SP1 Groth16-BN254 verifier (`groth16_verify`).
+//   Byte-for-byte port of the Rust crypto.rs groth16 module (itself a port of
+//   the Scala Sp1Groth16Verifier + Groth16Verifier, SP1 groth16 circuit v6.1.0).
+//     groth16_verify([vkeyHex(32B), publicValuesHex, proofHex]) -> bool
+//   * vkey MUST be exactly 32 bytes (wrong width -> error);
+//   * publicValues / proof are arbitrary-width byte strings;
+//   * a non-canonical (>= P) proof coordinate is a hard ENCODING error;
+//   * any other invalidity (off-curve / non-subgroup / wrong pairing / bad
+//     framing) verifies to `false`.
+// ===========================================================================
+
+/** First 4 bytes of `VERIFIER_HASH()` from SP1VerifierGroth16.sol (v6.1.0). */
+const GROTH16_VERIFIER_SELECTOR = Uint8Array.of(0x43, 0x88, 0xa2, 0x1c);
+
+/** `4 + 32 * 11` = selector + (exitCode, vkRoot, nonce, proof[8]). */
+const GROTH16_EXPECTED_PROOF_LENGTH = 4 + 32 * 11;
+
+/** `VK_ROOT()` from SP1VerifierGroth16.sol (v6.1.0). */
+const GROTH16_VK_ROOT = BigInt(
+  '0x002f850ee998974d6cc00e50cd0814b098c05bfade466d28573240d057f25352'
+);
+
+/** Mask `(1 << 253) - 1` applied to the public-values sha256 digest. */
+const GROTH16_DIGEST_MASK = (1n << 253n) - 1n;
+
+/** Number of public inputs the SP1 v6.1.0 verifier expects. */
+const GROTH16_NUM_PUBLIC_INPUTS = 5;
+
+/**
+ * Sentinel prefix marking a MALFORMED-ENCODING error (a proof coordinate `>= P`,
+ * a non-canonical field-element encoding). The opcode layer maps an ENCODING
+ * error to a hard error and any other invalidity to `false`. Kept in lockstep
+ * with the Scala `Groth16Verifier.EncodingErrorPrefix` / Rust ENCODING_ERROR_PREFIX.
+ */
+const GROTH16_ENCODING_ERROR_PREFIX = 'ENCODING: ';
+
+const bi = (s: string): bigint => BigInt(s);
+
+// Hardcoded Groth16 VK (Groth16Verifier, SP1 groth16 v6.1.0). G2 constants are
+// already negated (BETA/GAMMA/DELTA). _0 = real (c0), _1 = imag (c1).
+const groth16Vk = (() => {
+  const g1 = (x: string, y: string): InstanceType<typeof G1Point> =>
+    nobleG1OnCurve({ x: bi(x), y: bi(y) }, 'groth16 vk G1');
+  const g2 = (x0: string, x1: string, y0: string, y1: string): InstanceType<typeof G2Point> =>
+    nobleG2OnCurve({ xReal: bi(x0), xImag: bi(x1), yReal: bi(y0), yImag: bi(y1) }, 'groth16 vk G2');
+  return {
+    alpha: g1(
+      '15279411540481963483749982645131486879260751823620651493692884460296130891713',
+      '15872895802316430142046488442363778159164596024024981740547841316113839677454'
+    ),
+    betaNeg: g2(
+      '6145571844528009385227270901181311049451968424667282936975270874464890915386',
+      '12771786691609444002416405093387705070206640282801320788762089789398249455552',
+      '4488883874756188982949192438322346627006627895205628031405236004639323835517',
+      '1735169520034591855846686229876971881413094324547255227368057137445726296809'
+    ),
+    gammaNeg: g2(
+      '10857046999023057135944570762232829481370756359578518086990519993285655852781',
+      '11559732032986387107991004021392285783925812861821192530917403151452391805634',
+      '13392588948715843804641432497768002650278120570034223513918757245338268106653',
+      '17805874995975841540914202342111839520379459829704422454583296818431106115052'
+    ),
+    deltaNeg: g2(
+      '10465707362494635227101096813108413078937487707553051407465224907243675430929',
+      '8014260607368773541998918215611927658290278403999176336697043972644519659243',
+      '19389283139277148919245778864125350153699493315071306268776225113374776030523',
+      '16335894885742905444968709132584769120387318573561090701871591658625758958113'
+    ),
+    constant: g1(
+      '20281192269339458123687070687118212311775320590888414619062163734024177320592',
+      '4733327396113282720944079206751955104965328647794767422434462962576999295035'
+    ),
+    pubPoints: [
+      g1(
+        '6933777020392885277709527453058337947310422411038083362275568070104688005311',
+        '981134475045095331624771061624185350383934842154508663637397442918499383708'
+      ),
+      g1(
+        '4994703368938944727583784298191985234033403433117347198670233075674015451426',
+        '8251219283963080431419977720140972699009004688253176317231536639169726973868'
+      ),
+      g1(
+        '4290838847096051522936899065591427041691227664160185228987863596451823131267',
+        '20588566735491008722164159313316540988426258906449040460220495569364391658476'
+      ),
+      g1(
+        '10868099250506113890234768256645470833285719586092080686774540776807380789751',
+        '481415511937576118656966359026147167555048629225366340770167496559184060449'
+      ),
+      g1(
+        '248210862999154995000539012177951057105481472135341820587821789934938975214',
+        '4435539404843896136682123140600986858809597152596796648926707165831171499457'
+      ),
+    ],
+  };
+})();
+
+/** `sha256(publicValues) & ((1 << 253) - 1)`. */
+const groth16HashPublicValues = (publicValues: Uint8Array): bigint =>
+  hb.bytesToBigInt(sha256(publicValues)) & GROTH16_DIGEST_MASK;
+
+/**
+ * Public-input MSM `L = CONSTANT + sum_i input_i * PUB_i`. Each scalar must
+ * already be reduced (`< R`); unreduced scalars are rejected (mirrors Solidity's
+ * `lt(s, R)` checks). Throws an ENCODING-free invalidity error on bad input.
+ */
+const groth16PublicInputMsm = (input: bigint[]): InstanceType<typeof G1Point> => {
+  if (input.length !== GROTH16_NUM_PUBLIC_INPUTS) {
+    throw new Error(`expected ${GROTH16_NUM_PUBLIC_INPUTS} public inputs, got ${input.length}`);
+  }
+  if (input.some((s) => s >= GROUP_ORDER)) {
+    throw new Error('public input not in scalar field');
+  }
+  let acc = groth16Vk.constant;
+  for (let i = 0; i < input.length; i++) {
+    const s = input[i];
+    // G1.multiply reduces the scalar mod R; s is already < R here. Use
+    // multiplyUnsafe to admit s == 0 (multiply throws on 0 / out-of-range).
+    acc = acc.add(groth16Vk.pubPoints[i].multiplyUnsafe(s));
+  }
+  return acc;
+};
+
+/**
+ * Reject a non-canonical (`>= P`) proof coordinate. A coordinate `>= P` is a
+ * malformed ENCODING (ark / Besu would silently reduce mod P) and is thrown with
+ * the [`GROTH16_ENCODING_ERROR_PREFIX`] sentinel. Otherwise returns the value.
+ */
+const groth16CheckedFq = (value: bigint, role: string): bigint => {
+  if (value >= P) {
+    throw new Error(
+      `${GROTH16_ENCODING_ERROR_PREFIX}${role}: coordinate not in base field (>= P): ${value}`
+    );
+  }
+  return value;
+};
+
+/** Decode `count` consecutive big-endian uint256 words starting at `offset`. */
+const groth16DecodeWords = (bytes: Uint8Array, offset: number, count: number): bigint[] => {
+  const out: bigint[] = [];
+  for (let i = 0; i < count; i++) {
+    const start = offset + i * 32;
+    out.push(hb.bytesToBigInt(bytes.subarray(start, start + 32)));
+  }
+  return out;
+};
+
+/**
+ * Verify an uncompressed Groth16 proof against five public inputs. `proof` is
+ * `(A.x, A.y, B.x_imag, B.x_real, B.y_imag, B.y_real, C.x, C.y)` in EIP-197
+ * order. Throws (ENCODING-prefixed for non-canonical coordinates, otherwise a
+ * plain invalidity reason) on any failure; returns normally on a valid proof.
+ */
+const groth16VerifyProof = (proof: bigint[], input: bigint[]): void => {
+  if (proof.length !== 8) {
+    throw new Error(`expected 8 proof elements, got ${proof.length}`);
+  }
+  const l = groth16PublicInputMsm(input);
+
+  // (1) Canonical-encoding check on every coordinate (>= P -> ENCODING error).
+  const aX = groth16CheckedFq(proof[0], 'proof A.x');
+  const aY = groth16CheckedFq(proof[1], 'proof A.y');
+  const bXImag = groth16CheckedFq(proof[2], 'proof B.x_imag');
+  const bXReal = groth16CheckedFq(proof[3], 'proof B.x_real');
+  const bYImag = groth16CheckedFq(proof[4], 'proof B.y_imag');
+  const bYReal = groth16CheckedFq(proof[5], 'proof B.y_real');
+  const cX = groth16CheckedFq(proof[6], 'proof C.x');
+  const cY = groth16CheckedFq(proof[7], 'proof C.y');
+
+  // (2)+(3) On-curve, subgroup, and non-identity checks (cryptographic
+  // invalidity -> error WITHOUT the encoding prefix -> `false` at the opcode).
+  const a = groth16CheckG1(aX, aY, 'proof A');
+  // B in G2; EIP-197 order in `proof`: imag before real.
+  const b = groth16CheckG2(bXReal, bXImag, bYReal, bYImag, 'proof B');
+  const c = groth16CheckG1(cX, cY, 'proof C');
+
+  // e(A, B) * e(C, -delta) * e(alpha, -beta) * e(L, -gamma) == 1
+  const product = bn254.pairingBatch([
+    { g1: a, g2: b },
+    { g1: c, g2: groth16Vk.deltaNeg },
+    { g1: groth16Vk.alpha, g2: groth16Vk.betaNeg },
+    { g1: l, g2: groth16Vk.gammaNeg },
+  ]);
+  if (!Fp12.eql(product, Fp12.ONE)) {
+    throw new Error('pairing check failed');
+  }
+};
+
+/**
+ * G1 proof-point validation: on-curve and non-identity. BN254 G1 has cofactor 1,
+ * so on-curve implies correct-subgroup; the identity is a degenerate proof point.
+ */
+const groth16CheckG1 = (x: bigint, y: bigint, role: string): InstanceType<typeof G1Point> => {
+  if (x === 0n && y === 0n) {
+    throw new Error(`${role}: point is the identity (degenerate)`);
+  }
+  const fp = bn254.fields.Fp;
+  if (!fp.eql(fp.sqr(y), fp.add(fp.mul(fp.sqr(x), x), 3n))) {
+    throw new Error(`${role}: point is not on the BN254 G1 curve`);
+  }
+  return G1Point.fromAffine({ x, y });
+};
+
+/**
+ * G2 proof-point validation: on-curve, non-identity, AND order-r subgroup
+ * membership (G2 has a non-trivial cofactor). Cryptographic invalidity -> error.
+ */
+const groth16CheckG2 = (
+  xReal: bigint,
+  xImag: bigint,
+  yReal: bigint,
+  yImag: bigint,
+  role: string
+): InstanceType<typeof G2Point> => {
+  const x = { c0: xReal, c1: xImag };
+  const y = { c0: yReal, c1: yImag };
+  if (Fp2.is0(x) && Fp2.is0(y)) {
+    throw new Error(`${role}: point is the identity (degenerate)`);
+  }
+  if (!Fp2.eql(Fp2.sqr(y), Fp2.add(Fp2.mul(Fp2.sqr(x), x), G2_B))) {
+    throw new Error(`${role}: point is not on the BN254 G2 curve`);
+  }
+  const point = G2Point.fromAffine({ x, y });
+  if (!point.isTorsionFree()) {
+    throw new Error(`${role}: G2 point is not in the order-r subgroup`);
+  }
+  return point;
+};
+
+/**
+ * Full SP1 verify: returns normally on success, throws `Error(reason)` on any
+ * failure. `programVkey` is the (already width-checked, 32-byte) program VK.
+ */
+const groth16Verify = (
+  programVkey: Uint8Array,
+  publicValues: Uint8Array,
+  proofBytes: Uint8Array
+): void => {
+  if (programVkey.length !== 32) {
+    throw new Error(`programVKey must be 32 bytes, got ${programVkey.length}`);
+  }
+  if (proofBytes.length !== GROTH16_EXPECTED_PROOF_LENGTH) {
+    throw new Error(
+      `proofBytes must be ${GROTH16_EXPECTED_PROOF_LENGTH} bytes, got ${proofBytes.length}`
+    );
+  }
+  // Selector check.
+  const selectorOk =
+    proofBytes.length >= 4 && GROTH16_VERIFIER_SELECTOR.every((b, i) => proofBytes[i] === b);
+  if (!selectorOk) {
+    throw new Error('wrong verifier selector');
+  }
+  // abi.decode(proofBytes[4:], (uint256, uint256, uint256, uint256[8]))
+  const words = groth16DecodeWords(proofBytes, 4, 11);
+  const exitCode = words[0];
+  const vkRootWord = words[1];
+  const nonce = words[2];
+  const proof = words.slice(3, 11);
+
+  if (exitCode !== 0n) {
+    throw new Error('invalid exit code');
+  }
+  if (vkRootWord !== GROTH16_VK_ROOT) {
+    throw new Error('invalid vk root');
+  }
+  const programVkeyInt = hb.bytesToBigInt(programVkey);
+  const publicValuesDigest = groth16HashPublicValues(publicValues);
+  const inputs = [programVkeyInt, publicValuesDigest, exitCode, vkRootWord, nonce];
+  groth16VerifyProof(proof, inputs);
+};
+
+/** `groth16_verify([vkeyHex(32B), publicValuesHex, proofHex]) -> bool`. */
+export const opGroth16Verify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 3) {
+    return fail('groth16_verify: expected [vkeyHex, publicValuesHex, proofHex]');
+  }
+  const vkeyHex = expectStr('groth16_verify vkey', values[0]);
+  const pubHex = expectStr('groth16_verify publicValues', values[1]);
+  const proofHex = expectStr('groth16_verify proof', values[2]);
+  const vkey = hb.parseBytes(vkeyHex, 32, 'groth16_verify vkey');
+  const publicValues = hb.parseBytes(pubHex, null, 'groth16_verify publicValues');
+  const proof = hb.parseBytes(proofHex, null, 'groth16_verify proof');
+  // Error-vs-false discipline (lockstep with the Scala/Rust opcode layer):
+  //   * success            -> true
+  //   * ENCODING: ... error -> hard opcode error (non-canonical encoding);
+  //   * any other error     -> false (well-formed but cryptographically invalid).
+  try {
+    groth16Verify(vkey, publicValues, proof);
+    return boolValue(true);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.startsWith(GROTH16_ENCODING_ERROR_PREFIX)) {
+      return fail(`groth16_verify: ${msg}`);
+    }
+    return boolValue(false);
+  }
+};
+
+// ===========================================================================
 // SIGMA PROTOCOLS (classical, no-trusted-setup, Ergo / EIP-11 family).
 //   Byte-for-byte port of the Rust crypto.rs Sigma section (itself a port of
 //   the Scala CryptoOps Sigma object):

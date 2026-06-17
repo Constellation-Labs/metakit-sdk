@@ -49,6 +49,7 @@ const IMPLEMENTED = new Set([
   'bn254_add',
   'bn254_mul',
   'bn254_pairing',
+  'groth16_verify',
 ]);
 
 const vectorsPath = path.join(__dirname, '../../..', 'shared', 'zk_opcode_test_vectors.json');
