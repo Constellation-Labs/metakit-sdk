@@ -25,8 +25,10 @@ import { sha256 } from '@noble/hashes/sha2.js';
 
 import { JsonLogicRuntimeError } from './errors';
 import type { JsonLogicValue } from './value';
-import { boolValue, strValue } from './value';
+import { boolValue, mapValue, nullValue, strValue } from './value';
+import { encodeValue, parseValue } from './codec';
 import * as hb from './hex-bytes';
+import { canonicalizeNoDropNulls } from './canonical-json';
 import { MAX_INPUTS, merkleVerifyInclusion, poseidonHash } from './poseidon';
 
 const fail = (message: string): never => {
@@ -1622,4 +1624,884 @@ export const opBlsAggregateVerify = (values: JsonLogicValue[]): JsonLogicValue =
     return boolValue(blsFastAggregateVerifyRaw(pks, msg, agg));
   }
   return fail('bls_aggregate_verify: expected [[pkHex(48B), ...], msgHex, aggSigHex(96B)]');
+};
+
+// ===========================================================================
+// TIER-2a: authenticated-database opcodes -- smt_verify / mpt_verify /
+//   mpt_prefix_verify. Byte-for-byte port of rust/jlvm-core/src/auth_db.rs
+//   (itself a port of the Scala AuthDbOps + the SMT / MPT verifiers).
+//
+//   Hashing substrate: every node / value digest is
+//     Hash.fromBytes(prefix ++ canonicalBytes(json))
+//   where canonicalBytes is the RFC-8785 (no-null-drop) encoding of the value's
+//   circe Json (sorted keys, numbers via f64) and Hash.fromBytes is
+//   lowercase-hex SHA-256. Digest equality is exact string equality on the
+//   64-char lowercase hex form.
+//
+//   Error discipline: undecodable input (bad hex, a proof not matching its
+//   declared shape, wrong arg count/type) throws; a WELL-FORMED proof that does
+//   not verify is a `false` / `valid:false` value.
+// ===========================================================================
+
+/** Lowercase-hex SHA-256 of `bytes` (`Hash.fromBytes`); the 64-char hex digest. */
+const hashFromBytes = (bytes: Uint8Array): string => {
+  const digest = sha256(bytes);
+  let s = '';
+  for (const b of digest) {
+    s += b.toString(16).padStart(2, '0');
+  }
+  return s;
+};
+
+/** UTF-8 bytes of a string. */
+const utf8Bytes = (s: string): Uint8Array => new TextEncoder().encode(s);
+
+/** `Hash.empty`: 64 ASCII '0' characters (32 zero bytes read as hex). */
+const HASH_EMPTY = '0'.repeat(64);
+
+/**
+ * `JsonBinaryHasher.computeDigest(json, prefix)` for a circe-Json-shaped plain
+ * value: `Hash.fromBytes(prefix ++ canonicalBytes(json))`.
+ */
+const computeDigestPrefixed = (json: unknown, prefix: Uint8Array): string => {
+  let canon: Uint8Array;
+  try {
+    canon = utf8Bytes(canonicalizeNoDropNulls(json));
+  } catch {
+    // Unreachable for the auth-DB proof/value JSONs (no NaN/Infinity); an empty
+    // digest can never equal a real 64-hex digest, so this degrades to invalid.
+    return '';
+  }
+  const pre = new Uint8Array(prefix.length + canon.length);
+  pre.set(prefix, 0);
+  pre.set(canon, prefix.length);
+  return hashFromBytes(pre);
+};
+
+/** `computeDigest(json)` with the empty prefix: an MPT value digest. */
+const computeValueDigest = (json: unknown): string =>
+  computeDigestPrefixed(json, new Uint8Array(0));
+
+/** Lowercase-hex / `0x`-prefix validation: `^0x[0-9a-f]*$`. */
+const isValidHex = (hex: string): boolean => /^0x[0-9a-f]*$/.test(hex);
+
+/**
+ * `parseBytes(hex, None)` then `Hash(Hex.fromBytes(bytes).value)`: validate
+ * `0x`-lowercase + even-length and return the raw lowercase hex body (no `0x`) —
+ * the `Hash.value` form the SMT/MPT roots compare on. Wrong WIDTH is permitted;
+ * it simply fails the verify (RootMismatch). Mirrors Rust `parse_hash_hex`.
+ */
+const parseHashHex = (hex: string, role: string): string => {
+  if (!isValidHex(hex)) {
+    return fail(`${role}: malformed hex (expected lowercase ^0x[0-9a-f]*$): '${hex}'`);
+  }
+  const body = hex.slice(2);
+  if (body.length % 2 !== 0) {
+    return fail(`${role}: odd-length hex body (${body.length} nibbles): '${hex}'`);
+  }
+  return body;
+};
+
+/**
+ * `parseNibbleHex(hex)`: validate `0x`-lowercase (odd nibble counts ALLOWED —
+ * MPT keys/prefixes are nibble-granular) and return the raw hex body (no `0x`).
+ */
+const parseNibbleHex = (hex: string, role: string): string => {
+  if (!isValidHex(hex)) {
+    return fail(`${role}: malformed hex (expected lowercase ^0x[0-9a-f]*$): '${hex}'`);
+  }
+  return hex.slice(2);
+};
+
+/** Bridge a JLVM value to its plain-JSON (circe-Json-equivalent) form. */
+const toJson = (v: JsonLogicValue): unknown => encodeValue(v);
+
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+
+const asStr = (v: unknown): string | undefined => (typeof v === 'string' ? v : undefined);
+
+// ---------------------------------------------------------------------------
+// SMT verifier (port of crypto/smt + api/SparseMerkleVerifier).
+// ---------------------------------------------------------------------------
+
+/** Total number of SMT position bits (256 -- a SHA-256 hash). */
+const SMT_POSITION_BITS = 256;
+const SMT_LEAF_PREFIX = Uint8Array.of(0);
+const SMT_INTERNAL_PREFIX = Uint8Array.of(1);
+
+interface SmtSibling {
+  digest: string;
+}
+
+type SmtProof =
+  | {
+      kind: 'inclusion';
+      key: string;
+      value: Uint8Array;
+      valueDigest: string;
+      siblings: SmtSibling[];
+    }
+  | { kind: 'absenceDefault'; key: string; siblings: SmtSibling[] }
+  | {
+      kind: 'absenceOtherLeaf';
+      key: string;
+      occupyingKey: string;
+      occupyingDataDigest: string;
+      siblings: SmtSibling[];
+    };
+
+const smtProofKey = (p: SmtProof): string => p.key;
+
+const fieldStr = (obj: Record<string, unknown>, key: string, role: string): string => {
+  const v = asStr(obj[key]);
+  if (v === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing/typed-wrong '${key}')`);
+  }
+  return v;
+};
+
+const decodeSmtSiblings = (v: unknown, role: string): SmtSibling[] => {
+  if (!Array.isArray(v)) {
+    return fail(`${role}: undecodable proof JSON (siblings not an array)`);
+  }
+  return v.map((s) => {
+    if (isPlainObject(s)) {
+      const d = asStr(s.digest);
+      if (d !== undefined) {
+        return { digest: d };
+      }
+    }
+    return fail(`${role}: undecodable proof JSON (bad sibling)`);
+  });
+};
+
+/** `SparseMerkleProof.valueDecoder`: a raw (no `0x`) hex string -> bytes. */
+const decodeHexValue = (hex: string, role: string): Uint8Array => {
+  const lower = hex.toLowerCase();
+  if (lower.length % 2 !== 0 || !/^[0-9a-f]*$/.test(lower)) {
+    return fail(`${role}: undecodable proof JSON (value not hex): '${hex}'`);
+  }
+  const out = new Uint8Array(lower.length / 2);
+  for (let i = 0; i < out.length; i++) {
+    out[i] = parseInt(lower.slice(i * 2, i * 2 + 2), 16);
+  }
+  return out;
+};
+
+/** Decode an SMT proof from a plain object, mirroring `SparseMerkleProof.decoder`. */
+const decodeSmtProof = (j: unknown): SmtProof => {
+  const role = 'smt_verify proof';
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  const ty = asStr(j.type);
+  if (ty === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing type)`);
+  }
+  const key = fieldStr(j, 'key', role);
+  const siblings = decodeSmtSiblings(j.siblings, role);
+  if (ty === 'Inclusion') {
+    const valueHex = fieldStr(j, 'value', role);
+    const value = decodeHexValue(valueHex, role);
+    const valueDigest = fieldStr(j, 'valueDigest', role);
+    return { kind: 'inclusion', key, value, valueDigest, siblings };
+  }
+  if (ty === 'Absence') {
+    if (!isPlainObject(j.witness)) {
+      return fail(`${role}: undecodable proof JSON (missing witness)`);
+    }
+    const wty = asStr(j.witness.type);
+    if (wty === undefined) {
+      return fail(`${role}: undecodable proof JSON (missing witness type)`);
+    }
+    if (wty === 'Default') {
+      return { kind: 'absenceDefault', key, siblings };
+    }
+    if (wty === 'OtherLeaf') {
+      const occupyingKey = fieldStr(j.witness, 'occupyingKey', role);
+      const occupyingDataDigest = fieldStr(j.witness, 'occupyingDataDigest', role);
+      return { kind: 'absenceOtherLeaf', key, occupyingKey, occupyingDataDigest, siblings };
+    }
+    return fail(`${role}: Unknown AbsenceWitness type: ${wty}`);
+  }
+  return fail(`${role}: Unknown SparseMerkleProof type: ${ty}`);
+};
+
+/** SMT `position(key) = Hash.fromBytes(key.value.getBytes(UTF_8))`. */
+const smtPosition = (key: string): string => hashFromBytes(utf8Bytes(key));
+
+/** SMT `valueDigest(value) = Hash.fromBytes(value)` (raw-bytes SHA-256). */
+const smtValueDigest = (value: Uint8Array): string => hashFromBytes(value);
+
+/** SMT `leafDigest` = `computeDigest(Leaf{position,valueDigest}, LeafPrefix)`. */
+const smtLeafDigest = (position: string, valueDigest: string): string =>
+  computeDigestPrefixed({ position, valueDigest }, SMT_LEAF_PREFIX);
+
+/** SMT `internalDigest` = `computeDigest(Internal{left,right}, InternalPrefix)`. */
+const smtInternalDigest = (left: string, right: string): string =>
+  computeDigestPrefixed({ left, right }, SMT_INTERNAL_PREFIX);
+
+/** SMT `combine(bit, cur, sibling)`: bit=false -> LEFT, bit=true -> RIGHT. */
+const smtCombine = (bit: boolean, cur: string, sibling: string): string =>
+  bit ? smtInternalDigest(sibling, cur) : smtInternalDigest(cur, sibling);
+
+/** SMT `bit(position, index)`: bit `index` (0 = MSB of first byte), big-endian. */
+const smtBit = (position: string, index: number): boolean => {
+  let bytes: Uint8Array;
+  try {
+    bytes = decodeHexValue(position, 'smt position');
+  } catch {
+    return false;
+  }
+  const byteIdx = Math.floor(index / 8);
+  if (byteIdx >= bytes.length) {
+    return false;
+  }
+  const bitInByte = 7 - (index % 8);
+  return ((bytes[byteIdx] >> bitInByte) & 1) === 1;
+};
+
+/** Fold a terminating digest up to the root, choosing left/right by position bits. */
+const smtFoldUp = (position: string, start: string, siblings: SmtSibling[]): string => {
+  const depth = siblings.length;
+  let cur = start;
+  // (level, sibling) pairs, deepest level first: level d-1 down to 0.
+  for (let i = 0; i < siblings.length; i++) {
+    const sib = siblings[depth - 1 - i];
+    const level = depth - 1 - i;
+    cur = smtCombine(smtBit(position, level), cur, sib.digest);
+  }
+  return cur;
+};
+
+type SmtVerified =
+  | { kind: 'present'; key: string; value: Uint8Array }
+  | { kind: 'absent'; key: string };
+
+/** `SparseMerkleVerifier.verify`: the verified outcome, or `null` if invalid. */
+const smtVerifyProof = (root: string, proof: SmtProof): SmtVerified | null => {
+  if (
+    (proof.kind === 'inclusion' ||
+      proof.kind === 'absenceDefault' ||
+      proof.kind === 'absenceOtherLeaf') &&
+    proof.siblings.length > SMT_POSITION_BITS
+  ) {
+    return null; // MalformedProof: PathTooDeep
+  }
+  if (proof.kind === 'inclusion') {
+    const computed = smtValueDigest(proof.value);
+    if (computed !== proof.valueDigest) {
+      return null; // ValueBindingFailed
+    }
+    const pos = smtPosition(proof.key);
+    const leaf = smtLeafDigest(pos, proof.valueDigest);
+    const recomputed = smtFoldUp(pos, leaf, proof.siblings);
+    return recomputed === root ? { kind: 'present', key: proof.key, value: proof.value } : null;
+  }
+  if (proof.kind === 'absenceDefault') {
+    const pos = smtPosition(proof.key);
+    const recomputed = smtFoldUp(pos, HASH_EMPTY, proof.siblings);
+    return recomputed === root ? { kind: 'absent', key: proof.key } : null;
+  }
+  // absenceOtherLeaf
+  const pos = smtPosition(proof.key);
+  const occPos = smtPosition(proof.occupyingKey);
+  if (occPos === pos) {
+    return null; // MalformedProof: OtherLeafCollidesWithKey
+  }
+  const leaf = smtLeafDigest(occPos, proof.occupyingDataDigest);
+  const recomputed = smtFoldUp(pos, leaf, proof.siblings);
+  return recomputed === root ? { kind: 'absent', key: proof.key } : null;
+};
+
+/** `keyHex(key) = "0x" + key.value.toLowerCase`. */
+const keyHex = (key: string): string => '0x' + key.toLowerCase();
+
+/**
+ * Bridge raw value bytes to a JLVM value: parse as UTF-8 JSON and decode; on
+ * failure, fall back to the `0x`-hex of the bytes. Mirrors `AuthDbOps.valueToJlv`.
+ */
+const valueToJlv = (value: Uint8Array): JsonLogicValue => {
+  try {
+    const s = new TextDecoder('utf-8', { fatal: true }).decode(value);
+    try {
+      return parseValue(JSON.parse(s));
+    } catch {
+      // not JSON -> fall through to hex.
+    }
+  } catch {
+    // not valid UTF-8 -> fall through to hex.
+  }
+  return strValue(hb.encodeBytes(value));
+};
+
+/** Build the `smt_verify` result object `{valid, included, key, value}`. */
+const smtResult = (
+  valid: boolean,
+  included: boolean,
+  key: string,
+  value: JsonLogicValue
+): JsonLogicValue =>
+  mapValue(
+    new Map<string, JsonLogicValue>([
+      ['valid', boolValue(valid)],
+      ['included', boolValue(included)],
+      ['key', strValue(key)],
+      ['value', value],
+    ])
+  );
+
+/** `smt_verify([rootHex, proofJson]) -> {valid, included, key, value}`. */
+export const opSmtVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 2) {
+    return fail('smt_verify: expected [rootHex, proofJson]');
+  }
+  const rootHex = expectStr('smt_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'smt_verify root');
+  const proof = decodeSmtProof(toJson(values[1]));
+  const verified = smtVerifyProof(root, proof);
+  if (verified === null) {
+    return smtResult(false, false, keyHex(smtProofKey(proof)), nullValue());
+  }
+  if (verified.kind === 'present') {
+    return smtResult(true, true, keyHex(verified.key), valueToJlv(verified.value));
+  }
+  return smtResult(true, false, keyHex(verified.key), nullValue());
+};
+
+// ---------------------------------------------------------------------------
+// MPT verifier (port of crypto/mpt + api/MerklePatriciaVerifier).
+// ---------------------------------------------------------------------------
+
+const MPT_LEAF_PREFIX = Uint8Array.of(0);
+const MPT_BRANCH_PREFIX = Uint8Array.of(1);
+const MPT_EXTENSION_PREFIX = Uint8Array.of(2);
+
+type MptCommitment =
+  | { kind: 'leaf'; remaining: string; dataDigest: string }
+  | { kind: 'branch'; pathsDigest: [string, string][] }
+  | { kind: 'extension'; shared: string; childDigest: string };
+
+/** The commitment's prefixed digest via the concrete-type circe encoder shape. */
+const mptCommitmentDigest = (c: MptCommitment): string => {
+  if (c.kind === 'leaf') {
+    return computeDigestPrefixed(
+      { remaining: c.remaining, dataDigest: c.dataDigest },
+      MPT_LEAF_PREFIX
+    );
+  }
+  if (c.kind === 'branch') {
+    const obj: Record<string, string> = {};
+    for (const [k, v] of c.pathsDigest) {
+      obj[k] = v;
+    }
+    return computeDigestPrefixed({ pathsDigest: obj }, MPT_BRANCH_PREFIX);
+  }
+  return computeDigestPrefixed(
+    { shared: c.shared, childDigest: c.childDigest },
+    MPT_EXTENSION_PREFIX
+  );
+};
+
+/** Decode a nibble-sequence field: a string of hex chars (one per nibble). */
+const nibbleStr = (v: unknown, role: string): string => {
+  const s = asStr(v);
+  if (s === undefined) {
+    return fail(`${role}: undecodable proof JSON (nibble field not a string)`);
+  }
+  if (!/^[0-9a-fA-F]*$/.test(s)) {
+    return fail(`${role}: undecodable proof JSON (bad nibble seq '${s}')`);
+  }
+  return s;
+};
+
+const objFieldStr = (obj: Record<string, unknown>, key: string, role: string): string => {
+  const v = asStr(obj[key]);
+  if (v === undefined) {
+    return fail(`${role}: undecodable proof JSON (missing/typed-wrong '${key}')`);
+  }
+  return v;
+};
+
+/** Decode a single `MerklePatriciaCommitment` from `{type, contents}` JSON. */
+const decodeMptCommitment = (j: unknown, role: string): MptCommitment => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (commitment not an object)`);
+  }
+  const ty = asStr(j.type);
+  if (ty === undefined) {
+    return fail(`${role}: undecodable proof JSON (commitment missing type)`);
+  }
+  if (!isPlainObject(j.contents)) {
+    return fail(`${role}: undecodable proof JSON (commitment missing contents)`);
+  }
+  const contents = j.contents;
+  if (ty === 'Leaf') {
+    const remaining = nibbleStr(contents.remaining, role);
+    const dataDigest = objFieldStr(contents, 'dataDigest', role);
+    return { kind: 'leaf', remaining, dataDigest };
+  }
+  if (ty === 'Branch') {
+    if (!isPlainObject(contents.pathsDigest)) {
+      return fail(`${role}: undecodable proof JSON (bad pathsDigest)`);
+    }
+    const pd = contents.pathsDigest;
+    const pathsDigest: [string, string][] = [];
+    for (const k of Object.keys(pd)) {
+      if (k.length !== 1 || !/^[0-9a-fA-F]$/.test(k)) {
+        return fail(`${role}: undecodable proof JSON (bad nibble key '${k}')`);
+      }
+      const h = asStr(pd[k]);
+      if (h === undefined) {
+        return fail(`${role}: undecodable proof JSON (bad pathsDigest value)`);
+      }
+      pathsDigest.push([k, h]);
+    }
+    return { kind: 'branch', pathsDigest };
+  }
+  if (ty === 'Extension') {
+    const shared = nibbleStr(contents.shared, role);
+    const childDigest = objFieldStr(contents, 'childDigest', role);
+    return { kind: 'extension', shared, childDigest };
+  }
+  return fail(`${role}: Unknown type: ${ty}`);
+};
+
+interface MptInclusionProof {
+  path: string;
+  witness: MptCommitment[];
+}
+
+const decodeMptInclusionProof = (j: unknown, role: string): MptInclusionProof => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  const path = objFieldStr(j, 'path', role);
+  if (!Array.isArray(j.witness)) {
+    return fail(`${role}: undecodable proof JSON (witness not an array)`);
+  }
+  const witness = j.witness.map((c) => decodeMptCommitment(c, role));
+  return { path, witness };
+};
+
+/** `Nibble(hex)`: one nibble per char; hex chars map to 0..15, else `char & 0x0f`. */
+const pathNibbles = (path: string): number[] => {
+  const out: number[] = [];
+  for (const ch of path) {
+    const code = ch.charCodeAt(0);
+    if (ch >= '0' && ch <= '9') {
+      out.push(code - 48);
+    } else if (ch >= 'a' && ch <= 'f') {
+      out.push(code - 97 + 10);
+    } else if (ch >= 'A' && ch <= 'F') {
+      out.push(code - 65 + 10);
+    } else {
+      out.push(code & 0x0f);
+    }
+  }
+  return out;
+};
+
+/** Render a 0..15 nibble value as its lowercase hex char. */
+const nibbleChar = (n: number): string => (n & 0x0f).toString(16);
+
+/** Render a nibble slice as a hex string (one char per nibble). */
+const nibblesToStr = (nibbles: number[]): string => nibbles.map(nibbleChar).join('');
+
+/**
+ * `MerklePatriciaVerifier.confirm`: walk the leaf-first witness (`witness.reverse`)
+ * from the root, folding through extension/branch nodes and terminating at a
+ * single leaf. `true` iff the proof reproduces the root for `path`.
+ */
+const mptConfirm = (root: string, proof: MptInclusionProof): boolean => {
+  const commitments: MptCommitment[] = [...proof.witness].reverse();
+  let currentDigest = root;
+  let remaining = pathNibbles(proof.path);
+
+  for (;;) {
+    const head = commitments[0];
+    if (head === undefined) {
+      return false; // InvalidWitness (empty)
+    }
+    if (head.kind === 'leaf' && commitments.length === 1) {
+      const digest = mptCommitmentDigest(head);
+      return digest === currentDigest && nibblesToStr(remaining) === head.remaining;
+    }
+    if (head.kind === 'extension') {
+      const digest = mptCommitmentDigest(head);
+      if (digest !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      currentDigest = head.childDigest;
+      const drop = head.shared.length;
+      remaining = drop > remaining.length ? [] : remaining.slice(drop);
+      commitments.shift();
+      continue;
+    }
+    if (head.kind === 'branch') {
+      // verifyBranch: select child by remainingPath.head BEFORE hashing.
+      if (remaining.length === 0) {
+        return false; // remainingPath.head on empty -> false
+      }
+      const nib = nibbleChar(remaining[0]);
+      const entry = head.pathsDigest.find(([k]) => k === nib);
+      if (entry === undefined) {
+        return false; // InvalidPath
+      }
+      const digest = mptCommitmentDigest(head);
+      if (digest !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      currentDigest = entry[1];
+      remaining = remaining.slice(1);
+      commitments.shift();
+      continue;
+    }
+    // A Leaf that is not the sole remaining commitment, or any other shape.
+    return false;
+  }
+};
+
+/** `mpt_verify([rootHex, keyHex, valueJson, proofJson]) -> bool`. */
+export const opMptVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 4) {
+    return fail('mpt_verify: expected [rootHex, keyHex, valueJson, proofJson]');
+  }
+  const rootHex = expectStr('mpt_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'mpt_verify root');
+  const keyHexS = expectStr('mpt_verify key', values[1]);
+  const key = parseNibbleHex(keyHexS, 'mpt_verify key');
+  const valueJs = toJson(values[2]);
+  const proof = decodeMptInclusionProof(toJson(values[3]), 'mpt_verify proof');
+
+  // The proof's path must be exactly the queried key (case-insensitive).
+  if (proof.path.toLowerCase() !== key.toLowerCase()) {
+    return boolValue(false);
+  }
+  // The leaf commitment must bind the queried value.
+  const valueDigest = computeValueDigest(valueJs);
+  const leafBinds = proof.witness.some((c) => c.kind === 'leaf' && c.dataDigest === valueDigest);
+  if (!leafBinds) {
+    return boolValue(false);
+  }
+  return boolValue(mptConfirm(root, proof));
+};
+
+// ---------------------------------------------------------------------------
+// MPT batch / prefix verifier (port of api/MerklePatriciaBatchInclusionVerifier).
+// ---------------------------------------------------------------------------
+
+interface MptBatchProof {
+  paths: string[];
+  witness: MptCommitment[];
+}
+
+const decodeMptBatchProof = (j: unknown, role: string): MptBatchProof => {
+  if (!isPlainObject(j)) {
+    return fail(`${role}: undecodable proof JSON (not an object)`);
+  }
+  if (!Array.isArray(j.paths)) {
+    return fail(`${role}: undecodable proof JSON (paths not an array)`);
+  }
+  const paths = j.paths.map((p) => {
+    const s = asStr(p);
+    if (s === undefined) {
+      return fail(`${role}: undecodable proof JSON (bad path)`);
+    }
+    return s;
+  });
+  if (!Array.isArray(j.witness)) {
+    return fail(`${role}: undecodable proof JSON (witness not an array)`);
+  }
+  const witness = j.witness.map((c) => decodeMptCommitment(c, role));
+  return { paths, witness };
+};
+
+/** Hand a reconstructed (leaf-first) witness to the single-path verifier. */
+const singleConfirmReconstructed = (
+  root: string,
+  path: string,
+  witness: MptCommitment[]
+): boolean => mptConfirm(root, { path, witness });
+
+/**
+ * Reconstruct the per-path witness from the shared batch witness by walking from
+ * the root, then hand the (leaf-first) reconstructed witness to the single-path
+ * verifier. `true` iff the path verifies. Mirrors `mpt_reconstruct_and_confirm`.
+ */
+const mptReconstructAndConfirm = (
+  root: string,
+  path: string,
+  sharedWitness: MptCommitment[]
+): boolean => {
+  let remaining = pathNibbles(path);
+  let expectedDigest = root;
+  const acc: MptCommitment[] = []; // built leaf-first (commitment :: acc)
+
+  for (;;) {
+    if (remaining.length === 0) {
+      break; // reconstruction succeeded with whatever acc we have
+    }
+    let matched: { c: MptCommitment; next: string; nextPath: number[]; terminal: boolean } | null =
+      null;
+    for (const c of sharedWitness) {
+      if (c.kind === 'leaf') {
+        if (mptCommitmentDigest(c) === expectedDigest && nibblesToStr(remaining) === c.remaining) {
+          matched = { c, next: expectedDigest, nextPath: [], terminal: true };
+          break;
+        }
+      } else if (c.kind === 'extension') {
+        const sharedN = pathNibbles(c.shared);
+        if (mptCommitmentDigest(c) === expectedDigest && startsWith(remaining, sharedN)) {
+          matched = {
+            c,
+            next: c.childDigest,
+            nextPath: remaining.slice(sharedN.length),
+            terminal: false,
+          };
+          break;
+        }
+      } else {
+        // branch
+        if (mptCommitmentDigest(c) === expectedDigest && remaining.length > 0) {
+          const nib = nibbleChar(remaining[0]);
+          const entry = c.pathsDigest.find(([k]) => k === nib);
+          if (entry !== undefined) {
+            matched = { c, next: entry[1], nextPath: remaining.slice(1), terminal: false };
+            break;
+          }
+        }
+      }
+    }
+    if (matched === null) {
+      return false; // InvalidWitness: no matching commitment
+    }
+    if (matched.terminal) {
+      acc.unshift(matched.c);
+      return singleConfirmReconstructed(root, path, acc);
+    }
+    acc.unshift(matched.c);
+    expectedDigest = matched.next;
+    remaining = matched.nextPath;
+  }
+  // remainingPath emptied without hitting a Leaf: hand acc (leaf-first) to verify.
+  return singleConfirmReconstructed(root, path, acc);
+};
+
+/** Array prefix check (`a` starts with `prefix`). */
+const startsWith = (a: number[], prefix: number[]): boolean => {
+  if (prefix.length > a.length) {
+    return false;
+  }
+  for (let i = 0; i < prefix.length; i++) {
+    if (a[i] !== prefix[i]) {
+      return false;
+    }
+  }
+  return true;
+};
+
+/** Every path must reconstruct and verify; empty paths list -> false. */
+const mptBatchConfirm = (root: string, proof: MptBatchProof): boolean => {
+  if (proof.paths.length === 0) {
+    return false;
+  }
+  return proof.paths.every((p) => mptReconstructAndConfirm(root, p, proof.witness));
+};
+
+interface ReconstructedLeaf {
+  nodeDigest: string;
+  dataDigest: string;
+}
+
+/** Reconstruct `path` from the shared witness, returning its terminal Leaf or null. */
+const reconstructTerminalLeaf = (
+  root: string,
+  path: string,
+  sharedWitness: MptCommitment[]
+): ReconstructedLeaf | null => {
+  let remaining = pathNibbles(path);
+  let expectedDigest = root;
+
+  for (;;) {
+    if (remaining.length === 0) {
+      return null; // path exhausted without a Leaf
+    }
+    let step: { next: string; nextPath: number[] } | null = null;
+    let leaf: ReconstructedLeaf | null = null;
+    for (const c of sharedWitness) {
+      if (c.kind === 'leaf') {
+        if (mptCommitmentDigest(c) === expectedDigest && nibblesToStr(remaining) === c.remaining) {
+          leaf = { nodeDigest: expectedDigest, dataDigest: c.dataDigest };
+          break;
+        }
+      } else if (c.kind === 'extension') {
+        const sharedN = pathNibbles(c.shared);
+        if (mptCommitmentDigest(c) === expectedDigest && startsWith(remaining, sharedN)) {
+          step = { next: c.childDigest, nextPath: remaining.slice(sharedN.length) };
+          break;
+        }
+      } else {
+        if (mptCommitmentDigest(c) === expectedDigest && remaining.length > 0) {
+          const nib = nibbleChar(remaining[0]);
+          const entry = c.pathsDigest.find(([k]) => k === nib);
+          if (entry !== undefined) {
+            step = { next: entry[1], nextPath: remaining.slice(1) };
+            break;
+          }
+        }
+      }
+    }
+    if (leaf !== null) {
+      return leaf;
+    }
+    if (step === null) {
+      return null;
+    }
+    expectedDigest = step.next;
+    remaining = step.nextPath;
+  }
+};
+
+/** PER-KEY binding: each (key, value) must bind to the leaf the KEY's path reaches. */
+const valuesBindPerKey = (
+  root: string,
+  entries: [string, unknown][],
+  witness: MptCommitment[]
+): boolean =>
+  entries.every(([keyHexS, valueJs]) => {
+    const expected = computeValueDigest(valueJs).toLowerCase();
+    const leaf = reconstructTerminalLeaf(root, keyHexS, witness);
+    return leaf !== null && leaf.dataDigest.toLowerCase() === expected;
+  });
+
+/** First witness commitment whose prefixed digest equals `digest` (first-match). */
+const commitmentByDigest = (witness: MptCommitment[], digest: string): MptCommitment | undefined =>
+  witness.find((c) => mptCommitmentDigest(c) === digest);
+
+/**
+ * Recursively require that every leaf reachable in the subtree rooted at `digest`
+ * is an attested terminal. At a Branch, EVERY child must be complete.
+ */
+const subtreeAllLeavesAttested = (
+  witness: MptCommitment[],
+  digest: string,
+  attested: Set<string>
+): boolean => {
+  const c = commitmentByDigest(witness, digest);
+  if (c === undefined) {
+    return false;
+  }
+  if (c.kind === 'leaf') {
+    return attested.has(digest);
+  }
+  if (c.kind === 'extension') {
+    return subtreeAllLeavesAttested(witness, c.childDigest, attested);
+  }
+  return c.pathsDigest.every(([, child]) => subtreeAllLeavesAttested(witness, child, attested));
+};
+
+/** COMPLETENESS check: the attested set must be ALL keys under the prefix. */
+const prefixSubtreeComplete = (root: string, prefix: string, proof: MptBatchProof): boolean => {
+  const witness = proof.witness;
+
+  // Leaf-commitment digests the attested paths actually terminate at.
+  const attestedLeafDigests = new Set<string>();
+  for (const path of proof.paths) {
+    const leaf = reconstructTerminalLeaf(root, path, witness);
+    if (leaf === null) {
+      return false;
+    }
+    attestedLeafDigests.add(leaf.nodeDigest);
+  }
+
+  // 1. Walk root -> prefix point.
+  let remaining = pathNibbles(prefix);
+  let cur = root;
+  for (;;) {
+    if (remaining.length === 0) {
+      break;
+    }
+    const c = commitmentByDigest(witness, cur);
+    if (c === undefined) {
+      return proof.paths.length === 0;
+    }
+    if (c.kind === 'branch') {
+      const nib = nibbleChar(remaining[0]);
+      const entry = c.pathsDigest.find(([k]) => k === nib);
+      if (entry === undefined) {
+        return proof.paths.length === 0;
+      }
+      cur = entry[1];
+      remaining = remaining.slice(1);
+    } else if (c.kind === 'extension') {
+      const sharedN = pathNibbles(c.shared);
+      if (startsWith(remaining, sharedN)) {
+        cur = c.childDigest;
+        remaining = remaining.slice(sharedN.length);
+      } else if (startsWith(sharedN, remaining)) {
+        // Prefix ends MID-extension: the whole subtree below this child is under it.
+        cur = c.childDigest;
+        remaining = [];
+      } else {
+        return proof.paths.length === 0;
+      }
+    } else {
+      // leaf
+      const lremN = pathNibbles(c.remaining);
+      if (startsWith(lremN, remaining)) {
+        remaining = [];
+      } else {
+        return proof.paths.length === 0;
+      }
+    }
+  }
+
+  // 2. Traverse the subtree at `cur`, requiring every reachable leaf is attested.
+  return subtreeAllLeavesAttested(witness, cur, attestedLeafDigests);
+};
+
+/** `expectEntries`: a `{keyHex -> value}` object -> (keyHex, valueJson) pairs. */
+const expectEntries = (role: string, v: JsonLogicValue): [string, unknown][] => {
+  if (v.tag === 'map') {
+    return [...v.value.entries()].map(([k, val]) => [k, toJson(val)] as [string, unknown]);
+  }
+  return fail(`${role}: expected a {keyHex -> value} object, got ${v.tag}`);
+};
+
+/** `mpt_prefix_verify([rootHex, prefixHex, entriesJson, batchProofJson]) -> bool`. */
+export const opMptPrefixVerify = (values: JsonLogicValue[]): JsonLogicValue => {
+  if (values.length !== 4) {
+    return fail('mpt_prefix_verify: expected [rootHex, prefixHex, entriesJson, batchProofJson]');
+  }
+  const rootHex = expectStr('mpt_prefix_verify root', values[0]);
+  const root = parseHashHex(rootHex, 'mpt_prefix_verify root');
+  const prefixHex = expectStr('mpt_prefix_verify prefix', values[1]);
+  const prefix = parseNibbleHex(prefixHex, 'mpt_prefix_verify prefix');
+  const entries = expectEntries('mpt_prefix_verify entries', values[2]);
+  const proof = decodeMptBatchProof(toJson(values[3]), 'mpt_prefix_verify batchProof');
+
+  const prefixLower = prefix.toLowerCase();
+  const claimedKeys = new Set(entries.map(([k]) => k.toLowerCase()));
+  const attestedKeys = new Set(proof.paths.map((p) => p.toLowerCase()));
+
+  // WELL-FORMEDNESS GATE: claimed key-set == attested path-set, all under prefix.
+  const keySetsMatch =
+    claimedKeys.size === attestedKeys.size && [...claimedKeys].every((k) => attestedKeys.has(k));
+  const allUnderPrefix = [...attestedKeys].every((k) => k.startsWith(prefixLower));
+  if (!keySetsMatch || !allUnderPrefix) {
+    return boolValue(false);
+  }
+
+  // PER-KEY VALUE-BINDING.
+  if (!valuesBindPerKey(root, entries, proof.witness)) {
+    return boolValue(false);
+  }
+  // BATCH INCLUSION.
+  if (!mptBatchConfirm(root, proof)) {
+    return boolValue(false);
+  }
+  // COMPLETENESS.
+  return boolValue(prefixSubtreeComplete(root, prefix, proof));
 };

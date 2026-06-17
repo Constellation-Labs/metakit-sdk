@@ -57,12 +57,15 @@ import {
   opBn254Mul,
   opBn254Pairing,
   opGroth16Verify,
+  opMptPrefixVerify,
+  opMptVerify,
   opPmtVerify,
   opPoseidon,
   opProveDhtupleVerify,
   opProveDlogVerify,
   opSchnorrVerify,
   opSigmaVerify,
+  opSmtVerify,
 } from './crypto-ops';
 
 const MAX_SAFE_EXPONENT = 999n;
@@ -627,6 +630,12 @@ export class Evaluator {
         return opBn254Pairing(values);
       case 'groth16_verify':
         return opGroth16Verify(values);
+      case 'smt_verify':
+        return opSmtVerify(values);
+      case 'mpt_verify':
+        return opMptVerify(values);
+      case 'mpt_prefix_verify':
+        return opMptPrefixVerify(values);
       default:
         return fail(`Unsupported operator: ${op}`);
     }
