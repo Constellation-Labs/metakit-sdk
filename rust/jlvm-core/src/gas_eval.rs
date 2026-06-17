@@ -720,9 +720,22 @@ fn map_get<'v>(m: &'v [(String, Value)], key: &str) -> Option<&'v Value> {
 /// (`{"type": dlog|dhtuple|and|or|threshold, ...}`); any unrecognised shape
 /// contributes `(0, 0, 0)` (the verifier will raise the structural fault). A
 /// connective counts as ONE node INCLUDING the root, then folds its `children`.
-/// Bounded recursion over the already-materialised value tree — a byte-for-byte
-/// mirror of the Scala `GasAwareSemantics.sigmaPropShape`.
+///
+/// IMPL-1 (gas-side DoS): this walk runs in the pre-charge BEFORE gas is consumed,
+/// on the attacker-supplied proposition. Cap its RECURSION DEPTH with the same
+/// absolute bound the verifier enforces (`crypto::SIGMA_MAX_PROOF_DEPTH`) so a
+/// deeply nested proposition cannot drive unbounded stack growth here. Width is
+/// naturally priced (a very wide tree counts many leaves -> high cost -> OOG) and
+/// the verifier's `bound_raw_shape` rejects over-cap trees before any curve work.
+/// Byte-for-byte mirror of the Scala `GasAwareSemantics.sigmaPropShape`.
 fn sigma_prop_shape(v: &Value) -> (u64, u64, u64) {
+    sigma_prop_shape_depth(v, 1)
+}
+
+fn sigma_prop_shape_depth(v: &Value, depth: usize) -> (u64, u64, u64) {
+    if depth > crate::crypto::SIGMA_MAX_PROOF_DEPTH {
+        return (0, 0, 0);
+    }
     match v {
         Value::Map(m) => match map_get(m, "type") {
             Some(Value::Str(t)) if t == "dlog" => (1, 0, 0),
@@ -733,7 +746,7 @@ fn sigma_prop_shape(v: &Value) -> (u64, u64, u64) {
                     _ => &[],
                 };
                 children.iter().fold((0u64, 0u64, 1u64), |(d, t, n), c| {
-                    let (cd, ct, cn) = sigma_prop_shape(c);
+                    let (cd, ct, cn) = sigma_prop_shape_depth(c, depth + 1);
                     (d + cd, t + ct, n + cn)
                 })
             }

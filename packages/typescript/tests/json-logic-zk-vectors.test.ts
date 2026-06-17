@@ -82,3 +82,52 @@ describe('ZK opcode cross-language conformance (implemented subset)', () => {
     }
   });
 });
+
+/**
+ * IMPL-6 (audit 2026-06-17): pin the sigma category case counts and required edge
+ * cases so a future vector-file regression cannot silently reduce cross-language
+ * coverage (the Rust `zk_differential` harness pins the total; this is the TS twin).
+ */
+describe('sigma category coverage floors', () => {
+  const byCat = (name: string): TestCategory => {
+    const c = vectors.tests.find((t) => t.category === name);
+    if (!c) {
+      throw new Error(`missing sigma category: ${name}`);
+    }
+    return c;
+  };
+
+  it('pins the sigma category case counts', () => {
+    expect(byCat('sigma_dlog').cases.length).toBe(9);
+    expect(byCat('sigma_dhtuple').cases.length).toBe(11);
+    expect(byCat('sigma').cases.length).toBe(27);
+  });
+
+  it('keeps the required sigma soundness + hardening edge cases', () => {
+    const notes = byCat('sigma').cases.map((c) => c.note ?? '');
+    const has = (frag: string): boolean => notes.some((n) => n.includes(frag));
+    const required = [
+      'simulating ALL branches', // OR: forge-by-simulate-all -> false
+      'breaks XOR relation', // OR: XOR-break -> false
+      'k-1 real witness', // THRESHOLD: too-few-witness -> false
+      'wrong message', // strong-FS message binding -> false
+      'tampered response', // tampered z -> false
+      'non-canonical leaf response', // canonical z (finding #4) -> error
+      'off-curve statement point', // off-curve -> error
+      'huge mismatched proof', // DoS structural bound (finding #2) -> error
+      'wrong-width challenge', // 31-byte challenge domain (rejects 32B) -> error
+      'unknown field on a proposition leaf', // IMPL-2/5
+      'unknown field on a proof node', // IMPL-2/5
+      "bogus 'children'", // IMPL-2 proof-bound inflation
+      'message over the length cap', // IMPL-3 DoS bound
+    ];
+    for (const frag of required) {
+      expect(has(frag)).toBe(true);
+    }
+  });
+
+  it('keeps the sigma error-case floor', () => {
+    const errs = byCat('sigma').cases.filter((c) => c.error === true).length;
+    expect(errs).toBeGreaterThanOrEqual(13);
+  });
+});

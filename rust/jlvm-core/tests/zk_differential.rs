@@ -489,15 +489,19 @@ fn tier3b_zk_differential_against_shared_vectors() {
 fn sigma_zk_differential_against_shared_vectors() {
     let r = run_differential(SIGMA_CATEGORIES, SIGMA_OPS);
     report_and_assert("Sigma", SIGMA_CATEGORIES, &r);
-    // The three sigma categories: sigma_dlog (9) + sigma_dhtuple (11) + sigma (23)
-    // = 43 vectors (audit remediation added non-canonical-response negatives (#4), a
-    // tiny-prop/huge-proof DoS structural-reject (#2), and rebuilt the threshold k-1
-    // negative against real pubkeys). The `sigma` category is the FROZEN-serialization
-    // byte-contract: its value cases (valid->true, soundness->false) are reproduced
-    // byte-identical ONLY IF the Rust strong-FS transcript serialization matches Scala.
+    // The three sigma categories: sigma_dlog (9) + sigma_dhtuple (11) + sigma (27)
+    // = 47 vectors. The 2026-06-17 hardening audit added 4 `sigma` error cases:
+    // unknown-field on a prop leaf, unknown-field on a proof node, a leaf with a bogus
+    // `children` field (IMPL-2 proof-bound inflation), and an over-length message
+    // (IMPL-3). The proposition depth-cap (IMPL-1) is NOT shared-vectored: exceeding
+    // the sigma depth cap (64) implies ~128 JSON levels, beyond serde_json's parse
+    // recursion limit — it stays covered by per-language unit tests. The `sigma`
+    // category is the FROZEN-serialization byte-contract: its value cases
+    // (valid->true, soundness->false) are reproduced byte-identical ONLY IF the Rust
+    // strong-FS transcript serialization matches Scala.
     assert_eq!(
-        r.total, 43,
-        "expected all 43 sigma vectors (9 dlog + 11 dhtuple + 23 sigma), got {}",
+        r.total, 47,
+        "expected all 47 sigma vectors (9 dlog + 11 dhtuple + 27 sigma), got {}",
         r.total
     );
     // Every malformed case (off-curve, wrong-width, bad tree, k>n, shape mismatch)
