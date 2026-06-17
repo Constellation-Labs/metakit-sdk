@@ -9,6 +9,9 @@ alloy-primitives = { workspace = true }
 num-bigint = "0.4"
 num-traits = "0.2"
 poseidon-bn254 = { path = "../../poseidon-bn254" }
-jlvm-core = { path = "../../jlvm-core" }
+# default-features = false: the shielded transition never uses the BLS opcodes, and the guest
+# must not pull `blst` (no riscv C cross-compile). Feature-unification means BOTH this dep and
+# the guest's direct jlvm-core dep have to opt out for the guest to stay blst-free.
+jlvm-core = { path = "../../jlvm-core", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

@@ -1,9 +1,8 @@
-# NOTE: the SP1 guest (`program`) + host (`script`) are a follow-up — they depend on
-# jlvm-core, whose `blst` C backend does not yet cross-compile for the SP1 riscv target with
-# the system `cc` (the same blocker affects the existing `zk-jlvm` guest). The native
-# constraint system (`lib`) + its tests stand alone and are the verifiable core.
+# The SP1 guest (`program`) builds against jlvm-core with `default-features = false`, so the
+# `blst` C backend (no riscv cross-compile) is never pulled — see lib/Cargo.toml. The host
+# (`script`) drives execute/prove/groth16 on the GPU (SP1_PROVER=cuda).
 [workspace]
-members = ["lib"]
+members = ["lib", "program", "script"]
 resolver = "2"
 
 [workspace.dependencies]
