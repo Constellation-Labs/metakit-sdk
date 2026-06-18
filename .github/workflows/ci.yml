@@ -283,7 +283,7 @@ jobs:
   # what .github/workflows/release.yml runs for real. See docs/RELEASING.md.
   publish-dry-run:
     needs: changes
-    if: ${{ needs.changes.outputs.typescript == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.jlvm_core == 'true' || needs.changes.outputs.shared == 'true' || github.event_name == 'push' }}
+    if: ${{ needs.changes.outputs.typescript == 'true' || needs.changes.outputs.python == 'true' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.jlvm_core == 'true' || needs.changes.outputs.shared == 'true' || github.event_name == 'push' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -347,6 +347,22 @@ jobs:
             fi
             echo "::endgroup::"
           done
+
+      # Python: a full sdist+wheel build is the publish-time equivalent (the
+      # release pypi-publish job runs the same). Catches packaging/metadata
+      # errors on every PR instead of on the release tag.
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: packages/python/pyproject.toml
+
+      - name: python -m build (sdist + wheel must succeed)
+        working-directory: packages/python
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
 
   cross-language:
     needs: [typescript, python, rust, go, java]

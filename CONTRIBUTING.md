@@ -145,10 +145,9 @@ Releases are managed by maintainers. The process is:
 1. Update version in package config
 2. Update CHANGELOG.md
 3. Create PR and merge to main
-4. Create GitHub Release with appropriate tag:
-   - TypeScript: `typescript-v1.2.3`
-   - Python: `python-v1.2.3`
-   - Rust: `rust-v1.2.3`
+4. Tag and push to publish:
+   - TypeScript + Rust + Python: a single `vX.Y.Z` tag (e.g. `v1.8.0-rc.1`)
+     publishes npm + crates.io + PyPI together — see [docs/RELEASING.md](docs/RELEASING.md)
    - Go: `packages/go/v1.2.3`
    - Java: `java-v1.2.3`
 5. GitHub Actions automatically publishes to package registries

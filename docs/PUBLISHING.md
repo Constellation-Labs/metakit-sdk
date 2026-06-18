@@ -1,5 +1,12 @@
 # Metakit SDK Publishing Guide
 
+> **Note:** Releases now go through the **unified** workflow — one `v*` tag
+> publishes npm + crates.io + PyPI together. See **[RELEASING.md](RELEASING.md)**
+> for the release procedure. The per-language tag flows (`typescript-v*`,
+> `python-v*`, `rust-v*`) and their workflows have been **removed**; Steps 5–7
+> below are retained only for their registry-account setup details. This guide
+> is being consolidated into RELEASING.md.
+
 Complete steps to finish setup and publish the SDK packages to their respective registries.
 
 ## Prerequisites
@@ -86,9 +93,14 @@ PyPI trusted publishing uses OpenID Connect (OIDC) - no secrets needed!
 4. Fill in:
    - **Owner**: `Constellation-Labs`
    - **Repository name**: `metakit-sdk`
-   - **Workflow name**: `release-python.yml`
+   - **Workflow name**: `release.yml`
    - **Environment name**: (leave blank)
 5. Click **Add**
+
+   > A Trusted Publisher is scoped to a specific workflow **filename**. It must
+   > be the unified `release.yml` — a publisher previously configured for
+   > `release-python.yml` will NOT authorize `release.yml`, and the
+   > `pypi-publish` job will fail with "trusted publisher not found".
 
 ---
 
@@ -393,7 +405,7 @@ To release a new version:
 - Ensure trusted publisher is configured exactly as:
   - Owner: `Constellation-Labs`
   - Repository: `metakit-sdk`
-  - Workflow: `release-python.yml`
+  - Workflow: `release.yml`
 - If package doesn't exist, create a pending publisher first
 
 ### Version mismatch error

@@ -1,12 +1,14 @@
 name: Release
 
-# Unified SDK release: one tag publishes the TypeScript package to npm and the
-# three Rust crates to crates.io, all stamped with the same version. See
-# docs/RELEASING.md for the full flow (naming decision, secrets, tag policy).
+# Unified SDK release: one tag publishes all three language SDKs at the same
+# version — TypeScript (3 packages) to npm, Rust (3 crates) to crates.io, and
+# Python (1 package) to PyPI. See docs/RELEASING.md for the full flow (naming
+# decision, secrets, tag policy).
 #
 # Tag format: vX.Y.Z or vX.Y.Z-rc.N (plain SemVer, no build metadata — npm and
-# crates.io both mishandle `+meta`). The legacy per-language tags
-# (typescript-v*, python-v*) keep their own workflows and do not match `v*`.
+# crates.io both mishandle `+meta`). PyPI normalizes the artifact to the PEP 440
+# spelling (1.8.0-rc.1 -> 1.8.0rc1); the manifest keeps the SemVer string so the
+# version gate matches the tag.
 
 on:
   push:
@@ -15,7 +17,7 @@ on:
 
 permissions:
   contents: write
-  id-token: write # npm --provenance
+  id-token: write # npm --provenance + PyPI Trusted Publisher (OIDC)
 
 env:
   # Crate directories in dependency order (dependencies before dependents).
@@ -25,6 +27,8 @@ env:
   CRATE_DIRS: rust/poseidon-bn254 rust/jlvm-core packages/rust
   # npm package dirs in dependency order (metagraph-sdk depends on metagraph-sdk-core).
   NPM_PACKAGE_DIRS: packages/typescript-core packages/typescript-jlvm packages/typescript
+  # Python package dir (one metagraph-sdk-level package: kernel + network, no JLVM).
+  PYTHON_PACKAGE_DIRS: packages/python
 
 jobs:
   # Derive the version from the tag and require every publishable manifest to
@@ -78,6 +82,17 @@ jobs:
             fail=1
           fi
 
+          # Python keeps the SemVer string (e.g. 1.8.0-rc.1) in pyproject so this
+          # gate matches the tag; the build normalizes the artifact to PEP 440
+          # (1.8.0rc1) at publish time.
+          for dir in $PYTHON_PACKAGE_DIRS; do
+            PKG_VERSION=$(python3 -c "import tomllib; print(tomllib.load(open('$dir/pyproject.toml','rb'))['project']['version'])")
+            if [[ "$PKG_VERSION" != "$VERSION" ]]; then
+              echo "::error file=$dir/pyproject.toml::Python package version ($PKG_VERSION) does not match tag version ($VERSION). Bump it in a PR before tagging — the release workflow never rewrites versions."
+              fail=1
+            fi
+          done
+
           exit $fail
 
   npm-publish:
@@ -105,7 +120,7 @@ jobs:
       - name: Test (all workspaces)
         run: npm test --workspaces
 
-      # --provenance needs npm >= 9.5; pin to latest like release-typescript.yml.
+      # --provenance needs npm >= 9.5; pin to the latest npm to be safe.
       - name: Upgrade npm for provenance support
         run: npm install -g npm@latest
 
@@ -153,8 +168,55 @@ jobs:
             echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://crates.io/crates/$NAME" >> "$GITHUB_STEP_SUMMARY"
           done
 
+  pypi-publish:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: packages/python/pyproject.toml
+
+      - name: Install build + dev dependencies
+        working-directory: packages/python
+        run: |
+          python -m pip install --upgrade pip build
+          pip install -e ".[dev]"
+
+      # Test before publishing, mirroring the npm job's release-time backstop
+      # (CI already runs the full lint/type/test matrix on every PR).
+      - name: Test (pytest)
+        working-directory: packages/python
+        run: pytest
+
+      - name: Build sdist + wheel
+        working-directory: packages/python
+        run: python -m build
+
+      # Trusted Publisher (OIDC) — no token needed. The PyPI project must
+      # authorize THIS workflow file (release.yml). A publisher scoped to the old
+      # release-python.yml does NOT carry over — add a new pending/trusted
+      # publisher for release.yml in the PyPI project settings before the first
+      # unified tag (see docs/PUBLISHING.md).
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: packages/python/dist/
+
+      - name: Summarize
+        run: |
+          echo "### PyPI" >> "$GITHUB_STEP_SUMMARY"
+          for dir in $PYTHON_PACKAGE_DIRS; do
+            NAME=$(python3 -c "import tomllib; print(tomllib.load(open('$dir/pyproject.toml','rb'))['project']['name'])")
+            echo "- \`$NAME@${{ needs.version-check.outputs.version }}\` -> https://pypi.org/project/$NAME/" >> "$GITHUB_STEP_SUMMARY"
+          done
+
   release-summary:
-    needs: [version-check, npm-publish, cargo-publish]
+    needs: [version-check, npm-publish, cargo-publish, pypi-publish]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -174,6 +236,10 @@ jobs:
             for dir in $CRATE_DIRS; do
               NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
               echo "| crates.io | \`$NAME@$VERSION\` |"
+            done
+            for dir in $PYTHON_PACKAGE_DIRS; do
+              NAME=$(python3 -c "import tomllib; print(tomllib.load(open('$dir/pyproject.toml','rb'))['project']['name'])")
+              echo "| PyPI | \`$NAME@$VERSION\` |"
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
