@@ -75,14 +75,16 @@ All SDKs are validated against shared test vectors in `/shared/test_vectors.json
 
 ## Releasing
 
-Releases are triggered by pushing tags:
+A single `vX.Y.Z` tag publishes TypeScript (npm), Rust (crates.io), and Python
+(PyPI) together at the same version:
 
 ```bash
-git tag -a typescript-v1.0.0 -m "TypeScript SDK v1.0.0"
-git push origin typescript-v1.0.0
+git tag -a v1.8.0-rc.1 -m "SDK v1.8.0-rc.1"
+git push origin v1.8.0-rc.1
 ```
 
-See [docs/PUBLISHING.md](./docs/PUBLISHING.md) for complete setup instructions.
+See [docs/RELEASING.md](./docs/RELEASING.md) for the full release flow and
+[docs/PUBLISHING.md](./docs/PUBLISHING.md) for registry-account setup.
 
 ## Contributing
 

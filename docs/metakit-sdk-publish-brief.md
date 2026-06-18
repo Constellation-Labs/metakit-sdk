@@ -1,5 +1,13 @@
 # Publish brief: switching gps-integrity-demo from path deps to crates.io
 
+> **Outdated (kept for the cutover mechanics only):** the version and release
+> flow below are stale. The Rust crate now publishes via the **unified `v*`
+> tag** (`release.yml`, `CARGO_REGISTRY_TOKEN`) — not `rust-v0.2.0` /
+> `release-rust.yml` / `CRATES_TOKEN`, which have been removed — and the current
+> line is `1.8.0-rc.x`, not `0.2.0`. See [RELEASING.md](RELEASING.md). The
+> path-dep → `version = "..."` cutover steps below are still correct; just use
+> the actually-published version.
+
 This brief is for the agent working in `~/git/gps-integrity-demo`. It is self-contained — no need to consult anyone after the metakit-sdk Rust crate is published.
 
 ## What's happening on the metakit-sdk side

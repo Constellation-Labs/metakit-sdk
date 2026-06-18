@@ -70,15 +70,16 @@ This protocol is stable and versioned by the `ALGORITHM` constant. A protocol ch
 
 ## Tag Format
 
-Each language uses a tag prefix for release automation:
+Release automation uses these tags:
 
 | Language | Tag Format | Example | Notes |
 |----------|------------|---------|-------|
-| TypeScript | `typescript-vX.Y.Z` | `typescript-v0.2.0` | Triggers npm publish |
-| Python | `python-vX.Y.Z` | `python-v0.1.1` | Triggers PyPI publish |
-| Rust | `rust-vX.Y.Z` | `rust-v0.1.0` | Triggers crates.io publish |
+| TypeScript + Rust + Python | `vX.Y.Z` | `v1.8.0-rc.1` | **Unified release** — one tag publishes npm (3 packages) + crates.io (3 crates) + PyPI together at the same version. See [RELEASING.md](RELEASING.md). |
 | Go | `packages/go/vX.Y.Z` | `packages/go/v0.1.0` | Required by Go module proxy for nested modules |
 | Java | `java-vX.Y.Z` | `java-v0.1.0` | Triggers Maven Central publish |
+
+The legacy per-language tags (`typescript-v*`, `python-v*`, `rust-v*`) and their
+workflows have been removed.
 
 **Go note:** Go modules in a monorepo subdirectory require tags matching the module's path relative to the repo root. Since the module path is `github.com/Constellation-Labs/metakit-sdk/packages/go`, tags must use the `packages/go/vX.Y.Z` format for `go get` to work correctly.
 
@@ -86,9 +87,9 @@ Each language uses a tag prefix for release automation:
 
 | Language | File | Field |
 |----------|------|-------|
-| TypeScript | `packages/typescript/package.json` | `"version"` |
+| TypeScript | `packages/typescript-core`, `packages/typescript-jlvm`, `packages/typescript` (each `package.json`) | `"version"` |
 | Python | `packages/python/pyproject.toml` | `version` |
-| Rust | `packages/rust/Cargo.toml` | `version` |
+| Rust | `rust/poseidon-bn254`, `rust/jlvm-core`, `packages/rust` (each `Cargo.toml`) | `version` |
 | Go | (tag only) | N/A |
 | Java | `packages/java/pom.xml` | `<version>` |
 
