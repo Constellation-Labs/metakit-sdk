@@ -1,6 +1,6 @@
 {
   "name": "@constellation-network/metagraph-sdk",
-  "version": "1.8.0-rc.3",
+  "version": "1.8.0-rc.4",
   "description": "TypeScript SDK for signing data and currency transactions on Constellation data metagraphs built with metakit. Re-exports the signing kernel and adds the currency-transaction layer and network client.",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
@@ -55,11 +55,11 @@
   },
   "homepage": "https://github.com/Constellation-Labs/metakit-sdk/tree/main/packages/typescript#readme",
   "dependencies": {
-    "@constellation-network/metagraph-sdk-core": "1.8.0-rc.3",
+    "@constellation-network/metagraph-sdk-core": "1.8.0-rc.4",
     "@noble/hashes": "^2.0.1"
   },
   "devDependencies": {
-    "@constellation-network/metagraph-sdk-jlvm": "1.8.0-rc.3",
+    "@constellation-network/metagraph-sdk-jlvm": "1.8.0-rc.4",
     "@rollup/plugin-node-resolve": "^16.0.3",
     "@rollup/plugin-typescript": "^12.3.0",
     "jest": "^30.2.0",

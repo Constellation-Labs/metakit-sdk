@@ -120,8 +120,12 @@ jobs:
       - name: Test (all workspaces)
         run: npm test --workspaces
 
-      # --provenance needs npm >= 9.5; pin to the latest npm to be safe.
-      - name: Upgrade npm for provenance support
+      # Trusted Publishing (OIDC) needs npm >= 11.5.1; pin to latest. With a
+      # configured npm trusted publisher + the workflow's `id-token: write`,
+      # `npm publish` authenticates over OIDC (no NPM_TOKEN) and attaches
+      # provenance automatically — so `--provenance` is no longer passed. Every
+      # npm package must have a trusted publisher (this repo + release.yml).
+      - name: Upgrade npm for trusted publishing (OIDC)
         run: npm install -g npm@latest
 
       # `npm publish --workspaces` publishes in the workspaces-array order
@@ -134,7 +138,6 @@ jobs:
       # to the `next` channel; stable versions go to `latest`.
       - name: Publish all workspaces to npm
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           VERSION: ${{ needs.version-check.outputs.version }}
         run: |
           EXTRA=""
@@ -142,7 +145,7 @@ jobs:
             EXTRA="--tag next"
             echo "Prerelease $VERSION -> publishing under dist-tag 'next' (not 'latest')"
           fi
-          npm publish --workspaces --access public --provenance $EXTRA
+          npm publish --workspaces --access public $EXTRA
 
       - name: Summarize
         run: |
