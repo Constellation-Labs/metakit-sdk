@@ -3,11 +3,23 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-/// Supported signature algorithm
+/// Supported signature algorithms
 pub const ALGORITHM: &str = "SECP256K1_RFC8785_V1";
+pub const ALGORITHM_R1: &str = "SECP256R1_RFC8785_V1";
 
 /// Constellation prefix for DataUpdate signing
 pub const CONSTELLATION_PREFIX: &str = "\x19Constellation Signed Data:\n";
+
+/// Signing scheme identifying the curve and serialization format
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum SigningScheme {
+    /// secp256k1 + RFC 8785 canonicalization (Constellation default)
+    #[serde(rename = "secp256k1_rfc8785_v1")]
+    Secp256k1Rfc8785V1,
+    /// secp256r1 (P-256) + RFC 8785 canonicalization
+    #[serde(rename = "secp256r1_rfc8785_v1")]
+    Secp256r1Rfc8785V1,
+}
 
 /// A signature proof containing the signer's public key ID and signature
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -104,6 +116,22 @@ impl From<hex::FromHexError> for SdkError {
 
 impl From<secp256k1::Error> for SdkError {
     fn from(err: secp256k1::Error) -> Self {
+        SdkError::CryptoError(err.to_string())
+    }
+}
+
+// p256 and elliptic_curve error conversions are gated behind the `r1`
+// feature so consumers who only need K1 don't pull the p256 dep tree.
+#[cfg(feature = "r1")]
+impl From<p256::ecdsa::Error> for SdkError {
+    fn from(err: p256::ecdsa::Error) -> Self {
+        SdkError::CryptoError(err.to_string())
+    }
+}
+
+#[cfg(feature = "r1")]
+impl From<elliptic_curve::Error> for SdkError {
+    fn from(err: elliptic_curve::Error) -> Self {
         SdkError::CryptoError(err.to_string())
     }
 }

@@ -10,7 +10,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-constellation-metagraph-sdk = "0.1"
+constellation-metagraph-sdk = "0.2"
 ```
 
 Or use cargo:
@@ -307,7 +307,7 @@ Enable the `network` feature in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-constellation-metagraph-sdk = { version = "0.1", features = ["network"] }
+constellation-metagraph-sdk = { version = "0.2", features = ["network"] }
 ```
 
 #### `CurrencyL1Client`
