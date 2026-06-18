@@ -1,6 +1,6 @@
 {
   "name": "@constellation-network/metagraph-sdk-jlvm",
-  "version": "1.8.0-rc.1",
+  "version": "1.8.0-rc.2",
   "description": "JSON Logic Virtual Machine (JLVM) for Constellation metagraphs: the evaluator, gas metering, and zk/crypto opcodes. Self-contained.",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
