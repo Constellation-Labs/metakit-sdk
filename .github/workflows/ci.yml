@@ -333,9 +333,9 @@ jobs:
             echo "::group::cargo publish --dry-run $NAME ($dir)"
             if out=$(cd "$dir" && cargo publish --dry-run 2>&1); then
               echo "$out" | tail -n 5
-            elif echo "$out" | grep -q 'no matching package named'; then
+            elif echo "$out" | grep -qE 'no matching package named|failed to select a version for the requirement'; then
               echo "$out" | tail -n 5
-              echo "::notice file=$dir/Cargo.toml::$NAME: full dry-run skipped — a path dependency is not yet published on crates.io, so cargo cannot rewrite it into a registry dependency. Falling back to manifest-only checks; this becomes a full dry-run automatically after the dependency's first publish (docs/RELEASING.md)."
+              echo "::notice file=$dir/Cargo.toml::$NAME: full dry-run skipped — a path dependency's exact version is not resolvable on crates.io yet (never published, OR only an older version is published while this PR bumps to a new one). cargo can't rewrite the path dep into a registry dependency it can resolve until the dependency is published in-order at release time. Falling back to manifest-only checks (docs/RELEASING.md)."
               ( cd "$dir" && cargo package --list > /dev/null )
               grep -Eq 'path *= *"\.\./poseidon-bn254" *, *version *=' "$dir/Cargo.toml" || {
                 echo "::error file=$dir/Cargo.toml::path dependency on poseidon-bn254 is missing the 'version' key required by cargo publish"

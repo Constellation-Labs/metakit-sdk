@@ -161,6 +161,17 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # Trusted Publishing (OIDC): exchange the workflow's id-token for a
+      # short-lived crates.io token (auto-revoked when the job ends). Each crate
+      # must have a trusted publisher configured (this repo + release.yml) —
+      # constellation-metagraph-sdk is already TP-only; poseidon-bn254 + jlvm
+      # need a TP added now that they exist. OIDC cannot do a crate's first
+      # publish, but all three crates already exist (the new two were
+      # token-published in rc.2), so OIDC covers them from here on.
+      - name: Authenticate to crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
       # Publish in dependency order. `cargo publish` (since 1.66) blocks until
       # the uploaded crate is visible in the sparse index, so each dependent's
       # verify build can resolve its just-published dependency. No --no-verify:
@@ -169,11 +180,7 @@ jobs:
       # half the crates are out).
       - name: Publish crates in dependency order
         env:
-          # Accept either secret name: the unified flow documents
-          # CARGO_REGISTRY_TOKEN; the removed release-rust.yml used CRATES_TOKEN.
-          # Whichever is set must be a crates.io token with publish-new (first
-          # publish of the renamed crates) + publish-update scope.
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN || secrets.CRATES_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
         run: |
           echo "### crates.io" >> "$GITHUB_STEP_SUMMARY"
           for dir in $CRATE_DIRS; do

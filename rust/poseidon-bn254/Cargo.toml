@@ -1,6 +1,6 @@
 [package]
 name = "constellation-metagraph-sdk-poseidon-bn254"
-version = "1.8.0-rc.2"
+version = "1.8.0-rc.3"
 edition = "2021"
 authors = ["Constellation Network"]
 description = "Circomlib-compatible Poseidon hash over BN254 Fr and a fixed-depth sparse Poseidon Merkle tree, byte-compatible with metakit's Scala implementation. Foundation for the zk shielded-transfer VM."
