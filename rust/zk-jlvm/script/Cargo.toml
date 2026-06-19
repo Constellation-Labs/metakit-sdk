@@ -9,7 +9,8 @@ name = "zk-jlvm"
 path = "src/main.rs"
 
 [dependencies]
-sp1-sdk = { version = "6.0.1", features = ["blocking"] }
+# `cuda` enables the SP1 GPU prover when SP1_PROVER=cuda; CPU is the default.
+sp1-sdk = { version = "6.0.1", features = ["blocking", "cuda"] }
 jlvm-core = { path = "../../jlvm-core", package = "constellation-metagraph-sdk-jlvm" }
 zk-jlvm-lib = { path = "../lib", package = "constellation-metagraph-sdk-zk-jlvm-lib" }
 alloy-sol-types = { workspace = true }
