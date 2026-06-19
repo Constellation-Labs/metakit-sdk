@@ -72,6 +72,9 @@ pub const KNOWN_OPERATORS: &[&str] = &[
     "missing",
     "missing_some",
     "typeof",
+    // Hex conversion -- mirrors JsonLogicOp HexToIntOp. Parses a 0x-prefixed,
+    // lowercase, big-endian hex string into an unsigned arbitrary-precision int.
+    "hex_to_int",
     // ZK / crypto (Tier 1) -- mirrors JsonLogicOp PoseidonOp / PmtVerifyOp / SchnorrVerifyOp
     "poseidon",
     "pmt_verify",

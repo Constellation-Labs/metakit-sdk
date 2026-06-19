@@ -68,6 +68,7 @@ import {
   opSigmaVerify,
   opSmtVerify,
 } from './crypto-ops';
+import { opHexToInt } from './hex-ops';
 
 const MAX_SAFE_EXPONENT = 999n;
 const I64_MIN = -(2n ** 63n);
@@ -603,6 +604,10 @@ export class Evaluator {
         return this.opMissing(values, ctx);
       case 'missing_some':
         return this.opMissingSome(values, ctx);
+      // Hex -> unsigned big-endian int. Reuses the shared crypto hex byte codec
+      // (hex-bytes.ts parseBytes), byte-matching Rust hex.rs / Scala hex_to_int.
+      case 'hex_to_int':
+        return opHexToInt(values);
       // ZK / crypto opcodes. Pure precompiles over already-parsed hex args;
       // they delegate to crypto-ops.ts, byte-matching Rust crypto.rs /
       // auth_db.rs / ecvrf.rs and the Scala CryptoOps / AuthDbOps.

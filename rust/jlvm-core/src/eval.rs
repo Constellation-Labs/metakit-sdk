@@ -357,6 +357,9 @@ impl<'a> Evaluator<'a> {
             "exists" => self.op_exists(values),
             "missing" => self.op_missing(values, ctx),
             "missing_some" => self.op_missing_some(values, ctx),
+            // Hex -> unsigned big-endian int. Reuses the shared crypto hex byte
+            // codec (`hex_bytes::parse_bytes`), byte-matching Scala/TS hex_to_int.
+            "hex_to_int" => crate::hex::hex_to_int(&values),
             // ZK / crypto (Tier 1). These are pure precompiles over already-parsed
             // hex args; they delegate to `crate::crypto`, byte-matching Scala CryptoOps.
             "poseidon" => crate::crypto::poseidon(&values),
