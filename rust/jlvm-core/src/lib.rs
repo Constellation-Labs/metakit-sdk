@@ -2,8 +2,16 @@
 //!
 //! A Rust recreation of the metakit JSON Logic VM (JLVM), built to be byte-compatible
 //! with the authoritative Scala evaluator in `io.constellationnetwork.metagraph_sdk`.
-//! This is the client-side recreation of the server-side evaluator and the foundation
-//! for a future zk-JLVM.
+//! This is the client-side recreation of the server-side evaluator and the
+//! evaluator compiled into the zk-jlvm / zk-jlvm-shielded (M5) SP1 guests.
+//!
+//! ## zk fixture impact (read before changing opcodes)
+//!
+//! This crate is the JLVM evaluator baked into the M5 SP1 guest ELF, so changing
+//! the opcode set or any opcode's semantics/gas — even adding an opcode the M5
+//! scenario never calls — rotates that guest's VKEY and makes the committed
+//! groth16 fixture STALE. Regenerate it (GPU): see
+//! `rust/zk-jlvm-shielded/script/fixtures/README.md`.
 //!
 //! ## Design invariants (matching the Scala spec)
 //!
