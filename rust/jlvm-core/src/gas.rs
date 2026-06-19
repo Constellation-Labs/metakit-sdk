@@ -82,6 +82,10 @@ pub struct GasConfig {
     pub get: u64,
     pub has: u64,
     pub entries: u64,
+    /// `set`: immutable single-key map update. Pinned EQUAL to `merge`.
+    pub set: u64,
+    /// `unset`: immutable single-key map removal. Pinned EQUAL to `merge`.
+    pub unset: u64,
     pub length: u64,
     pub exists: u64,
     pub missing: u64,
@@ -179,6 +183,8 @@ impl Default for GasConfig {
             get: 3,
             has: 3,
             entries: 10,
+            set: 5,   // == merge
+            unset: 5, // == merge
             length: 1,
             exists: 5,
             missing: 10,
@@ -306,6 +312,8 @@ impl GasConfig {
             "pow" => self.pow,
             "has" => self.has,
             "entries" => self.entries,
+            "set" => self.set,
+            "unset" => self.unset,
             "typeof" => self.type_of,
             "hex_to_int" => self.hex_to_int,
             "poseidon" => self.poseidon,
@@ -413,6 +421,13 @@ mod tests {
         // match the TypeScript gas module byte-for-byte.
         assert_eq!(c.op_base_cost("hex_to_int"), c.op_base_cost("%"));
         assert_eq!(c.op_base_cost("hex_to_int"), Some(10));
+        // `set` and `unset` (immutable map updates) are pinned EQUAL to the
+        // `merge` base cost, and must match the TypeScript gas modules
+        // byte-for-byte.
+        assert_eq!(c.op_base_cost("set"), c.op_base_cost("merge"));
+        assert_eq!(c.op_base_cost("unset"), c.op_base_cost("merge"));
+        assert_eq!(c.op_base_cost("set"), Some(5));
+        assert_eq!(c.op_base_cost("unset"), Some(5));
         // Scala quirk: `missing` charges the `exists` cost (5), not `missing` (10).
         assert_eq!(c.op_base_cost("missing"), Some(5));
         assert_eq!(c.op_base_cost("missing_some"), Some(15));

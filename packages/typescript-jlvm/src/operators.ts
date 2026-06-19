@@ -71,6 +71,8 @@ export type JsonLogicOpTag =
   | 'get'
   | 'has'
   | 'entries'
+  | 'set'
+  | 'unset'
   // Utility
   | 'length'
   | 'exists'
@@ -166,6 +168,8 @@ export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
   'get',
   'has',
   'entries',
+  'set',
+  'unset',
   // Utility
   'length',
   'exists',
@@ -244,7 +248,7 @@ export const OPERATOR_CATEGORIES = {
     'startsWith',
     'endsWith',
   ] as const,
-  object: ['values', 'keys', 'get', 'has', 'entries'] as const,
+  object: ['values', 'keys', 'get', 'has', 'entries', 'set', 'unset'] as const,
   utility: ['length', 'exists', 'missing', 'missing_some', 'typeof'] as const,
   hex: ['hex_to_int'] as const,
   zk: [

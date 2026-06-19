@@ -66,6 +66,11 @@ pub const KNOWN_OPERATORS: &[&str] = &[
     "get",
     "has",
     "entries",
+    // Immutable map update -- mirrors JsonLogicOp SetOp / UnsetOp. `set` returns a
+    // copy of the map with `key`->`value` (last-wins, position-preserving on an
+    // existing key); `unset` returns a copy without `key` (absent key is a no-op).
+    "set",
+    "unset",
     // Utility
     "length",
     "exists",
