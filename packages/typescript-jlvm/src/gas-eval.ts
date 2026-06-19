@@ -138,6 +138,8 @@ export interface GasSchedule {
   readonly missing: bigint;
   readonly missingSome: bigint;
   readonly typeOf: bigint;
+  /** `hex_to_int`: pinned EQUAL to `modulo` (and Rust `GasConfig::hex_to_int`). */
+  readonly hexToInt: bigint;
   readonly poseidon: bigint;
   readonly poseidonPerInput: bigint;
   readonly pmtVerify: bigint;
@@ -232,6 +234,7 @@ export const DEFAULT_GAS_SCHEDULE: GasSchedule = {
   missing: 10n,
   missingSome: 15n,
   typeOf: 1n,
+  hexToInt: 10n, // == modulo
   poseidon: 150n,
   poseidonPerInput: 150n,
   pmtVerify: 200n,
@@ -404,6 +407,8 @@ export const opBaseCost = (c: GasSchedule, op: string): bigint | null => {
       return c.entries;
     case 'typeof':
       return c.typeOf;
+    case 'hex_to_int':
+      return c.hexToInt;
     case 'poseidon':
       return c.poseidon;
     case 'pmt_verify':

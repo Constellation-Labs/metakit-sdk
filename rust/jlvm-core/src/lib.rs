@@ -28,6 +28,7 @@ pub mod eval;
 pub mod expression;
 pub mod gas;
 pub mod gas_eval;
+pub mod hex;
 pub mod hex_bytes;
 pub mod numeric;
 pub mod ops;

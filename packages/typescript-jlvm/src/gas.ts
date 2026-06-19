@@ -138,6 +138,10 @@ export interface GasConfig {
   readonly missingSome: GasCost;
   readonly typeOf: GasCost;
 
+  // Hex conversion. `hexToInt` is pinned EQUAL to `modulo` (and to the Rust
+  // `GasConfig::hex_to_int`) — a small fixed-cost decode + big-endian fold.
+  readonly hexToInt: GasCost;
+
   // ZK / crypto opcodes (flat base costs + per-element multipliers), in
   // lock-step with rust/jlvm-core/src/gas.rs `GasConfig` and the Scala
   // GasConfig defaults.
@@ -257,6 +261,9 @@ export const DEFAULT_GAS_CONFIG: GasConfig = {
   missing: gasCost(10),
   missingSome: gasCost(15),
   typeOf: gasCost(1),
+
+  // Hex conversion (== modulo: gasCost(10), matching Rust GasConfig::hex_to_int).
+  hexToInt: gasCost(10),
 
   // ZK / crypto opcodes
   poseidon: gasCost(150),
@@ -447,6 +454,8 @@ export const getOperatorCost = (op: JsonLogicOpTag, config: GasConfig): GasCost 
       return config.missingSome;
     case 'typeof':
       return config.typeOf;
+    case 'hex_to_int':
+      return config.hexToInt;
     case 'noop':
       return gasCost(0);
     // ZK / crypto opcodes (flat base costs; per-element components are applied

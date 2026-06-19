@@ -87,6 +87,8 @@ pub struct GasConfig {
     pub missing: u64,
     pub missing_some: u64,
     pub type_of: u64,
+    /// `hex_to_int`: pinned EQUAL to `modulo` (a small fixed-cost decode + fold).
+    pub hex_to_int: u64,
     pub poseidon: u64,
     pub poseidon_per_input: u64,
     pub pmt_verify: u64,
@@ -182,6 +184,7 @@ impl Default for GasConfig {
             missing: 10,
             missing_some: 15,
             type_of: 1,
+            hex_to_int: 10, // == modulo
             poseidon: 150,
             poseidon_per_input: 150,
             pmt_verify: 200,
@@ -304,6 +307,7 @@ impl GasConfig {
             "has" => self.has,
             "entries" => self.entries,
             "typeof" => self.type_of,
+            "hex_to_int" => self.hex_to_int,
             "poseidon" => self.poseidon,
             "pmt_verify" => self.pmt_verify,
             "groth16_verify" => self.groth16_verify,
@@ -405,6 +409,10 @@ mod tests {
         assert_eq!(c.op_base_cost("unique"), Some(20));
         assert_eq!(c.op_base_cost("split"), Some(15));
         assert_eq!(c.op_base_cost("typeof"), Some(1));
+        // hex_to_int is pinned EQUAL to the modulo (`%`) base cost, and must
+        // match the TypeScript gas module byte-for-byte.
+        assert_eq!(c.op_base_cost("hex_to_int"), c.op_base_cost("%"));
+        assert_eq!(c.op_base_cost("hex_to_int"), Some(10));
         // Scala quirk: `missing` charges the `exists` cost (5), not `missing` (10).
         assert_eq!(c.op_base_cost("missing"), Some(5));
         assert_eq!(c.op_base_cost("missing_some"), Some(15));

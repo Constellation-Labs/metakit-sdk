@@ -77,6 +77,8 @@ export type JsonLogicOpTag =
   | 'missing'
   | 'missing_some'
   | 'typeof'
+  // Hex conversion: 0x-prefixed lowercase big-endian hex -> unsigned big int.
+  | 'hex_to_int'
   // ZK / crypto opcodes (Tiers 1-3), mirroring Scala `JsonLogicOp` / Rust `ops.rs`.
   // All are decodable; the evaluator implements poseidon / pmt_verify /
   // schnorr_verify / bls_verify / bls_aggregate_verify and rejects the rest at
@@ -170,6 +172,8 @@ export const KNOWN_OPERATORS: ReadonlySet<JsonLogicOpTag> = new Set([
   'missing',
   'missing_some',
   'typeof',
+  // Hex conversion
+  'hex_to_int',
   // ZK / crypto
   'poseidon',
   'pmt_verify',
@@ -242,6 +246,7 @@ export const OPERATOR_CATEGORIES = {
   ] as const,
   object: ['values', 'keys', 'get', 'has', 'entries'] as const,
   utility: ['length', 'exists', 'missing', 'missing_some', 'typeof'] as const,
+  hex: ['hex_to_int'] as const,
   zk: [
     'poseidon',
     'pmt_verify',
