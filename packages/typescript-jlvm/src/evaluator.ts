@@ -596,6 +596,10 @@ export class Evaluator {
         return this.opHas(values);
       case 'entries':
         return this.opEntries(values);
+      case 'set':
+        return this.opSet(values);
+      case 'unset':
+        return this.opUnset(values);
       case 'typeof':
         return this.opTypeof(values);
       case 'exists':
@@ -1181,6 +1185,35 @@ export class Evaluator {
       );
     }
     return fail('Unexpected input to entries');
+  }
+
+  /**
+   * `set [map, key, value]` -> a NEW map with `key`->`value`. An existing key is
+   * replaced IN PLACE (JS `Map.set` is last-wins, position-preserving); a new
+   * key is appended. The input map is cloned, never mutated. Mirrors Rust
+   * `op_set` / Scala `set`.
+   */
+  private opSet(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 3 && values[0].tag === 'map' && values[1].tag === 'string') {
+      const out = new Map(values[0].value);
+      out.set(values[1].value, values[2]);
+      return mapValue(out);
+    }
+    return fail('Unexpected input to set');
+  }
+
+  /**
+   * `unset [map, key]` -> a NEW map WITHOUT `key`. An absent key is a no-op (the
+   * map is returned unchanged, NOT an error). The input map is cloned, never
+   * mutated. Mirrors Rust `op_unset` / Scala `unset`.
+   */
+  private opUnset(values: JsonLogicValue[]): JsonLogicValue {
+    if (values.length === 2 && values[0].tag === 'map' && values[1].tag === 'string') {
+      const out = new Map(values[0].value);
+      out.delete(values[1].value);
+      return mapValue(out);
+    }
+    return fail('Unexpected input to unset');
   }
 
   // --- strings / arrays --------------------------------------------------------

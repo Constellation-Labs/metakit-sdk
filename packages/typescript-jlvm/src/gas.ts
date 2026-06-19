@@ -130,6 +130,9 @@ export interface GasConfig {
   readonly get: GasCost;
   readonly has: GasCost;
   readonly entries: GasCost;
+  // Immutable single-key map update / removal. Both pinned EQUAL to `merge`.
+  readonly set: GasCost;
+  readonly unset: GasCost;
 
   // Utility
   readonly length: GasCost;
@@ -254,6 +257,8 @@ export const DEFAULT_GAS_CONFIG: GasConfig = {
   get: gasCost(3),
   has: gasCost(3),
   entries: gasCost(10),
+  set: gasCost(5), // == merge
+  unset: gasCost(5), // == merge
 
   // Utility
   length: gasCost(1),
@@ -444,6 +449,10 @@ export const getOperatorCost = (op: JsonLogicOpTag, config: GasConfig): GasCost 
       return config.has;
     case 'entries':
       return config.entries;
+    case 'set':
+      return config.set;
+    case 'unset':
+      return config.unset;
     case 'length':
       return config.length;
     case 'exists':

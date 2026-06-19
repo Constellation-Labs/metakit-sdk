@@ -353,6 +353,8 @@ impl<'a> Evaluator<'a> {
             "pow" => self.op_pow(values),
             "has" => self.op_has(values),
             "entries" => self.op_entries(values),
+            "set" => self.op_set(values),
+            "unset" => self.op_unset(values),
             "typeof" => self.op_typeof(values),
             "exists" => self.op_exists(values),
             "missing" => self.op_missing(values, ctx),
@@ -1229,6 +1231,39 @@ impl<'a> Evaluator<'a> {
         }
     }
 
+    /// `set [map, key, value]` -> a NEW map with `key`->`value`. If `key` is
+    /// already present its value is replaced IN PLACE (last-wins, preserving
+    /// position, exactly like `merge_maps`); otherwise the pair is appended.
+    /// The input map is cloned, never mutated. Mirrors Scala/TS `set`.
+    fn op_set(&self, values: Vec<Value>) -> Result<Value, String> {
+        match values.as_slice() {
+            [Value::Map(m), Value::Str(key), value] => {
+                let mut out = m.clone();
+                if let Some(slot) = out.iter_mut().find(|(k, _)| k == key) {
+                    slot.1 = value.clone();
+                } else {
+                    out.push((key.clone(), value.clone()));
+                }
+                Ok(Value::Map(out))
+            }
+            _ => Err(format!("Unexpected input to set, got {:?}", values)),
+        }
+    }
+
+    /// `unset [map, key]` -> a NEW map without `key`. An absent key is a no-op
+    /// (the map is returned unchanged, NOT an error). The input map is cloned,
+    /// never mutated. Mirrors Scala/TS `unset`.
+    fn op_unset(&self, values: Vec<Value>) -> Result<Value, String> {
+        match values.as_slice() {
+            [Value::Map(m), Value::Str(key)] => {
+                let out: Vec<(String, Value)> =
+                    m.iter().filter(|(k, _)| k != key).cloned().collect();
+                Ok(Value::Map(out))
+            }
+            _ => Err(format!("Unexpected input to unset, got {:?}", values)),
+        }
+    }
+
     fn op_typeof(&self, values: Vec<Value>) -> Result<Value, String> {
         match values.as_slice() {
             [v] => Ok(Value::Str(v.tag().to_string())),
@@ -1413,5 +1448,121 @@ mod let_order_tests {
     fn array_let_keeps_insertion_order() {
         let v = eval_str(r#"{"let":[[["a",1],["b",{"+":[{"var":"a"},1]}]],{"var":"b"}]}"#);
         assert!(v.deep_eq(&Value::int_from_i64(2)), "got {:?}", v);
+    }
+}
+
+#[cfg(test)]
+mod set_unset_tests {
+    use crate::canonical::canonicalize_string;
+    use crate::value::decode_value;
+    use crate::{decode_expression, evaluate};
+
+    /// Evaluate `expr` over `data` and return the RFC-8785 canonical bytes of the
+    /// result. Map output is order-independent under canonicalization (sorted
+    /// keys), which is exactly the consensus-relevant comparison.
+    fn eval_canon(expr_json: &str, data_json: &str) -> String {
+        let expr_v: serde_json::Value = serde_json::from_str(expr_json).unwrap();
+        let data_v: serde_json::Value = serde_json::from_str(data_json).unwrap();
+        let expr = decode_expression(&expr_v).unwrap();
+        let data = decode_value(&data_v);
+        let result = evaluate(&expr, &data).unwrap();
+        canonicalize_string(&result).unwrap()
+    }
+
+    /// Canonical bytes of a literal JSON value (the `expected`).
+    fn canon(json: &str) -> String {
+        let v: serde_json::Value = serde_json::from_str(json).unwrap();
+        canonicalize_string(&decode_value(&v)).unwrap()
+    }
+
+    fn assert_eval(expr: &str, data: &str, expected: &str) {
+        assert_eq!(eval_canon(expr, data), canon(expected), "expr = {}", expr);
+    }
+
+    fn assert_err(expr: &str, data: &str) {
+        let expr_v: serde_json::Value = serde_json::from_str(expr).unwrap();
+        let data_v: serde_json::Value = serde_json::from_str(data).unwrap();
+        let outcome = decode_expression(&expr_v).and_then(|e| evaluate(&e, &decode_value(&data_v)));
+        assert!(
+            outcome.is_err(),
+            "expected error for {}, got {:?}",
+            expr,
+            outcome
+        );
+    }
+
+    #[test]
+    fn set_canonical_vectors() {
+        assert_eval(r#"{"set":[{},"a",1]}"#, "{}", r#"{"a":1}"#);
+        assert_eval(r#"{"set":[{"a":1},"b",2]}"#, "{}", r#"{"a":1,"b":2}"#);
+        // replace existing (last-wins, position preserved).
+        assert_eval(r#"{"set":[{"a":1,"b":2},"a",9]}"#, "{}", r#"{"a":9,"b":2}"#);
+        // computed key + value from data.
+        assert_eval(
+            r#"{"set":[{},{"var":"k"},{"var":"v"}]}"#,
+            r#"{"k":"x","v":5}"#,
+            r#"{"x":5}"#,
+        );
+        // array and object values.
+        assert_eval(
+            r#"{"set":[{"a":1},"b",[1,2]]}"#,
+            "{}",
+            r#"{"a":1,"b":[1,2]}"#,
+        );
+        assert_eval(
+            r#"{"set":[{"a":1},"b",{"c":3}]}"#,
+            "{}",
+            r#"{"a":1,"b":{"c":3}}"#,
+        );
+    }
+
+    #[test]
+    fn set_is_immutable() {
+        // `set` must not mutate the input map: after `set` adds key "b", a fresh
+        // read of the original var still has only its original keys.
+        assert_eval(
+            r#"{"cat":[{"join":[{"keys":[{"set":[{"var":"m"},"b",2]}]},","]},"|",{"join":[{"keys":[{"var":"m"}]},","]}]}"#,
+            r#"{"m":{"a":1}}"#,
+            // updated keys -> "a,b"; original m keys -> "a"
+            r#""a,b|a""#,
+        );
+    }
+
+    #[test]
+    fn unset_canonical_vectors() {
+        assert_eval(r#"{"unset":[{"a":1,"b":2},"a"]}"#, "{}", r#"{"b":2}"#);
+        // absent key -> unchanged (no-op, not an error).
+        assert_eval(r#"{"unset":[{"a":1},"z"]}"#, "{}", r#"{"a":1}"#);
+        assert_eval(r#"{"unset":[{"a":1},"a"]}"#, "{}", r#"{}"#);
+        // computed key from data.
+        assert_eval(
+            r#"{"unset":[{"a":1,"b":2},{"var":"k"}]}"#,
+            r#"{"k":"a"}"#,
+            r#"{"b":2}"#,
+        );
+    }
+
+    #[test]
+    fn integration_voter_registration() {
+        assert_eval(
+            r#"{"set":[{"var":"voters"},{"var":"agent"},true]}"#,
+            r#"{"voters":{"0xaaa":true},"agent":"0xbbb"}"#,
+            r#"{"0xaaa":true,"0xbbb":true}"#,
+        );
+    }
+
+    #[test]
+    fn set_error_vectors() {
+        assert_err(r#"{"set":[5,"a",1]}"#, "{}"); // non-map 1st arg
+        assert_err(r#"{"set":[{},5,1]}"#, "{}"); // non-string key
+        assert_err(r#"{"set":[{},"a"]}"#, "{}"); // wrong arity (2)
+        assert_err(r#"{"set":[{}]}"#, "{}"); // wrong arity (1)
+    }
+
+    #[test]
+    fn unset_error_vectors() {
+        assert_err(r#"{"unset":[5,"a"]}"#, "{}"); // non-map 1st arg
+        assert_err(r#"{"unset":[{},5]}"#, "{}"); // non-string key
+        assert_err(r#"{"unset":[{}]}"#, "{}"); // wrong arity (1)
     }
 }

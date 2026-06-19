@@ -133,6 +133,9 @@ export interface GasSchedule {
   readonly get: bigint;
   readonly has: bigint;
   readonly entries: bigint;
+  /** `set` / `unset`: immutable single-key map update / removal. Both == `merge`. */
+  readonly set: bigint;
+  readonly unset: bigint;
   readonly length: bigint;
   readonly exists: bigint;
   readonly missing: bigint;
@@ -229,6 +232,8 @@ export const DEFAULT_GAS_SCHEDULE: GasSchedule = {
   get: 3n,
   has: 3n,
   entries: 10n,
+  set: 5n, // == merge
+  unset: 5n, // == merge
   length: 1n,
   exists: 5n,
   missing: 10n,
@@ -405,6 +410,10 @@ export const opBaseCost = (c: GasSchedule, op: string): bigint | null => {
       return c.has;
     case 'entries':
       return c.entries;
+    case 'set':
+      return c.set;
+    case 'unset':
+      return c.unset;
     case 'typeof':
       return c.typeOf;
     case 'hex_to_int':
