@@ -297,6 +297,9 @@ impl<'a> Evaluator<'a> {
         values: Vec<Value>,
         ctx: Option<&Value>,
     ) -> Result<Value, String> {
+        // NOTE: this dispatch is compiled into the zk-jlvm / zk-jlvm-shielded (M5)
+        // SP1 guest ELF. Adding/removing/changing an opcode here rotates the M5 guest
+        // VKEY -> regenerate rust/zk-jlvm-shielded/script/fixtures/ (see its README).
         match op {
             "==" => self.op_eq(values),
             "===" => self.op_eq_strict(values),
