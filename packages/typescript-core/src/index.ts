@@ -71,7 +71,12 @@ export {
 } from './crypto';
 
 // Committed-roots light-client codecs (byte-aligned with the metakit reference)
-export type { SparseMerkleRoot, CommittedRoots, CommittedBreadcrumb, CommitKeyErrorCode } from './committed-roots';
+export type {
+  SparseMerkleRoot,
+  CommittedRoots,
+  CommittedBreadcrumb,
+  CommitKeyErrorCode,
+} from './committed-roots';
 export {
   committedRootsCombinedHash,
   encodeCommittedRoots,

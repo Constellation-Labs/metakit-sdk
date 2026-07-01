@@ -47,9 +47,7 @@ describe('committed-roots codecs (Scala parity)', () => {
     it('wire keys = [mptRoot, catalogRoot] and round-trips', () => {
       const json = encodeCommittedRoots(roots);
       expect(Object.keys(JSON.parse(json))).toEqual(['mptRoot', 'catalogRoot']);
-      expect(json).toBe(
-        `{"mptRoot":"${MPT_ROOT}","catalogRoot":{"value":"${CATALOG_ROOT}"}}`
-      );
+      expect(json).toBe(`{"mptRoot":"${MPT_ROOT}","catalogRoot":{"value":"${CATALOG_ROOT}"}}`);
       expect(decodeCommittedRoots(json)).toEqual(roots);
     });
 

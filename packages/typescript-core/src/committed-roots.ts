@@ -156,21 +156,33 @@ function validateCommitKey(value: string): void {
     throw new CommitKeyError('EMPTY_KEY', 'commit key must not be empty');
   }
   if (value.length > MAX_KEY_LENGTH) {
-    throw new CommitKeyError('KEY_TOO_LONG', `commit key exceeds ${MAX_KEY_LENGTH} chars: ${value.length}`);
+    throw new CommitKeyError(
+      'KEY_TOO_LONG',
+      `commit key exceeds ${MAX_KEY_LENGTH} chars: ${value.length}`
+    );
   }
   const segments = value.split('/');
   if (value.startsWith('/') || value.endsWith('/') || segments.some((s) => s.length === 0)) {
     throw new CommitKeyError('EMPTY_SEGMENT', `commit key has an empty segment: '${value}'`);
   }
   if (segments.length > MAX_SEGMENTS) {
-    throw new CommitKeyError('TOO_MANY_SEGMENTS', `commit key exceeds ${MAX_SEGMENTS} segments: ${segments.length}`);
+    throw new CommitKeyError(
+      'TOO_MANY_SEGMENTS',
+      `commit key exceeds ${MAX_SEGMENTS} segments: ${segments.length}`
+    );
   }
   for (const s of segments) {
     if (s.length > MAX_SEGMENT_LENGTH) {
-      throw new CommitKeyError('SEGMENT_TOO_LONG', `commit key segment exceeds ${MAX_SEGMENT_LENGTH} chars: '${s}'`);
+      throw new CommitKeyError(
+        'SEGMENT_TOO_LONG',
+        `commit key segment exceeds ${MAX_SEGMENT_LENGTH} chars: '${s}'`
+      );
     }
     if (!SEGMENT_PATTERN.test(s)) {
-      throw new CommitKeyError('INVALID_SEGMENT', `commit key segment must match ${SEGMENT_PATTERN.source}: '${s}'`);
+      throw new CommitKeyError(
+        'INVALID_SEGMENT',
+        `commit key segment must match ${SEGMENT_PATTERN.source}: '${s}'`
+      );
     }
   }
 }

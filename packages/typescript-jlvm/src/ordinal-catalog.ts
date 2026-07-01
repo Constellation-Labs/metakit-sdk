@@ -103,7 +103,10 @@ export function verifyOrdinalCatalogProof(
   if (topHot.status === 'wrongKey') return { error: 'WrongProofKey', component: 'topHot' };
   if (topHot.status === 'invalid') return { error: 'ProofInvalid', component: 'topHot' };
   if (topHot.status === 'absent') {
-    return { error: 'MalformedOrdinalProof', reason: 'topHot must be an inclusion in the top catalog' };
+    return {
+      error: 'MalformedOrdinalProof',
+      reason: 'topHot must be an inclusion in the top catalog',
+    };
   }
   const hotRoot = rootFromValueBytes(topHot.value);
 
@@ -112,7 +115,10 @@ export function verifyOrdinalCatalogProof(
   if (topSealed.status === 'wrongKey') return { error: 'WrongProofKey', component: 'topSealed' };
   if (topSealed.status === 'invalid') return { error: 'ProofInvalid', component: 'topSealed' };
   if (topSealed.status === 'absent') {
-    return { error: 'MalformedOrdinalProof', reason: 'topSealed must be an inclusion in the top catalog' };
+    return {
+      error: 'MalformedOrdinalProof',
+      reason: 'topSealed must be an inclusion in the top catalog',
+    };
   }
   const level1Root = rootFromValueBytes(topSealed.value);
 
@@ -136,7 +142,10 @@ export function verifyOrdinalCatalogProof(
 
   // 5. sealedEntry: inclusion of the ordinal inside its sealed epoch tree.
   if (p.sealedEntry === null || p.sealedEntry === undefined) {
-    return { error: 'MalformedOrdinalProof', reason: `epoch ${epoch} is sealed; a sealedEntry proof is required` };
+    return {
+      error: 'MalformedOrdinalProof',
+      reason: `epoch ${epoch} is sealed; a sealedEntry proof is required`,
+    };
   }
   const sealed = checkSmtProof(sealedRoot, p.sealedEntry, ordinalKey(ordinal));
   if (sealed.status === 'wrongKey') return { error: 'WrongProofKey', component: 'sealedEntry' };

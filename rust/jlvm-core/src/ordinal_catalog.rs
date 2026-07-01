@@ -87,7 +87,10 @@ impl OrdinalCatalogResult {
     pub fn to_expected_json(&self) -> serde_json::Value {
         use serde_json::json;
         match self {
-            OrdinalCatalogResult::Attested(OrdinalAttestation::CommittedAt { ordinal, mpt_root }) => {
+            OrdinalCatalogResult::Attested(OrdinalAttestation::CommittedAt {
+                ordinal,
+                mpt_root,
+            }) => {
                 json!({"type": "CommittedAt", "ordinal": ordinal, "mptRoot": mpt_root})
             }
             OrdinalCatalogResult::Attested(OrdinalAttestation::NotCommitted { ordinal }) => {
@@ -126,10 +129,9 @@ pub fn verify_ordinal_catalog_proof(
     let obj = proof
         .as_object()
         .ok_or_else(|| "OrdinalCatalogProof: expected an object".to_string())?;
-    let ordinal = obj
-        .get("ordinal")
-        .and_then(|v| v.as_u64())
-        .ok_or_else(|| "OrdinalCatalogProof: `ordinal` must be a non-negative integer".to_string())?;
+    let ordinal = obj.get("ordinal").and_then(|v| v.as_u64()).ok_or_else(|| {
+        "OrdinalCatalogProof: `ordinal` must be a non-negative integer".to_string()
+    })?;
     let epoch = ordinal / epoch_size; // floor division
 
     let component = |name: &str| -> Result<&serde_json::Value, String> {
@@ -139,8 +141,16 @@ pub fn verify_ordinal_catalog_proof(
 
     // 1. topHot -> the hot epoch tree root (must be an inclusion in the top catalog).
     let hot_root = match check_smt_proof(catalog_root, component("topHot")?, &hot_epochs_key())? {
-        SmtCheckOutcome::WrongKey { .. } => return Ok(Error(WrongProofKey { component: "topHot".into() })),
-        SmtCheckOutcome::Invalid => return Ok(Error(ProofInvalid { component: "topHot".into() })),
+        SmtCheckOutcome::WrongKey => {
+            return Ok(Error(WrongProofKey {
+                component: "topHot".into(),
+            }))
+        }
+        SmtCheckOutcome::Invalid => {
+            return Ok(Error(ProofInvalid {
+                component: "topHot".into(),
+            }))
+        }
         SmtCheckOutcome::Absent => {
             return Ok(Error(MalformedOrdinalProof {
                 reason: "topHot must be an inclusion in the top catalog".into(),
@@ -150,21 +160,38 @@ pub fn verify_ordinal_catalog_proof(
     };
 
     // 2. topSealed -> the level-1 (sealed epochs) tree root (must be an inclusion).
-    let level1_root = match check_smt_proof(catalog_root, component("topSealed")?, &sealed_epochs_key())? {
-        SmtCheckOutcome::WrongKey { .. } => return Ok(Error(WrongProofKey { component: "topSealed".into() })),
-        SmtCheckOutcome::Invalid => return Ok(Error(ProofInvalid { component: "topSealed".into() })),
-        SmtCheckOutcome::Absent => {
-            return Ok(Error(MalformedOrdinalProof {
-                reason: "topSealed must be an inclusion in the top catalog".into(),
-            }))
-        }
-        SmtCheckOutcome::Present { value } => root_from_value_bytes(&value),
-    };
+    let level1_root =
+        match check_smt_proof(catalog_root, component("topSealed")?, &sealed_epochs_key())? {
+            SmtCheckOutcome::WrongKey => {
+                return Ok(Error(WrongProofKey {
+                    component: "topSealed".into(),
+                }))
+            }
+            SmtCheckOutcome::Invalid => {
+                return Ok(Error(ProofInvalid {
+                    component: "topSealed".into(),
+                }))
+            }
+            SmtCheckOutcome::Absent => {
+                return Ok(Error(MalformedOrdinalProof {
+                    reason: "topSealed must be an inclusion in the top catalog".into(),
+                }))
+            }
+            SmtCheckOutcome::Present { value } => root_from_value_bytes(&value),
+        };
 
     // 3. hot: is the ordinal in the current hot epoch?
     match check_smt_proof(&hot_root, component("hot")?, &ordinal_key(ordinal))? {
-        SmtCheckOutcome::WrongKey { .. } => return Ok(Error(WrongProofKey { component: "hot".into() })),
-        SmtCheckOutcome::Invalid => return Ok(Error(ProofInvalid { component: "hot".into() })),
+        SmtCheckOutcome::WrongKey => {
+            return Ok(Error(WrongProofKey {
+                component: "hot".into(),
+            }))
+        }
+        SmtCheckOutcome::Invalid => {
+            return Ok(Error(ProofInvalid {
+                component: "hot".into(),
+            }))
+        }
         SmtCheckOutcome::Present { value } => {
             return Ok(Attested(OrdinalAttestation::CommittedAt {
                 ordinal,
@@ -175,10 +202,21 @@ pub fn verify_ordinal_catalog_proof(
     }
 
     // hot-absent -> 4. level1: was the ordinal's epoch ever sealed?
-    let sealed_root = match check_smt_proof(&level1_root, component("level1")?, &epoch_key(epoch))? {
-        SmtCheckOutcome::WrongKey { .. } => return Ok(Error(WrongProofKey { component: "level1".into() })),
-        SmtCheckOutcome::Invalid => return Ok(Error(ProofInvalid { component: "level1".into() })),
-        SmtCheckOutcome::Absent => return Ok(Attested(OrdinalAttestation::NotCommitted { ordinal })),
+    let sealed_root = match check_smt_proof(&level1_root, component("level1")?, &epoch_key(epoch))?
+    {
+        SmtCheckOutcome::WrongKey => {
+            return Ok(Error(WrongProofKey {
+                component: "level1".into(),
+            }))
+        }
+        SmtCheckOutcome::Invalid => {
+            return Ok(Error(ProofInvalid {
+                component: "level1".into(),
+            }))
+        }
+        SmtCheckOutcome::Absent => {
+            return Ok(Attested(OrdinalAttestation::NotCommitted { ordinal }))
+        }
         SmtCheckOutcome::Present { value } => root_from_value_bytes(&value),
     };
 
@@ -188,15 +226,21 @@ pub fn verify_ordinal_catalog_proof(
         None | Some(serde_json::Value::Null) => Ok(Error(MalformedOrdinalProof {
             reason: format!("epoch {epoch} is sealed; a sealedEntry proof is required"),
         })),
-        Some(se) => Ok(match check_smt_proof(&sealed_root, se, &ordinal_key(ordinal))? {
-            SmtCheckOutcome::WrongKey { .. } => Error(WrongProofKey { component: "sealedEntry".into() }),
-            SmtCheckOutcome::Invalid => Error(ProofInvalid { component: "sealedEntry".into() }),
-            SmtCheckOutcome::Present { value } => Attested(OrdinalAttestation::CommittedAt {
-                ordinal,
-                mpt_root: root_from_value_bytes(&value),
-            }),
-            SmtCheckOutcome::Absent => Attested(OrdinalAttestation::NotCommitted { ordinal }),
-        }),
+        Some(se) => Ok(
+            match check_smt_proof(&sealed_root, se, &ordinal_key(ordinal))? {
+                SmtCheckOutcome::WrongKey => Error(WrongProofKey {
+                    component: "sealedEntry".into(),
+                }),
+                SmtCheckOutcome::Invalid => Error(ProofInvalid {
+                    component: "sealedEntry".into(),
+                }),
+                SmtCheckOutcome::Present { value } => Attested(OrdinalAttestation::CommittedAt {
+                    ordinal,
+                    mpt_root: root_from_value_bytes(&value),
+                }),
+                SmtCheckOutcome::Absent => Attested(OrdinalAttestation::NotCommitted { ordinal }),
+            },
+        ),
     }
 }
 
@@ -207,10 +251,25 @@ mod tests {
     #[test]
     fn catalog_keys_match_reference() {
         // Ground-truth: lowercaseHex(sha256(utf8(name))).
-        assert_eq!(hot_epochs_key(), "bf219127ab671805b4bc75df3598e2db17eef5fab73facc3757e6baa8c416636");
-        assert_eq!(sealed_epochs_key(), "19ab634f4720ce035b017e7ffb8e8ca5a4481e62309a5beffaf75da167ee1202");
-        assert_eq!(ordinal_key(0), "c0020bf0613f2c15579e2e827e436cc0b445b6c2e2ee8f08922016e27c3d7be2");
-        assert_eq!(ordinal_key(1), "2aeb90f46fe17b9672e4fe5b7f13ae003293a0fefe329e49095d77a727c1e19a");
-        assert_eq!(epoch_key(0), "402a33e021e6fd2d8fb109ce145fef5df03a39a4d5e2f4f993fc812f79ca4692");
+        assert_eq!(
+            hot_epochs_key(),
+            "bf219127ab671805b4bc75df3598e2db17eef5fab73facc3757e6baa8c416636"
+        );
+        assert_eq!(
+            sealed_epochs_key(),
+            "19ab634f4720ce035b017e7ffb8e8ca5a4481e62309a5beffaf75da167ee1202"
+        );
+        assert_eq!(
+            ordinal_key(0),
+            "c0020bf0613f2c15579e2e827e436cc0b445b6c2e2ee8f08922016e27c3d7be2"
+        );
+        assert_eq!(
+            ordinal_key(1),
+            "2aeb90f46fe17b9672e4fe5b7f13ae003293a0fefe329e49095d77a727c1e19a"
+        );
+        assert_eq!(
+            epoch_key(0),
+            "402a33e021e6fd2d8fb109ce145fef5df03a39a4d5e2f4f993fc812f79ca4692"
+        );
     }
 }

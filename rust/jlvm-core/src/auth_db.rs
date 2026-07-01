@@ -453,7 +453,7 @@ fn smt_verify_proof(root: &str, proof: &SmtProof) -> Option<SmtVerified> {
 pub(crate) enum SmtCheckOutcome {
     Present { value: Vec<u8> },
     Absent,
-    WrongKey { got: String },
+    WrongKey,
     Invalid,
 }
 
@@ -468,9 +468,7 @@ pub(crate) fn check_smt_proof(
 ) -> Result<SmtCheckOutcome, String> {
     let proof = decode_smt_proof(proof_json)?;
     if proof.key() != expected_key {
-        return Ok(SmtCheckOutcome::WrongKey {
-            got: proof.key().to_string(),
-        });
+        return Ok(SmtCheckOutcome::WrongKey);
     }
     Ok(match smt_verify_proof(root, &proof) {
         None => SmtCheckOutcome::Invalid,

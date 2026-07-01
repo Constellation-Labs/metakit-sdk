@@ -11,10 +11,22 @@ use std::path::PathBuf;
 
 #[test]
 fn catalog_keys_match_reference() {
-    assert_eq!(hot_epochs_key(), "bf219127ab671805b4bc75df3598e2db17eef5fab73facc3757e6baa8c416636");
-    assert_eq!(sealed_epochs_key(), "19ab634f4720ce035b017e7ffb8e8ca5a4481e62309a5beffaf75da167ee1202");
-    assert_eq!(ordinal_key(0), "c0020bf0613f2c15579e2e827e436cc0b445b6c2e2ee8f08922016e27c3d7be2");
-    assert_eq!(epoch_key(0), "402a33e021e6fd2d8fb109ce145fef5df03a39a4d5e2f4f993fc812f79ca4692");
+    assert_eq!(
+        hot_epochs_key(),
+        "bf219127ab671805b4bc75df3598e2db17eef5fab73facc3757e6baa8c416636"
+    );
+    assert_eq!(
+        sealed_epochs_key(),
+        "19ab634f4720ce035b017e7ffb8e8ca5a4481e62309a5beffaf75da167ee1202"
+    );
+    assert_eq!(
+        ordinal_key(0),
+        "c0020bf0613f2c15579e2e827e436cc0b445b6c2e2ee8f08922016e27c3d7be2"
+    );
+    assert_eq!(
+        epoch_key(0),
+        "402a33e021e6fd2d8fb109ce145fef5df03a39a4d5e2f4f993fc812f79ca4692"
+    );
 }
 
 #[test]
@@ -43,7 +55,9 @@ fn ordinal_catalog_vectors_match_reference() {
         if &actual == expected {
             passed += 1;
         } else {
-            failures.push(format!("ordinal {ordinal}: expected {expected}, got {actual}"));
+            failures.push(format!(
+                "ordinal {ordinal}: expected {expected}, got {actual}"
+            ));
         }
     }
 
@@ -54,5 +68,9 @@ fn ordinal_catalog_vectors_match_reference() {
         cases.len(),
         failures.join("\n")
     );
-    println!("ordinal-catalog differential: {}/{} cases passed", passed, cases.len());
+    println!(
+        "ordinal-catalog differential: {}/{} cases passed",
+        passed,
+        cases.len()
+    );
 }

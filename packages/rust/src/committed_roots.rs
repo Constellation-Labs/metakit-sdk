@@ -133,10 +133,9 @@ impl CommitKey {
 fn is_valid_segment(s: &str) -> bool {
     let mut chars = s.chars();
     match chars.next() {
-        Some(c0) if c0.is_ascii_lowercase() || c0.is_ascii_digit() => {
-            s.chars()
-                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-')
-        }
+        Some(c0) if c0.is_ascii_lowercase() || c0.is_ascii_digit() => s.chars().all(|c| {
+            c.is_ascii_lowercase() || c.is_ascii_digit() || c == '.' || c == '_' || c == '-'
+        }),
         _ => false,
     }
 }
@@ -147,18 +146,27 @@ fn validate(value: &str) -> Result<(), CommitKeyError> {
     }
     let len = value.chars().count();
     if len > CommitKey::MAX_KEY_LENGTH {
-        return Err(CommitKeyError::KeyTooLong { max: CommitKey::MAX_KEY_LENGTH, len });
+        return Err(CommitKeyError::KeyTooLong {
+            max: CommitKey::MAX_KEY_LENGTH,
+            len,
+        });
     }
     let segments: Vec<&str> = value.split('/').collect();
     if value.starts_with('/') || value.ends_with('/') || segments.iter().any(|s| s.is_empty()) {
         return Err(CommitKeyError::EmptySegment(value.to_string()));
     }
     if segments.len() > CommitKey::MAX_SEGMENTS {
-        return Err(CommitKeyError::TooManySegments { max: CommitKey::MAX_SEGMENTS, count: segments.len() });
+        return Err(CommitKeyError::TooManySegments {
+            max: CommitKey::MAX_SEGMENTS,
+            count: segments.len(),
+        });
     }
     for s in &segments {
         if s.chars().count() > CommitKey::MAX_SEGMENT_LENGTH {
-            return Err(CommitKeyError::SegmentTooLong { max: CommitKey::MAX_SEGMENT_LENGTH, segment: s.to_string() });
+            return Err(CommitKeyError::SegmentTooLong {
+                max: CommitKey::MAX_SEGMENT_LENGTH,
+                segment: s.to_string(),
+            });
         }
         if !is_valid_segment(s) {
             return Err(CommitKeyError::InvalidSegment(s.to_string()));
@@ -190,7 +198,9 @@ mod tests {
     fn roots() -> CommittedRoots {
         CommittedRoots {
             mpt_root: "aa".repeat(32),
-            catalog_root: SparseMerkleRoot { value: "bb".repeat(32) },
+            catalog_root: SparseMerkleRoot {
+                value: "bb".repeat(32),
+            },
         }
     }
 
@@ -208,13 +218,31 @@ mod tests {
     #[test]
     fn commit_key_rejections() {
         assert!(matches!(CommitKey::from(""), Err(CommitKeyError::EmptyKey)));
-        assert!(matches!(CommitKey::from("/fiber"), Err(CommitKeyError::EmptySegment(_))));
-        assert!(matches!(CommitKey::from("fiber/"), Err(CommitKeyError::EmptySegment(_))));
-        assert!(matches!(CommitKey::from("fiber//abc"), Err(CommitKeyError::EmptySegment(_))));
-        assert!(matches!(CommitKey::from("Fiber"), Err(CommitKeyError::InvalidSegment(_)))); // uppercase
-        assert!(matches!(CommitKey::from(&"a".repeat(65)), Err(CommitKeyError::SegmentTooLong { .. })));
+        assert!(matches!(
+            CommitKey::from("/fiber"),
+            Err(CommitKeyError::EmptySegment(_))
+        ));
+        assert!(matches!(
+            CommitKey::from("fiber/"),
+            Err(CommitKeyError::EmptySegment(_))
+        ));
+        assert!(matches!(
+            CommitKey::from("fiber//abc"),
+            Err(CommitKeyError::EmptySegment(_))
+        ));
+        assert!(matches!(
+            CommitKey::from("Fiber"),
+            Err(CommitKeyError::InvalidSegment(_))
+        )); // uppercase
+        assert!(matches!(
+            CommitKey::from(&"a".repeat(65)),
+            Err(CommitKeyError::SegmentTooLong { .. })
+        ));
         let many = vec!["a"; 17].join("/");
-        assert!(matches!(CommitKey::from(&many), Err(CommitKeyError::TooManySegments { .. })));
+        assert!(matches!(
+            CommitKey::from(&many),
+            Err(CommitKeyError::TooManySegments { .. })
+        ));
         assert!(CommitKey::is_valid("fiber/abc-1"));
         assert!(!CommitKey::is_valid("Fiber"));
     }
@@ -225,7 +253,11 @@ mod tests {
         let json = serde_json::to_string(&r).unwrap();
         assert_eq!(
             json,
-            format!("{{\"mptRoot\":\"{}\",\"catalogRoot\":{{\"value\":\"{}\"}}}}", "aa".repeat(32), "bb".repeat(32))
+            format!(
+                "{{\"mptRoot\":\"{}\",\"catalogRoot\":{{\"value\":\"{}\"}}}}",
+                "aa".repeat(32),
+                "bb".repeat(32)
+            )
         );
         assert_eq!(serde_json::from_str::<CommittedRoots>(&json).unwrap(), r);
         // Known-answer: sha256(0xaa*32 ++ 0xbb*32)
@@ -237,7 +269,10 @@ mod tests {
 
     #[test]
     fn committed_breadcrumb_wire() {
-        let b = CommittedBreadcrumb { ordinal: 0, roots: roots() };
+        let b = CommittedBreadcrumb {
+            ordinal: 0,
+            roots: roots(),
+        };
         let json = serde_json::to_string(&b).unwrap();
         assert_eq!(
             json,
@@ -247,6 +282,9 @@ mod tests {
                 "bb".repeat(32)
             )
         );
-        assert_eq!(serde_json::from_str::<CommittedBreadcrumb>(&json).unwrap(), b);
+        assert_eq!(
+            serde_json::from_str::<CommittedBreadcrumb>(&json).unwrap(),
+            b
+        );
     }
 }
