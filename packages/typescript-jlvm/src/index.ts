@@ -176,6 +176,17 @@ export {
   ZERO_GAS_USED,
 } from './gas';
 
+// Ordinal-catalog attestation verifier (committed-state light client;
+// byte-aligned with the metakit reference). See docs/committed-roots.md.
+export {
+  verifyOrdinalCatalogProof,
+  isOrdinalCatalogError,
+  catalogKeys,
+  type OrdinalAttestation,
+  type OrdinalCatalogError,
+  type OrdinalCatalogResult,
+} from './ordinal-catalog';
+
 // ============= High-level API =============
 
 import { parseExpression, parseValue, encodeValue } from './codec';

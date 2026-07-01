@@ -269,10 +269,51 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Build a release BODY with direct links to every published artifact plus
+      # a cross-link to the byte-compatible metakit (Scala) reference line. This
+      # is what users read on the Releases page; `generate_release_notes: true`
+      # appends the auto-generated merged-PR list AFTER this body. Package names
+      # are read from the manifests (same pattern as the job summary above) so a
+      # rename needs no change here. ubuntu-latest ships node + python3.
+      - name: Build release notes body
+        id: notes
+        run: |
+          VERSION="${{ needs.version-check.outputs.version }}"
+          MINOR_LINE="$(echo "$VERSION" | cut -d. -f1-2)" # e.g. 1.8
+          BODY="$RUNNER_TEMP/RELEASE_BODY.md"
+          {
+            echo "Multi-language SDK for Constellation metagraphs, byte-compatible with the metakit (Scala) reference — the [\`io.constellationnetwork:metakit_2.13\`](https://central.sonatype.com/artifact/io.constellationnetwork/metakit_2.13) \`${MINOR_LINE}.x\` line."
+            echo ""
+            echo "### Published artifacts (all at \`$VERSION\`)"
+            echo ""
+            echo "| Registry | Package |"
+            echo "|---|---|"
+            for dir in $NPM_PACKAGE_DIRS; do
+              NAME=$(node -p "require('./$dir/package.json').name")
+              echo "| npm | [\`$NAME\`](https://www.npmjs.com/package/$NAME) |"
+            done
+            for dir in $CRATE_DIRS; do
+              NAME=$(grep -m1 '^name' "$dir/Cargo.toml" | sed -E 's/name *= *"(.*)"/\1/')
+              echo "| crates.io | [\`$NAME\`](https://crates.io/crates/$NAME) |"
+            done
+            for dir in $PYTHON_PACKAGE_DIRS; do
+              NAME=$(python3 -c "import tomllib; print(tomllib.load(open('$dir/pyproject.toml','rb'))['project']['name'])")
+              echo "| PyPI | [\`$NAME\`](https://pypi.org/project/$NAME/) |"
+            done
+            echo ""
+            if [[ "$VERSION" == *-* ]]; then
+              echo "> **Prerelease.** npm packages publish under the \`next\` dist-tag — install with \`npm install @constellation-network/metagraph-sdk@next\`. For PyPI use \`pip install --pre constellation-metagraph-sdk\`; for crates.io pin the exact version (\`= $VERSION\`)."
+              echo ""
+            fi
+            echo "_Go and Java signing SDKs are not part of this unified release; see \`packages/{go,java}\`._"
+          } > "$BODY"
+          echo "body_path=$BODY" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: SDK v${{ needs.version-check.outputs.version }}
+          body_path: ${{ steps.notes.outputs.body_path }}
           generate_release_notes: true
           prerelease: ${{ contains(needs.version-check.outputs.version, '-') }}
         env:

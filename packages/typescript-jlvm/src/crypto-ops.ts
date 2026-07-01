@@ -1916,6 +1916,37 @@ const smtVerifyProof = (root: string, proof: SmtProof): SmtVerified | null => {
   return recomputed === root ? { kind: 'absent', key: proof.key } : null;
 };
 
+/**
+ * The SMT `checked` primitive reused by the ordinal-catalog verifier
+ * (`ordinal-catalog.ts`): decode a proof, require it proves `expectedKey`, then
+ * verify it against `root` (raw lowercase hex, no `0x`). Mirrors Scala
+ * `OrdinalCatalogProofVerifier.checked`. Package-internal (not re-exported from
+ * `index.ts`). Throws (via `fail`) only on undecodable proof JSON.
+ */
+export type SmtCheckOutcome =
+  | { status: 'present'; value: Uint8Array }
+  | { status: 'absent' }
+  | { status: 'wrongKey'; got: string }
+  | { status: 'invalid' };
+
+export const checkSmtProof = (
+  root: string,
+  proofJson: unknown,
+  expectedKey: string
+): SmtCheckOutcome => {
+  const proof = decodeSmtProof(proofJson);
+  if (smtProofKey(proof) !== expectedKey) {
+    return { status: 'wrongKey', got: smtProofKey(proof) };
+  }
+  const verified = smtVerifyProof(root, proof);
+  if (verified === null) {
+    return { status: 'invalid' };
+  }
+  return verified.kind === 'present'
+    ? { status: 'present', value: verified.value }
+    : { status: 'absent' };
+};
+
 /** `keyHex(key) = "0x" + key.value.toLowerCase`. */
 const keyHex = (key: string): string => '0x' + key.toLowerCase();
 

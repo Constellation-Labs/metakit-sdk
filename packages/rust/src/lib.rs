@@ -47,6 +47,7 @@
 pub mod binary;
 pub mod canonicalize;
 pub mod codec;
+pub mod committed_roots;
 pub mod currency_transaction;
 pub mod currency_types;
 pub mod hash;
@@ -92,4 +93,9 @@ pub use currency_transaction::{
 pub use currency_types::{
     CurrencyTransaction, CurrencyTransactionValue, TransactionReference, TransferParams,
     TOKEN_DECIMALS,
+};
+
+// Committed-roots light-client codecs (byte-aligned with the metakit reference).
+pub use committed_roots::{
+    CommitKey, CommitKeyError, CommittedBreadcrumb, CommittedRoots, SparseMerkleRoot,
 };

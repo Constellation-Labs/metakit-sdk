@@ -48,7 +48,7 @@ use sha2::{Digest, Sha256};
 /// `Hash.fromBytes`: lowercase-hex SHA-256 of `bytes`. The returned `String` is
 /// the 64-char lowercase hex digest -- the same `Hash.value` form the Scala
 /// primitives compare on.
-fn hash_from_bytes(bytes: &[u8]) -> String {
+pub(crate) fn hash_from_bytes(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();
@@ -447,6 +447,34 @@ fn smt_verify_proof(root: &str, proof: &SmtProof) -> Option<SmtVerified> {
             }
         }
     }
+}
+
+/// The outcome of the SMT `checked` primitive (see [`check_smt_proof`]).
+pub(crate) enum SmtCheckOutcome {
+    Present { value: Vec<u8> },
+    Absent,
+    WrongKey,
+    Invalid,
+}
+
+/// The SMT `checked` primitive reused by the ordinal-catalog verifier
+/// (`ordinal_catalog.rs`): decode a proof, require it proves `expected_key`, then
+/// verify it against `root` (raw lowercase hex, no `0x`). Mirrors Scala
+/// `OrdinalCatalogProofVerifier.checked`. `Err` only on undecodable proof JSON.
+pub(crate) fn check_smt_proof(
+    root: &str,
+    proof_json: &serde_json::Value,
+    expected_key: &str,
+) -> Result<SmtCheckOutcome, String> {
+    let proof = decode_smt_proof(proof_json)?;
+    if proof.key() != expected_key {
+        return Ok(SmtCheckOutcome::WrongKey);
+    }
+    Ok(match smt_verify_proof(root, &proof) {
+        None => SmtCheckOutcome::Invalid,
+        Some(SmtVerified::Present { value, .. }) => SmtCheckOutcome::Present { value },
+        Some(SmtVerified::Absent { .. }) => SmtCheckOutcome::Absent,
+    })
 }
 
 /// Render a tessellation `Hex` key as the JLVM's `0x`-prefixed lowercase hex

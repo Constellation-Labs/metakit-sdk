@@ -1,30 +1,74 @@
-# JLVM Cross-Language Parity Plan
+# JLVM Cross-Language Parity — Status
 
-## Scope (confirmed 2026-06-06)
-- **TypeScript:** base JLVM only — no ZK opcodes. (Already runs the shared base vectors.)
-- **Scala ↔ Rust:** FULL parity — base JLVM **and** the entire zk-JLVM: all ZK opcodes + full auth-DB (Sparse Merkle + Merkle Patricia) in Rust.
+> **Status doc (updated 2026-07-01).** This began as a plan; the plan is now
+> substantially complete. TypeScript and Rust have reached **full byte-for-byte
+> parity** with the metakit (Scala) reference JLVM — base opcodes *and* the
+> entire zk-JLVM — verified against the shared conformance vectors on every CI
+> run. The earlier note that "TypeScript is base-JLVM only, no ZK opcodes" is
+> **no longer true** and has been removed.
+
+## Scope (as shipped)
+
+- **JLVM lives in TypeScript and Rust only.** Python, Go, and Java are
+  signing-SDK ports (canonicalization + ECDSA + currency/data transactions) and
+  intentionally have **no** JSON-Logic VM. This is by design, not a gap.
+- **TypeScript ↔ Rust ↔ Scala: FULL parity** — base JLVM **and** the entire
+  zk-JLVM: all ZK/crypto opcodes + full auth-DB (Sparse Merkle + Merkle
+  Patricia) + Σ-protocols.
 
 ## Principle
-Scala (metakit) is the reference. Formal **shared vectors** live in `shared/` — known-answer where they exist, Scala-generated for coverage — and Rust must reproduce every one byte-for-byte (the discipline that already governs the 59 base vectors via `rust/jlvm-core/tests/differential.rs`).
 
-## Rust opcode surface to reach parity
-`poseidon` · `pmt_verify` · `smt_verify` · `mpt_verify` · `mpt_prefix_verify` · `groth16_verify` · `ecvrf_verify` · `bn254_add`/`mul`/`pairing` · `bls_verify`/`bls_aggregate_verify` · `schnorr_verify`
+Scala (metakit) is the reference. The formal **shared vectors** live in
+`shared/` (known-answer where they exist, Scala-generated for coverage); Rust
+and TypeScript must reproduce every one byte-for-byte. The shared vectors are
+the canonical source of truth and are vendored into metakit's own test suite
+(`src/test/resources/conformance/`) — a byte `diff` of the two copies is zero.
 
-Rust already has `poseidon-bn254`, the fixed-depth Poseidon Merkle (from the shielded transfer), and `canonical.rs`.
+## Opcode surface (at parity in TS + Rust)
 
-## Per-tier loop
-generate vectors (from Scala) → implement in Rust → run vectors → **adversarial byte-identity audit vs Scala** → review → next tier.
+Base: control-flow / logical / comparison / arithmetic (incl. `hex_to_int`) /
+array / string / object-map (incl. `set`, `unset`) / utility.
 
-- **Phase 0 — Vectors:** all ZK/auth-db opcode vectors from Scala + known-answer values (poseidon `0x115cc0f5…`, RFC-9381 VRF, EIP-197 pairing identity, the real SP1 groth16 fixture) → `shared/zk_opcode_test_vectors.json`.
-- **Tier 1 (low risk):** `poseidon`, `pmt_verify`, `schnorr_verify`.
-- **Tier 2 (medium):** `smt_verify`, `mpt_verify`, `mpt_prefix_verify`, `bn254_add/mul/pairing`, `ecvrf_verify`.
-- **Tier 3 (high):** `groth16_verify`, `bls_verify`/`bls_aggregate_verify`.
+ZK / crypto / auth-DB: `poseidon` · `pmt_verify` · `smt_verify` · `mpt_verify`
+· `mpt_prefix_verify` · `groth16_verify` · `ecvrf_verify` ·
+`bn254_add`/`mul`/`pairing` · `bls_verify`/`bls_aggregate_verify` ·
+`schnorr_verify` · `prove_dlog_verify` · `prove_dhtuple_verify` ·
+`sigma_verify`.
 
-## BLS ciphersuite (Tier 3) — DECIDED
-Abandon MIRACL's SVDW; adopt the standard **eth2 SSWU** ciphersuite (`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_`). Scala via **Bouncy Castle 1.85** (pre-release, supports SSWU); Rust via blst/arkworks (native). Interoperable + standard. Re-does wave-2's `bls_verify`/`aggregate`.
+## Conformance gates (run in CI)
 
-## Base-parity follow-ups (found by the Scala conformance runner)
-Scala trails Rust/TS on two base operators the shared vectors exercise: **3-arg `get`** `[map,key,default]` and **object-form `let`** `{let:[{name:expr},result]}`. Extend Scala to match (small), or trim vectors. Tracked as guarded xfails in metakit `SharedVectorConformanceSuite`.
+| Vector file | version | Rust | TypeScript |
+|---|---|---|---|
+| `shared/json_logic_test_vectors.json` | 1.6.0 | `jlvm-core/tests/differential.rs` | `json-logic-vectors`, `hex-to-int`, `set-unset` |
+| `shared/zk_opcode_test_vectors.json` | 1.12.0 | `jlvm-core/tests/zk_differential.rs` | `json-logic-zk-vectors` (all 17 categories) |
+| `shared/gas_test_vectors.json` | 1.2.0 | `jlvm-core/tests/gas_differential.rs` | `gas-vectors` |
+| `shared/ordinal_catalog_test_vectors.json` | 1.0.0 | `jlvm-core/tests/ordinal_catalog_differential.rs` | `ordinal-catalog-vectors` |
 
-## Execution
-Per-tier orchestrated multi-agent workflows; review the vectors + each tier's audit before starting the next tier.
+Green CI on `cargo test` + `npm test --workspaces` is a proof of byte-parity.
+
+## BLS ciphersuite — DECIDED (shipped)
+
+Standard **eth2 SSWU** ciphersuite
+(`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_`). Scala via Bouncy Castle 1.85
+(vendored, test-only); Rust via blst/arkworks (native, behind the default-on
+`bls` feature so the SP1 guest can drop the `blst` C backend). Interoperable +
+standard.
+
+## Follow-ups / open items
+
+- ✅ **Gas vectors for the newest opcodes.** `gas_test_vectors.json` is now
+  `1.2.0` with `hex_conversion` (`hex_to_int` = flat 15) and `map_mutation`
+  (`set`/`unset` = flat 10) categories, generated by the Scala meter
+  (`json_logic.GasVectorGenerator`) and reproduced byte-for-byte by the Rust
+  (`gas_differential.rs`) and TS (`gas-vectors.test.ts`) differential suites.
+- ✅ **Committed-roots light-client verification** — both the roots-only codec
+  (`CommittedRoots` / `CommittedBreadcrumb` / `CommitKey` / `combinedHash`, in
+  the core packages) and the full `OrdinalCatalogProof` epoch-catalog
+  attestation (in the JLVM packages, on top of `smt_verify`) are ported to TS +
+  Rust and proven against `shared/ordinal_catalog_test_vectors.json` (generated
+  by the Scala `OrdinalCatalogVectorGenerator`). See `docs/committed-roots.md`.
+  Not ported: node-side proof *serving*.
+- **Base-parity trivia found by the Scala conformance runner:** 3-arg `get`
+  `[map,key,default]` and object-form `let` `{let:[{name:expr},result]}` — TS
+  and Rust support both; metakit tracks them as guarded xfails in
+  `SharedVectorConformanceSuite`.
