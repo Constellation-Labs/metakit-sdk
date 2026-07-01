@@ -1,6 +1,6 @@
 {
   "name": "@constellation-network/metagraph-sdk-core",
-  "version": "1.8.0-rc.5",
+  "version": "1.8.0-rc.7",
   "description": "Core kernel for the Constellation metagraph SDK: hashing, canonical serialization, and signing primitives. Generic and offline.",
   "main": "dist/cjs/index.js",
   "module": "dist/esm/index.js",
