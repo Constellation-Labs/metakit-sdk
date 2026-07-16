@@ -165,3 +165,61 @@ to **Java** and **Python**.
   an agent ports a layer and must make its differential suite green.
 - The `shared/*.json` oracle makes every port mechanically verifiable — the saving
   grace that makes a ~10k-LOC crypto port tractable via subagents.
+
+## Open follow-ups (tracked — nothing dropped)
+
+Status legend: ⏳ in progress · ▢ not started · 🔒 blocked.
+
+### CI / release wiring (the tiered layout broke the shared jobs — real, not cosmetic)
+The `ci.yml` `python`, `cross-language`, and `publish-dry-run` jobs hardcoded the flat
+single-package layout; TS already used `--workspaces` so it was unaffected. Fixes are
+per-PR slices (each language edits only its own steps → non-overlapping, merge clean):
+- ⏳ **#78 Java** — `cross-language` Java step `mvn test -Dtest=CrossLanguageTest` errors
+  ("No tests matching pattern") because the test moved to the `core` module → run `-pl core`.
+- ⏳ **#79 Python** — `python` job (`pip install -e ".[dev]"`, `pytest --cov=constellation_sdk`),
+  the `cross-language` Python steps (`pytest tests/test_cross_language.py`), and
+  `publish-dry-run` (`python -m build` at `packages/python`) all assume the flat project.
+  Retarget to the `core/main/jlvm` dists; fix `cache-dependency-path` (no top-level pyproject).
+- ⏳ **#81 Rust** — `publish-dry-run` rust loop doesn't include `packages/rust-core`, and its
+  unpublished-path-dep fallback is poseidon-specific so it errors on `packages/rust`'s new
+  unpublished `-core` dep. Add `packages/rust-core` to the loop (before base) + generalize the
+  fallback. Also add `packages/rust-core/**` to the `changes` rust filter and fmt/clippy/test it
+  in the `rust` job (currently ungated).
+- ⏳ **#80 Go** — green, but the `cross-language` Go step `go test -run CrossLanguage` (root
+  package only) runs **vacuously** now that the test moved to `core` → `go test ./... -run …`.
+- ▢ **`release.yml` tiered publish (the real "release-train unification", Phase 2.4)** — publish
+  order **core before base** (base's versioned dep on `-core` must resolve on the registry
+  first); register the new artifacts: rust `constellation-metagraph-sdk-core` crate; python
+  `…-sdk-core` / `…-sdk` / `…-sdk-jlvm` dists (PyPI Trusted Publishers for each); java
+  `metagraph-sdk-core`/`metagraph-sdk`/`metagraph-sdk-jlvm` reactor (wire Maven job, `flatten-maven-plugin`
+  so `${revision}` resolves in installed poms); extend the `version-check` gate to all new artifacts.
+
+### Cross-language version skew (unify at release)
+- ▢ Rust + Python + TS on `1.8.0-rc.7`; Java bumped to `1.8.0-rc.8`; the `-core`/base/jlvm tiers
+  must all share ONE version per language. Pick a single line for the whole SDK at release time.
+
+### Per-language cosmetic / hygiene (do not skip)
+- ▢ **Java** — `packages/java/README.md` + `CHANGELOG.md` still cite the old single-artifact
+  `0.1.0` coordinate; update for the reactor. Note: 3 `Wallet` helpers (`getEcParams`,
+  `bytesToHex`, `hexToBytes`) were promoted package-private → `public` to survive the package
+  split (part of core's wallet surface in the TS reference; no behavior change) — keep in mind
+  as a public-API surface change.
+- ▢ **Python** — `packages/python/README.md` + `CHANGELOG.md` untouched (still reference the
+  flat `constellation_sdk` import; the compat shim keeps that path working). `setup.py` was
+  dropped in favor of PEP 517/660 — fine, just noted.
+- ▢ **Go** — an untracked ~10 MB compiled ELF `e2e/go/send_currency_tx` is sitting in the tree
+  (not committed); clean it up / gitignore.
+
+### Conformance / contract (Phase 1 leftovers)
+- 🔒 **C2 cross-repo parity CI gate** — pinned `.metakit-sdk-ref` + sha256 byte-diff of the 5
+  vendored vectors in metakit CI. BLOCKED on the user creating a read-only cross-repo PAT
+  secret (`SDK_VECTORS_RO_PAT`) in the metakit repo.
+- ▢ **metakit#61** (zk_opcode vector drift v1.12→v1.13) — OPEN, awaiting user merge.
+- ▢ **#77 C3 mpt-absence** — CI red on Prettier: the byte-exact `test-sealed-proofs.json`
+  fixture must NOT be reformatted → add it to `.prettierignore` (fixing). Separately, the TS
+  `mpt_verify` OPCODE returns false on non-scalar leaf values (untested upstream gap; the new
+  `verifyMptProof` light-client verifier is the correct client path) — see
+  riverdale-health notes.
+
+### Phase 3 ports
+- ▢ The full JLVM port per language (Go pilot → Java → Python), layered & vector-gated as above.
