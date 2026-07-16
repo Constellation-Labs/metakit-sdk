@@ -68,11 +68,7 @@ export interface VarExpression extends JsonLogicExpressionBase {
 
 // Union of all expression types
 export type JsonLogicExpression =
-  | ApplyExpression
-  | ConstExpression
-  | ArrayExpression
-  | MapExpression
-  | VarExpression;
+  ApplyExpression | ConstExpression | ArrayExpression | MapExpression | VarExpression;
 
 // Type guards
 export const isApply = (e: JsonLogicExpression): e is ApplyExpression => e.tag === 'apply';

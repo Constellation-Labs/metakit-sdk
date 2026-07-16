@@ -9,14 +9,7 @@ import type { JsonLogicExpression } from './expression';
 
 // Discriminated union tag
 export type JsonLogicValueTag =
-  | 'null'
-  | 'bool'
-  | 'int'
-  | 'float'
-  | 'string'
-  | 'array'
-  | 'map'
-  | 'function';
+  'null' | 'bool' | 'int' | 'float' | 'string' | 'array' | 'map' | 'function';
 
 // Base interface
 export interface JsonLogicValueBase {
@@ -72,14 +65,7 @@ export interface FunctionValue extends JsonLogicValueBase {
 
 // Union of all value types
 export type JsonLogicValue =
-  | NullValue
-  | BoolValue
-  | IntValue
-  | FloatValue
-  | StrValue
-  | ArrayValue
-  | MapValue
-  | FunctionValue;
+  NullValue | BoolValue | IntValue | FloatValue | StrValue | ArrayValue | MapValue | FunctionValue;
 
 // Type guards
 export const isNull = (v: JsonLogicValue): v is NullValue => v.tag === 'null';
