@@ -12,10 +12,14 @@
    (`metakit`) and the two already-complete ports (Rust, TypeScript) — the whole
    JLVM surface: evaluator, gas, crypto opcodes, proof verifiers, Poseidon.
 2. **Uniform packaging**: every language ships three artifacts —
-   - **core** — offline only: JCS canonicalization + `dropNulls`, `JsonBinaryHasher`
-     content-hash, binary codec, committed-roots light-client codecs. *No private
-     keys, no network.*
-   - **std** — signing + wallet + currency/data tx + network client. Depends on core.
+   - **core** — the fully-offline kernel: JCS canonicalization + `dropNulls`,
+     `JsonBinaryHasher` content-hash, binary codec, committed-roots light-client
+     codecs, **AND signing** (sign / verify / signed-object / wallet + low-level
+     crypto). Signing is offline, so it lives here. *No network, no currency-tx
+     layer.* This is exactly what `packages/typescript-core` ships, and what
+     `packages/rust` (`constellation-metagraph-sdk`) fuses into its one offline crate.
+   - **std** — depends on and re-exports core, then adds the currency/data-tx layer
+     and the network client. The batteries-included package (`packages/typescript`).
    - **jlvm** — the extension: evaluator + gas + all crypto/ZK opcodes + Poseidon +
      MPT/SMT/PMT verifiers + numerics. Depends on core.
 
@@ -97,13 +101,16 @@ today — this already caused a drift (metakit `zk_opcode` v1.12.0 vs SDK v1.13.
 ### Phase 2 — Packaging tiers (do before porting, so JLVM lands in the right package)
 
 1. Write the **tier-boundary spec** (exact symbol → core/std/jlvm map + the
-   core←std, core←jlvm edges).
-2. **Realign the reference langs** to the clean boundary: TS moves `sign/verify/wallet`
-   from `-core` → the std package; Rust splits a new `-core` crate out of the fused
-   `packages/rust`. *(Breaking for direct `-core` signing importers — safe now: no
-   external consumers yet.)*
-3. **Restructure Go/Java/Python** into `core`+`std` with an **empty `jlvm` placeholder**
-   package/module so the port is purely additive.
+   core←std, core←jlvm edges). Reference: `docs/package-tiers.md`.
+2. **Rust and TS are already split correctly — do NOT touch them.** They are the
+   reference: `packages/typescript-core` is the offline kernel *including signing*,
+   `packages/typescript` (std) re-exports core + currency + network + `typescript-jlvm`;
+   `packages/rust` fuses the offline kernel (signing included) with `network`/`r1` as
+   cargo features, and `rust/jlvm-core` + `rust/poseidon-bn254` are the JLVM tier.
+3. **Restructure Go/Java/Python to MATCH that boundary**: `core` = offline kernel
+   **including signing** (canonicalize/binary/codec/hash/committed-roots +
+   sign/verify/signed-object/wallet), `std` = core + currency + network, plus an
+   **empty `jlvm` placeholder** package/module so the later port is purely additive.
 4. **Unify the release train**: bump Java `0.1.0`→`1.8.0-rc.x`, wire Java into
    `release.yml` (Maven job on the `v*` tag), extend the `version-check` gate to the new
    artifacts; Go stays on its path-tag at the same version.
