@@ -29,7 +29,7 @@ import type { JsonLogicValue } from './value';
 import { boolValue, mapValue, nullValue, strValue } from './value';
 import { encodeValue, parseValue } from './codec';
 import * as hb from './hex-bytes';
-import { canonicalizeNoDropNulls } from './canonical-json';
+import { canonicalizeNoDropNulls, dropNullObjectFields } from './canonical-json';
 import { MAX_INPUTS, merkleVerifyInclusion, poseidonHash } from './poseidon';
 
 const fail = (message: string): never => {
@@ -1633,11 +1633,14 @@ export const opBlsAggregateVerify = (values: JsonLogicValue[]): JsonLogicValue =
 //   (itself a port of the Scala AuthDbOps + the SMT / MPT verifiers).
 //
 //   Hashing substrate: every node / value digest is
-//     Hash.fromBytes(prefix ++ canonicalBytes(json))
-//   where canonicalBytes is the RFC-8785 (no-null-drop) encoding of the value's
-//   circe Json (sorted keys, numbers via f64) and Hash.fromBytes is
-//   lowercase-hex SHA-256. Digest equality is exact string equality on the
-//   64-char lowercase hex form.
+//     Hash.fromBytes(prefix ++ canonicalBytes(dropNulls(json)))
+//   mirroring JsonBinaryHasher.computeDigest exactly: dropNulls removes null
+//   OBJECT fields recursively (array nulls kept), then RFC-8785 encoding
+//   (sorted keys, numbers via f64), then lowercase-hex SHA-256. The drop is a
+//   no-op for node commitments but LOAD-BEARING for MPT value digests — real
+//   committed records carry null fields (fiber `metadata: null` etc.); hashing
+//   them un-dropped made mpt_verify reject every such record. Digest equality
+//   is exact string equality on the 64-char lowercase hex form.
 //
 //   Error discipline: undecodable input (bad hex, a proof not matching its
 //   declared shape, wrong arg count/type) throws; a WELL-FORMED proof that does
@@ -1662,12 +1665,12 @@ const HASH_EMPTY = '0'.repeat(64);
 
 /**
  * `JsonBinaryHasher.computeDigest(json, prefix)` for a circe-Json-shaped plain
- * value: `Hash.fromBytes(prefix ++ canonicalBytes(json))`.
+ * value: `Hash.fromBytes(prefix ++ canonicalBytes(dropNulls(json)))`.
  */
 const computeDigestPrefixed = (json: unknown, prefix: Uint8Array): string => {
   let canon: Uint8Array;
   try {
-    canon = utf8Bytes(canonicalizeNoDropNulls(json));
+    canon = utf8Bytes(canonicalizeNoDropNulls(dropNullObjectFields(json)));
   } catch {
     // Unreachable for the auth-DB proof/value JSONs (no NaN/Infinity); an empty
     // digest can never equal a real 64-hex digest, so this degrades to invalid.
