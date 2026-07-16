@@ -22,9 +22,9 @@ use crate::wallet::normalize_public_key;
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::verify::verify;
-/// use constellation_sdk::signed_object::create_signed_object;
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::verify::verify;
+/// use constellation_sdk_core::signed_object::create_signed_object;
+/// use constellation_sdk_core::wallet::generate_key_pair;
 /// use serde_json::json;
 ///
 /// let key_pair = generate_key_pair();

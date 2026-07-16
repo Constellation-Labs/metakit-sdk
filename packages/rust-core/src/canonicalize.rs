@@ -29,7 +29,7 @@ use crate::types::{Result, SdkError};
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::canonicalize::drop_null_fields;
+/// use constellation_sdk_core::canonicalize::drop_null_fields;
 /// use serde_json::json;
 ///
 /// let cleaned = drop_null_fields(json!({"a": 1, "b": null, "c": [1, null]}));
@@ -63,7 +63,7 @@ pub fn drop_null_fields(value: Value) -> Value {
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::canonicalize::canonicalize;
+/// use constellation_sdk_core::canonicalize::canonicalize;
 /// use serde_json::json;
 ///
 /// let data = json!({"b": 2, "a": 1});

@@ -19,7 +19,7 @@ use crate::types::{Result, CONSTELLATION_PREFIX};
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::binary::to_bytes;
+/// use constellation_sdk_core::binary::to_bytes;
 /// use serde_json::json;
 ///
 /// let data = json!({"id": "test"});

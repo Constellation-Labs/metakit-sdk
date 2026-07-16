@@ -14,7 +14,7 @@ const BASE58_ALPHABET: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmno
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::wallet::generate_key_pair;
 ///
 /// let key_pair = generate_key_pair();
 /// println!("Address: {}", key_pair.address);
@@ -43,7 +43,7 @@ pub fn generate_key_pair() -> KeyPair {
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::wallet::{generate_key_pair, key_pair_from_private_key};
+/// use constellation_sdk_core::wallet::{generate_key_pair, key_pair_from_private_key};
 ///
 /// let original = generate_key_pair();
 /// let derived = key_pair_from_private_key(&original.private_key).unwrap();
