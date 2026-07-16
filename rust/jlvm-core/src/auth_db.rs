@@ -11,9 +11,16 @@
 //!
 //! All node and value digests route through the metakit canonical-bytes seam,
 //! `std/JsonBinaryHasher.computeDigest = Hash.fromBytes(prefix ++ canonicalBytes)`:
-//!   - `canonicalBytes` is the RFC-8785 (JCS) canonical encoding of the value's
-//!     circe `Json` ([`crate::canonical::canonicalize_json`]); object keys are
-//!     sorted, numbers route through `f64`.
+//!   - `canonicalBytes` is the RFC-8785 (JCS) canonical encoding of
+//!     `dropNulls(json)` ([`crate::canonical::canonicalize_json`] after
+//!     [`drop_nulls`]); object keys are sorted, numbers route through `f64`.
+//!     The dropNulls step mirrors `JsonBinaryCodec.serialize` exactly: null
+//!     OBJECT fields are removed recursively, nulls inside ARRAYS are kept
+//!     (index positions matter). Node commitments never carry nulls, so for
+//!     them it is a no-op — but MPT VALUE digests hash arbitrary committed
+//!     records, which DO carry null fields (e.g. a fiber record's
+//!     `metadata: null`); skipping the drop made `mpt_verify` reject every
+//!     such record (caught against live chain proofs, 2026-07).
 //!   - `prefix` is a 1-byte domain-separation tag (leaf / branch / extension /
 //!     internal), or empty for a raw value digest.
 //!   - `Hash.fromBytes` is **lowercase-hex SHA-256** (tessellation
@@ -67,9 +74,9 @@ fn hash_empty() -> String {
 }
 
 /// `JsonBinaryHasher.computeDigest(json, prefix)` for a circe-`Json`-shaped value:
-/// `Hash.fromBytes(prefix ++ canonicalBytes(json))`.
+/// `Hash.fromBytes(prefix ++ canonicalBytes(dropNulls(json)))`.
 fn compute_digest_prefixed(json: &serde_json::Value, prefix: &[u8]) -> String {
-    let canon = match canonicalize_json(json) {
+    let canon = match canonicalize_json(&crate::content_hash::drop_nulls(json.clone())) {
         Ok(bytes) => bytes,
         // Unreachable in practice: `serde_json::Number` cannot hold NaN/Infinity
         // (and `encode_value` maps unrepresentable numbers to JSON null), so

@@ -11,13 +11,14 @@
  *   * Numbers serialize as the ECMAScript shortest double (JSON.stringify), the
  *     same value Rust's ryu-js and Scala's DoubleSerializer emit. `-0` -> `0`.
  *
- * IMPORTANT — this DOES NOT drop null object fields. The signing-path
- * `canonicalize` in `../canonicalize` drops nulls to match the chain's
- * `dropNulls`, but the `JsonBinaryHasher` pre-image used for SMT/MPT node
- * commitments and value digests is the raw circe-`Json` (no drop), so the bytes
- * must match Rust's `canonicalize_json` exactly. The proof / value JSONs hashed
- * here never carry nulls, but keeping the no-drop semantics avoids a latent
- * cross-language divergence.
+ * IMPORTANT — `canonicalizeNoDropNulls` itself does not drop null object
+ * fields, but the `JsonBinaryHasher` pre-image is `canonicalBytes(dropNulls(x))`
+ * (`JsonBinaryCodec.serialize` applies `dropNulls` FIRST), so digest call sites
+ * must pair it with {@link dropNullObjectFields}. Node commitments never carry
+ * nulls (the drop is a no-op for them), but MPT VALUE digests hash arbitrary
+ * committed records which DO carry null fields (e.g. a fiber record's
+ * `metadata: null`) — hashing them un-dropped made `mpt_verify` reject every
+ * such record (caught against live chain proofs, 2026-07).
  */
 
 /** Compare two strings by their UTF-16 code units (RFC 8785 key ordering). */
@@ -121,4 +122,28 @@ export const canonicalizeNoDropNulls = (value: unknown): string => {
     parts.push(serializeString(key) + ':' + canonicalizeNoDropNulls(obj[key]));
   }
   return '{' + parts.join(',') + '}';
+};
+
+/**
+ * `JsonBinaryCodec.dropNulls`: recursively remove null-valued OBJECT fields;
+ * nulls inside ARRAYS are preserved (they carry index positions). The chain's
+ * `JsonBinaryHasher` applies this before canonicalization — pair with
+ * {@link canonicalizeNoDropNulls} to reproduce its digest pre-image.
+ */
+export const dropNullObjectFields = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map(dropNullObjectFields);
+  }
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(obj)) {
+      const v = obj[key];
+      if (v !== null) {
+        out[key] = dropNullObjectFields(v);
+      }
+    }
+    return out;
+  }
+  return value;
 };
