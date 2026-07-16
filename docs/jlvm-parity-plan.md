@@ -193,12 +193,16 @@ per-PR slices (each language edits only its own steps → non-overlapping, merge
   **no test at all** (a pre-existing vacuous pass); the funcs are `…AllVectors`/`BySourceLanguage`/
   `RejectsTamperedSignatures` in `core/` → `go test ./... -run '…'` runs the conformance for real.
 - ✅ **#77 C3** (`c1f899a`) — `.prettierignore` for the byte-pinned `tests/fixtures/`.
-- ▢ **`release.yml` tiered publish (the real "release-train unification", Phase 2.4)** — publish
-  order **core before base** (base's versioned dep on `-core` must resolve on the registry
-  first); register the new artifacts: rust `constellation-metagraph-sdk-core` crate; python
-  `…-sdk-core` / `…-sdk` / `…-sdk-jlvm` dists (PyPI Trusted Publishers for each); java
-  `metagraph-sdk-core`/`metagraph-sdk`/`metagraph-sdk-jlvm` reactor (wire Maven job, `flatten-maven-plugin`
-  so `${revision}` resolves in installed poms); extend the `version-check` gate to all new artifacts.
+- ✅ **`release.yml` tiered publish — Rust + Python + TS** (#82, `ci/release-tiered-publish`):
+  `CRATE_DIRS` publishes `constellation-metagraph-sdk-core` before base (dep order); python
+  builds/tests/publishes the 3 tiered dists into one `dist/`; `version-check` extended (rust-core
+  crate + base's `-core` path-dep + 3 python dists); TS already 3-workspace. **USER ACTIONS before
+  the first tiered tag:** (a) crates.io Trusted Publisher for `…-sdk-core` + its FIRST publish via
+  token (OIDC can't first-publish); (b) PyPI create `…-sdk-core` + `…-sdk-jlvm` projects w/ pending
+  TP for release.yml; (c) merge #82 AFTER #78/#79/#80/#81; (d) unify per-lang versions at tag time.
+- ▢ **`release.yml` Java Maven Central** — deferred (not in #82): needs `flatten-maven-plugin`
+  (so `${revision}` resolves in installed poms) + Sonatype namespace/token + GPG signing key
+  (user-provisioned). Until then Java stays out of the unified release (footer note documents it).
 
 ### Cross-language version skew (unify at release)
 - ▢ Rust + Python + TS on `1.8.0-rc.7`; Java bumped to `1.8.0-rc.8`; the `-core`/base/jlvm tiers
