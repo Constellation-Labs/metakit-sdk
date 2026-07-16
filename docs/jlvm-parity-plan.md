@@ -11,17 +11,20 @@
 1. **Byte-for-byte parity** of Go, Java, and Python with the Scala reference
    (`metakit`) and the two already-complete ports (Rust, TypeScript) — the whole
    JLVM surface: evaluator, gas, crypto opcodes, proof verifiers, Poseidon.
-2. **Uniform packaging**: every language ships three artifacts —
-   - **core** — the fully-offline kernel: JCS canonicalization + `dropNulls`,
+2. **Uniform packaging**: every language ships three artifacts, named off the base
+   package — the only suffixes are `-core` and `-jlvm`; the middle "batteries-included"
+   tier is the **unsuffixed base name** (there is no `-std`), matching TS
+   (`@constellation-network/metagraph-sdk-core` / `…/metagraph-sdk` / `…/metagraph-sdk-jlvm`).
+   - **`<base>-core`** — the fully-offline kernel: JCS canonicalization + `dropNulls`,
      `JsonBinaryHasher` content-hash, binary codec, committed-roots light-client
      codecs, **AND signing** (sign / verify / signed-object / wallet + low-level
      crypto). Signing is offline, so it lives here. *No network, no currency-tx
-     layer.* This is exactly what `packages/typescript-core` ships, and what
-     `packages/rust` (`constellation-metagraph-sdk`) fuses into its one offline crate.
-   - **std** — depends on and re-exports core, then adds the currency/data-tx layer
-     and the network client. The batteries-included package (`packages/typescript`).
-   - **jlvm** — the extension: evaluator + gas + all crypto/ZK opcodes + Poseidon +
-     MPT/SMT/PMT verifiers + numerics. Depends on core.
+     layer.* This is exactly what `packages/typescript-core` ships.
+   - **`<base>`** (base name, no suffix) — depends on and re-exports core, then adds
+     the currency/data-tx layer and the network client. The batteries-included
+     package (`packages/typescript`, `packages/rust`).
+   - **`<base>-jlvm`** — the extension: evaluator + gas + all crypto/ZK opcodes +
+     Poseidon + MPT/SMT/PMT verifiers + numerics. Depends on core.
 
 Scala (`metakit`) is the reference. The **`shared/*.json` conformance vectors are
 the byte-exact contract**: a port is "at parity" iff it reproduces every vector.
@@ -102,15 +105,19 @@ today — this already caused a drift (metakit `zk_opcode` v1.12.0 vs SDK v1.13.
 
 1. Write the **tier-boundary spec** (exact symbol → core/std/jlvm map + the
    core←std, core←jlvm edges). Reference: `docs/package-tiers.md`.
-2. **Rust and TS are already split correctly — do NOT touch them.** They are the
-   reference: `packages/typescript-core` is the offline kernel *including signing*,
-   `packages/typescript` (std) re-exports core + currency + network + `typescript-jlvm`;
-   `packages/rust` fuses the offline kernel (signing included) with `network`/`r1` as
-   cargo features, and `rust/jlvm-core` + `rust/poseidon-bn254` are the JLVM tier.
-3. **Restructure Go/Java/Python to MATCH that boundary**: `core` = offline kernel
-   **including signing** (canonicalize/binary/codec/hash/committed-roots +
-   sign/verify/signed-object/wallet), `std` = core + currency + network, plus an
-   **empty `jlvm` placeholder** package/module so the later port is purely additive.
+2. **TS is the reference 3-package model** — do NOT restructure it: `metagraph-sdk-core`
+   is the offline kernel *including signing*, `metagraph-sdk` (base) re-exports core +
+   currency + network, `metagraph-sdk-jlvm` is the extension. **Rust is being split to
+   match it**: carve a new `constellation-metagraph-sdk-core` crate (offline kernel,
+   signing included) out of the fused `packages/rust`; the base `constellation-metagraph-sdk`
+   crate re-exports it so all existing `constellation_sdk::*` paths are unchanged, and
+   keeps currency + `network`/`r1` features; `rust/jlvm-core` + `rust/poseidon-bn254`
+   remain the JLVM tier. *(Safe now — no external consumers yet.)*
+3. **Restructure Go/Java/Python to MATCH that boundary**: `<base>-core` = offline
+   kernel **including signing** (canonicalize/binary/codec/hash/committed-roots +
+   sign/verify/signed-object/wallet); the unsuffixed base package = core + currency +
+   network; plus an **empty `<base>-jlvm` placeholder** so the later port is purely
+   additive. The middle tier is the base name — NOT `-std`.
 4. **Unify the release train**: bump Java `0.1.0`→`1.8.0-rc.x`, wire Java into
    `release.yml` (Maven job on the `v*` tag), extend the `version-check` gate to the new
    artifacts; Go stays on its path-tag at the same version.
