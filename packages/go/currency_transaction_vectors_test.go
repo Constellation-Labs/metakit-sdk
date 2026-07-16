@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/btcsuite/btcd/btcec/v2"
+
+	"github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 // testCurrencyTransactionValue is a wrapper for test vectors that can handle salt as number or string
@@ -74,7 +76,7 @@ type TestVectors struct {
 		} `json:"encodingBreakdown"`
 		MultiSignature struct {
 			TransactionHash string            `json:"transactionHash"`
-			Proofs          []SignatureProof  `json:"proofs"`
+			Proofs          []core.SignatureProof  `json:"proofs"`
 		} `json:"multiSignature"`
 		TransactionChaining struct {
 			Transactions []struct {
@@ -147,7 +149,7 @@ func TestKeyDerivation(t *testing.T) {
 
 		privateKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 		publicKeyHex := hex.EncodeToString(privateKey.PubKey().SerializeUncompressed())
-		address := GetAddress(publicKeyHex)
+		address := core.GetAddress(publicKeyHex)
 
 		if address != basic.Address {
 			t.Errorf("Address mismatch: got %s, want %s", address, basic.Address)
@@ -177,7 +179,7 @@ func TestTransactionEncoding(t *testing.T) {
 
 		// Override salt for deterministic test
 		tx.Value.Salt = txValue.Salt
-		tx.Proofs = []SignatureProof{}
+		tx.Proofs = []core.SignatureProof{}
 
 		encoded := encodeTransaction(tx)
 		if encoded != basic.EncodedString {
@@ -224,7 +226,7 @@ func TestCurrencyTransactionVectorsHashing(t *testing.T) {
 
 		// Override salt for exact match
 		tx.Value.Salt = txValue.Salt
-		tx.Proofs = []SignatureProof{}
+		tx.Proofs = []core.SignatureProof{}
 
 		hash := HashCurrencyTransaction(tx)
 		if hash.Value != basic.TransactionHash {
@@ -242,7 +244,7 @@ func TestSignatureVerification(t *testing.T) {
 		// Reconstruct transaction from test vector
 		tx := &CurrencyTransaction{
 			Value: txValue,
-			Proofs: []SignatureProof{
+			Proofs: []core.SignatureProof{
 				{
 					ID:        basic.SignerID,
 					Signature: basic.Signature,

@@ -2,6 +2,8 @@ package constellation
 
 import (
 	"testing"
+
+	"github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 func TestUtilityFunctions(t *testing.T) {
@@ -36,7 +38,7 @@ func TestUtilityFunctions(t *testing.T) {
 	})
 
 	t.Run("IsValidDAGAddress validates addresses", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
 		if !IsValidDAGAddress(keyPair.Address) {
 			t.Errorf("IsValidDAGAddress(%s) = false, want true", keyPair.Address)
 		}
@@ -51,8 +53,8 @@ func TestUtilityFunctions(t *testing.T) {
 
 func TestTransactionCreation(t *testing.T) {
 	t.Run("CreateCurrencyTransaction creates valid transaction", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -96,7 +98,7 @@ func TestTransactionCreation(t *testing.T) {
 	})
 
 	t.Run("CreateCurrencyTransaction throws on invalid destination", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{Hash: "a" + string(make([]byte, 63)), Ordinal: 0}
 
 		_, err := CreateCurrencyTransaction(
@@ -111,7 +113,7 @@ func TestTransactionCreation(t *testing.T) {
 	})
 
 	t.Run("CreateCurrencyTransaction throws on same address", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{Hash: "a" + string(make([]byte, 63)), Ordinal: 0}
 
 		_, err := CreateCurrencyTransaction(
@@ -126,8 +128,8 @@ func TestTransactionCreation(t *testing.T) {
 	})
 
 	t.Run("CreateCurrencyTransaction throws on amount too small", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{Hash: "a" + string(make([]byte, 63)), Ordinal: 0}
 
 		_, err := CreateCurrencyTransaction(
@@ -142,8 +144,8 @@ func TestTransactionCreation(t *testing.T) {
 	})
 
 	t.Run("CreateCurrencyTransaction throws on negative fee", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{Hash: "a" + string(make([]byte, 63)), Ordinal: 0}
 
 		_, err := CreateCurrencyTransaction(
@@ -160,10 +162,10 @@ func TestTransactionCreation(t *testing.T) {
 
 func TestBatchTransactions(t *testing.T) {
 	t.Run("CreateCurrencyTransactionBatch creates multiple transactions", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		recipient1, _ := GenerateKeyPair()
-		recipient2, _ := GenerateKeyPair()
-		recipient3, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		recipient1, _ := core.GenerateKeyPair()
+		recipient2, _ := core.GenerateKeyPair()
+		recipient3, _ := core.GenerateKeyPair()
 
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -209,8 +211,8 @@ func TestBatchTransactions(t *testing.T) {
 
 func TestTransactionVerification(t *testing.T) {
 	t.Run("VerifyCurrencyTransaction validates correct signatures", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,
@@ -236,8 +238,8 @@ func TestTransactionVerification(t *testing.T) {
 	})
 
 	t.Run("VerifyCurrencyTransaction detects invalid signatures", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,
@@ -268,9 +270,9 @@ func TestTransactionVerification(t *testing.T) {
 
 func TestMultiSignatureSupport(t *testing.T) {
 	t.Run("SignCurrencyTransaction adds additional signature", func(t *testing.T) {
-		keyPair1, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
-		recipient, _ := GenerateKeyPair()
+		keyPair1, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
+		recipient, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,
@@ -314,8 +316,8 @@ func TestMultiSignatureSupport(t *testing.T) {
 
 func TestTransactionHashing(t *testing.T) {
 	t.Run("HashCurrencyTransaction produces consistent hashes", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,
@@ -342,8 +344,8 @@ func TestTransactionHashing(t *testing.T) {
 	})
 
 	t.Run("GetTransactionReference creates correct reference", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,
@@ -366,8 +368,8 @@ func TestTransactionHashing(t *testing.T) {
 	})
 
 	t.Run("EncodeCurrencyTransaction returns string", func(t *testing.T) {
-		keyPair, _ := GenerateKeyPair()
-		keyPair2, _ := GenerateKeyPair()
+		keyPair, _ := core.GenerateKeyPair()
+		keyPair2, _ := core.GenerateKeyPair()
 		lastRef := TransactionReference{
 			Hash:    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 			Ordinal: 0,

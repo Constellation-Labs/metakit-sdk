@@ -1,4 +1,4 @@
-package constellation
+package core
 
 // CreateSignedObject creates a signed object with a single signature
 func CreateSignedObject[T any](value T, privateKeyHex string, isDataUpdate bool) (*Signed[T], error) {

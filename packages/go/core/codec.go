@@ -1,4 +1,4 @@
-package constellation
+package core
 
 import (
 	"encoding/base64"

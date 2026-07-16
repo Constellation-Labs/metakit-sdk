@@ -1,5 +1,7 @@
 package constellation
 
+import "github.com/Constellation-Labs/metakit-sdk/packages/go/core"
+
 // TokenDecimals is the token decimals constant (1e-8)
 // Same as DAG_DECIMALS from dag4.js
 const TokenDecimals = 1e-8
@@ -30,7 +32,7 @@ type CurrencyTransactionValue struct {
 
 // CurrencyTransaction represents a v2 currency transaction for metagraph token transfers
 // A signed currency transaction value
-type CurrencyTransaction = Signed[CurrencyTransactionValue]
+type CurrencyTransaction = core.Signed[CurrencyTransactionValue]
 
 // TransferParams holds parameters for creating a token transfer
 type TransferParams struct {
