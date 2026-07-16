@@ -1,0 +1,4 @@
+# Byte-exact conformance fixtures — must stay identical to metakit's
+# docs/mpt-spec/*.json (hash-pinned; e.g. test-sealed-proofs.json ee06a32e…).
+# Prettier must not reformat them or the cross-repo byte-parity check breaks.
+tests/fixtures/
