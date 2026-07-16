@@ -34,11 +34,10 @@ def test_shim_exposes_version():
 
 def test_old_core_submodule_paths_resolve():
     """``constellation_sdk.<core module>`` aliases resolve to the core tier."""
+    import constellation_metagraph.core.sign as core_sign
+    import constellation_sdk.sign as shim_sign
     from constellation_sdk.types import CONSTELLATION_PREFIX  # noqa: F401
     from constellation_sdk.wallet import get_address  # noqa: F401
-
-    import constellation_sdk.sign as shim_sign
-    import constellation_metagraph.core.sign as core_sign
 
     # The alias is the very same module object, not a copy.
     assert shim_sign is core_sign
@@ -46,19 +45,18 @@ def test_old_core_submodule_paths_resolve():
 
 def test_old_main_submodule_paths_resolve():
     """``constellation_sdk.<currency/network>`` aliases resolve to the main tier."""
+    import constellation_metagraph.main.network as main_network
+    import constellation_sdk.network as shim_network
     from constellation_sdk.currency_transaction import create_currency_transaction  # noqa: F401
     from constellation_sdk.network import MetagraphClient, create_metagraph_client  # noqa: F401
-
-    import constellation_sdk.network as shim_network
-    import constellation_metagraph.main.network as main_network
 
     assert shim_network is main_network
 
 
 def test_signing_is_served_from_core():
     """Signing lives in core; the shim must re-export the core implementation."""
-    import constellation_sdk
     import constellation_metagraph.core as core
+    import constellation_sdk
 
     assert constellation_sdk.sign is core.sign
     assert constellation_sdk.verify is core.verify

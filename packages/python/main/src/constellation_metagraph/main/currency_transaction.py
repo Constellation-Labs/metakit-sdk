@@ -13,6 +13,8 @@ from typing import List
 from ecdsa import SECP256k1, SigningKey, VerifyingKey
 from ecdsa.util import sigdecode_der, sigencode_der
 
+from constellation_metagraph.core.types import Hash, SignatureProof, Signed, VerificationResult
+from constellation_metagraph.core.wallet import get_address
 from constellation_metagraph.main.currency_types import (
     TOKEN_DECIMALS,
     CurrencyTransaction,
@@ -20,8 +22,6 @@ from constellation_metagraph.main.currency_types import (
     TransactionReference,
     TransferParams,
 )
-from constellation_metagraph.core.types import Hash, SignatureProof, Signed, VerificationResult
-from constellation_metagraph.core.wallet import get_address
 
 # Minimum salt complexity (from dag4.js)
 MIN_SALT = 2**53 - 2**48  # Number.MAX_SAFE_INTEGER - 2^48

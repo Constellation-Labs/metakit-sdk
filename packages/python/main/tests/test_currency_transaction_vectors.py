@@ -9,6 +9,8 @@ from pathlib import Path
 
 from ecdsa import SECP256k1, SigningKey
 
+from constellation_metagraph.core.types import SignatureProof, Signed
+from constellation_metagraph.core.wallet import get_address
 from constellation_metagraph.main.currency_transaction import (
     create_currency_transaction,
     encode_currency_transaction,
@@ -20,12 +22,12 @@ from constellation_metagraph.main.currency_types import (
     TransactionReference,
     TransferParams,
 )
-from constellation_metagraph.core.types import SignatureProof, Signed
-from constellation_metagraph.core.wallet import get_address
 
 # Load test vectors
 VECTORS_PATH = (
-    Path(__file__).parent.parent.parent.parent.parent / "shared" / "currency_transaction_vectors.json"
+    Path(__file__).parent.parent.parent.parent.parent
+    / "shared"
+    / "currency_transaction_vectors.json"
 )
 with open(VECTORS_PATH) as f:
     test_vectors = json.load(f)

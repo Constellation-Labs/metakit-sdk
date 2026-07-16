@@ -11,7 +11,9 @@ from constellation_metagraph.core import canonicalize, hash_bytes, to_bytes, ver
 @pytest.fixture
 def test_vectors():
     """Load test vectors from shared file."""
-    vectors_path = Path(__file__).parent.parent.parent.parent.parent / "shared" / "test_vectors.json"
+    vectors_path = (
+        Path(__file__).parent.parent.parent.parent.parent / "shared" / "test_vectors.json"
+    )
     with open(vectors_path) as f:
         return json.load(f)
 
