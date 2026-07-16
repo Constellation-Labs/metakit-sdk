@@ -14,6 +14,8 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+
+	"github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 // Minimum salt complexity (from dag4.js)
@@ -165,7 +167,7 @@ func CreateCurrencyTransaction(params TransferParams, privateKeyHex string, last
 
 	privateKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 	publicKeyHex := hex.EncodeToString(privateKey.PubKey().SerializeUncompressed())
-	source := GetAddress(publicKeyHex)
+	source := core.GetAddress(publicKeyHex)
 
 	// Validate addresses
 	if !IsValidDAGAddress(source) {
@@ -203,7 +205,7 @@ func CreateCurrencyTransaction(params TransferParams, privateKeyHex string, last
 			Parent:      lastRef,
 			Salt:        salt,
 		},
-		Proofs: []SignatureProof{},
+		Proofs: []core.SignatureProof{},
 	}
 
 	// Encode and hash
@@ -220,7 +222,7 @@ func CreateCurrencyTransaction(params TransferParams, privateKeyHex string, last
 
 	// Create proof
 	publicKeyID := publicKeyHex[2:] // Remove '04' prefix
-	proof := SignatureProof{
+	proof := core.SignatureProof{
 		ID:        publicKeyID,
 		Signature: signature,
 	}
@@ -290,7 +292,7 @@ func SignCurrencyTransaction(tx *CurrencyTransaction, privateKeyHex string) (*Cu
 
 	// Create proof
 	publicKeyID := publicKeyHex[2:] // Remove '04' prefix
-	proof := SignatureProof{
+	proof := core.SignatureProof{
 		ID:        publicKeyID,
 		Signature: signature,
 	}
@@ -298,7 +300,7 @@ func SignCurrencyTransaction(tx *CurrencyTransaction, privateKeyHex string) (*Cu
 	// Create new transaction with updated proofs
 	newTx := &CurrencyTransaction{
 		Value:  tx.Value,
-		Proofs: append([]SignatureProof{}, tx.Proofs...),
+		Proofs: append([]core.SignatureProof{}, tx.Proofs...),
 	}
 	newTx.Proofs = append(newTx.Proofs, proof)
 
@@ -306,15 +308,15 @@ func SignCurrencyTransaction(tx *CurrencyTransaction, privateKeyHex string) (*Cu
 }
 
 // VerifyCurrencyTransaction verifies all signatures on a currency transaction
-func VerifyCurrencyTransaction(tx *CurrencyTransaction) *VerificationResult {
+func VerifyCurrencyTransaction(tx *CurrencyTransaction) *core.VerificationResult {
 	// Encode and hash
 	encoded := encodeTransaction(tx)
 	serialized := kryoSerialize(encoded, false)
 	hashBytes := sha256.Sum256(serialized)
 	hashHex := hex.EncodeToString(hashBytes[:])
 
-	validProofs := []SignatureProof{}
-	invalidProofs := []SignatureProof{}
+	validProofs := []core.SignatureProof{}
+	invalidProofs := []core.SignatureProof{}
 
 	// Verify each proof
 	for _, proof := range tx.Proofs {
@@ -328,7 +330,7 @@ func VerifyCurrencyTransaction(tx *CurrencyTransaction) *VerificationResult {
 		}
 	}
 
-	return &VerificationResult{
+	return &core.VerificationResult{
 		IsValid:       len(invalidProofs) == 0 && len(validProofs) > 0,
 		ValidProofs:   validProofs,
 		InvalidProofs: invalidProofs,
@@ -341,12 +343,12 @@ func EncodeCurrencyTransaction(tx *CurrencyTransaction) string {
 }
 
 // HashCurrencyTransaction hashes a currency transaction
-func HashCurrencyTransaction(tx *CurrencyTransaction) *Hash {
+func HashCurrencyTransaction(tx *CurrencyTransaction) *core.Hash {
 	encoded := encodeTransaction(tx)
 	serialized := kryoSerialize(encoded, false)
 	hashBytes := sha256.Sum256(serialized)
 
-	return &Hash{
+	return &core.Hash{
 		Value: hex.EncodeToString(hashBytes[:]),
 		Bytes: hashBytes[:],
 	}
@@ -373,7 +375,7 @@ func signHashInternal(hashHex string, privateKeyHex string) (string, error) {
 	privateKey, _ := btcec.PrivKeyFromBytes(privateKeyBytes)
 
 	// Compute signing digest
-	digest := ComputeDigestFromHash(hashHex)
+	digest := core.ComputeDigestFromHash(hashHex)
 
 	// Sign with ECDSA
 	signature := ecdsa.Sign(privateKey, digest)
@@ -398,7 +400,7 @@ func verifyHashInternal(publicKeyHex string, hashHex string, signatureHex string
 	}
 
 	// Compute digest
-	digest := ComputeDigestFromHash(hashHex)
+	digest := core.ComputeDigestFromHash(hashHex)
 
 	// Parse signature
 	signatureBytes, err := hex.DecodeString(signatureHex)
