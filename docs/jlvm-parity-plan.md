@@ -168,25 +168,31 @@ to **Java** and **Python**.
 
 ## Open follow-ups (tracked — nothing dropped)
 
-Status legend: ⏳ in progress · ▢ not started · 🔒 blocked.
+Status legend: ✅ done · ⏳ in progress · ▢ not started · 🔒 blocked.
+
+> **Guardrail note:** subagents are hard-blocked from editing `.github/**` by the
+> permission classifier (the CLAUDE.md `.github` rule is enforced at the permission
+> layer; a coordinator's authorization can't lift it). The **main session can**. So the
+> flow was: each agent verified the exact commands locally and reported them; the main
+> session applied the `ci.yml` edit and pushed. All five PRs below are **green in CI**.
 
 ### CI / release wiring (the tiered layout broke the shared jobs — real, not cosmetic)
 The `ci.yml` `python`, `cross-language`, and `publish-dry-run` jobs hardcoded the flat
-single-package layout; TS already used `--workspaces` so it was unaffected. Fixes are
+single-package layout; TS already used `--workspaces` so it was unaffected. Fixes were
 per-PR slices (each language edits only its own steps → non-overlapping, merge clean):
-- ⏳ **#78 Java** — `cross-language` Java step `mvn test -Dtest=CrossLanguageTest` errors
-  ("No tests matching pattern") because the test moved to the `core` module → run `-pl core`.
-- ⏳ **#79 Python** — `python` job (`pip install -e ".[dev]"`, `pytest --cov=constellation_sdk`),
-  the `cross-language` Python steps (`pytest tests/test_cross_language.py`), and
-  `publish-dry-run` (`python -m build` at `packages/python`) all assume the flat project.
-  Retarget to the `core/main/jlvm` dists; fix `cache-dependency-path` (no top-level pyproject).
-- ⏳ **#81 Rust** — `publish-dry-run` rust loop doesn't include `packages/rust-core`, and its
-  unpublished-path-dep fallback is poseidon-specific so it errors on `packages/rust`'s new
-  unpublished `-core` dep. Add `packages/rust-core` to the loop (before base) + generalize the
-  fallback. Also add `packages/rust-core/**` to the `changes` rust filter and fmt/clippy/test it
-  in the `rust` job (currently ungated).
-- ⏳ **#80 Go** — green, but the `cross-language` Go step `go test -run CrossLanguage` (root
-  package only) runs **vacuously** now that the test moved to `core` → `go test ./... -run …`.
+- ✅ **#78 Java** (`f089ca6`) — `cross-language` Java step `mvn test -Dtest=CrossLanguageTest`
+  errored ("No tests matching pattern") because the test moved to the `core` module → `-pl core`.
+- ✅ **#79 Python** (`600fcf2`, + tooling-config `pyproject.toml` `c1ca2d5`) — retargeted the
+  `python` job, `cross-language` Python steps, and `publish-dry-run` to the `core/main/jlvm`
+  dists (`pip install -e ./core[dev] -e ./main[dev] -e ./jlvm`, lint/type over tiered dirs,
+  `pytest core main --cov=constellation_metagraph`, build all 3 dists, `**/pyproject.toml` glob).
+- ✅ **#81 Rust** (`1f04f5b`) — added `packages/rust-core` to the `changes` filter + `rust` job
+  (fmt/clippy/test) + the `publish-dry-run` loop (before base); generalized the unpublished-path-dep
+  fallback to an awk over non-dev deps (skips `[dev-dependencies]` + `[lib]`/`[[test]]` path lines).
+- ✅ **#80 Go** (`137ad9e`) — the `cross-language` Go step `go test -run CrossLanguage` matched
+  **no test at all** (a pre-existing vacuous pass); the funcs are `…AllVectors`/`BySourceLanguage`/
+  `RejectsTamperedSignatures` in `core/` → `go test ./... -run '…'` runs the conformance for real.
+- ✅ **#77 C3** (`c1f899a`) — `.prettierignore` for the byte-pinned `tests/fixtures/`.
 - ▢ **`release.yml` tiered publish (the real "release-train unification", Phase 2.4)** — publish
   order **core before base** (base's versioned dep on `-core` must resolve on the registry
   first); register the new artifacts: rust `constellation-metagraph-sdk-core` crate; python
@@ -215,11 +221,10 @@ per-PR slices (each language edits only its own steps → non-overlapping, merge
   vendored vectors in metakit CI. BLOCKED on the user creating a read-only cross-repo PAT
   secret (`SDK_VECTORS_RO_PAT`) in the metakit repo.
 - ▢ **metakit#61** (zk_opcode vector drift v1.12→v1.13) — OPEN, awaiting user merge.
-- ▢ **#77 C3 mpt-absence** — CI red on Prettier: the byte-exact `test-sealed-proofs.json`
-  fixture must NOT be reformatted → add it to `.prettierignore` (fixing). Separately, the TS
+- ✅ **#77 C3 mpt-absence** — Prettier CI fixed (`.prettierignore` for the byte-pinned
+  `tests/fixtures/`, `c1f899a`); PR now green. Still-open (separate, not blocking #77): the TS
   `mpt_verify` OPCODE returns false on non-scalar leaf values (untested upstream gap; the new
-  `verifyMptProof` light-client verifier is the correct client path) — see
-  riverdale-health notes.
+  `verifyMptProof` light-client verifier is the correct client path) — see riverdale-health notes.
 
 ### Phase 3 ports
 - ▢ The full JLVM port per language (Go pilot → Java → Python), layered & vector-gated as above.
