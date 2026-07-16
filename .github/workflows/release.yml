@@ -1,8 +1,8 @@
 name: Release
 
 # Unified SDK release: one tag publishes all three language SDKs at the same
-# version — TypeScript (3 packages) to npm, Rust (3 crates) to crates.io, and
-# Python (1 package) to PyPI. See docs/RELEASING.md for the full flow (naming
+# version — TypeScript (3 packages) to npm, Rust (4 crates) to crates.io, and
+# Python (3 packages) to PyPI. See docs/RELEASING.md for the full flow (naming
 # decision, secrets, tag policy).
 #
 # Tag format: vX.Y.Z or vX.Y.Z-rc.N (plain SemVer, no build metadata — npm and
@@ -24,11 +24,12 @@ env:
   # The crate *names* are read from each Cargo.toml at runtime, so renaming a
   # crate (e.g. jlvm-core -> constellation-jlvm-core, see docs/RELEASING.md
   # step zero) requires no workflow changes.
-  CRATE_DIRS: rust/poseidon-bn254 rust/jlvm-core packages/rust
+  CRATE_DIRS: rust/poseidon-bn254 rust/jlvm-core packages/rust-core packages/rust
   # npm package dirs in dependency order (metagraph-sdk depends on metagraph-sdk-core).
   NPM_PACKAGE_DIRS: packages/typescript-core packages/typescript-jlvm packages/typescript
-  # Python package dir (one metagraph-sdk-level package: kernel + network, no JLVM).
-  PYTHON_PACKAGE_DIRS: packages/python
+  # Python dist dirs in dependency order (base metagraph-sdk depends on -core; jlvm
+  # is the placeholder extension). Mirrors the core/base/jlvm tier split.
+  PYTHON_PACKAGE_DIRS: packages/python/core packages/python/main packages/python/jlvm
 
 jobs:
   # Derive the version from the tag and require every publishable manifest to
@@ -79,6 +80,14 @@ jobs:
           DEP_VERSION=$(grep -m1 -E 'path *= *"\.\./poseidon-bn254"' rust/jlvm-core/Cargo.toml | sed -nE 's/.*version *= *"([^"]*)".*/\1/p')
           if [[ "$DEP_VERSION" != "$VERSION" ]]; then
             echo "::error file=rust/jlvm-core/Cargo.toml::poseidon path-dependency version ($DEP_VERSION) does not match tag version ($VERSION)."
+            fail=1
+          fi
+
+          # Likewise the base crate's path dep on constellation-metagraph-sdk-core
+          # carries an explicit version rewritten to a registry dep at publish time.
+          CORE_DEP_VERSION=$(grep -m1 -E 'path *= *"\.\./rust-core"' packages/rust/Cargo.toml | sed -nE 's/.*version *= *"([^"]*)".*/\1/p')
+          if [[ "$CORE_DEP_VERSION" != "$VERSION" ]]; then
+            echo "::error file=packages/rust/Cargo.toml::rust-core path-dependency version ($CORE_DEP_VERSION) does not match tag version ($VERSION)."
             fail=1
           fi
 
@@ -166,11 +175,12 @@ jobs:
 
       # Trusted Publishing (OIDC): exchange the workflow's id-token for a
       # short-lived crates.io token (auto-revoked when the job ends). Each crate
-      # must have a trusted publisher configured (this repo + release.yml) —
-      # constellation-metagraph-sdk is already TP-only; poseidon-bn254 + jlvm
-      # need a TP added now that they exist. OIDC cannot do a crate's first
-      # publish, but all three crates already exist (the new two were
-      # token-published in rc.2), so OIDC covers them from here on.
+      # must have a trusted publisher configured (this repo + release.yml).
+      # NOTE: constellation-metagraph-sdk-core is NEW — add a crates.io Trusted
+      # Publisher for it (this repo + release.yml) AND do its FIRST publish with a
+      # token (OIDC/TP cannot do a crate's first-ever publish); OIDC covers it from
+      # the release after. poseidon-bn254 + jlvm + the base crate already exist and
+      # are OIDC-covered.
       - name: Authenticate to crates.io (OIDC)
         id: auth
         uses: rust-lang/crates-io-auth-action@v1
@@ -205,29 +215,33 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
-          cache-dependency-path: packages/python/pyproject.toml
+          cache-dependency-path: packages/python/**/pyproject.toml
 
       - name: Install build + dev dependencies
         working-directory: packages/python
         run: |
           python -m pip install --upgrade pip build
-          pip install -e ".[dev]"
+          pip install -e "./core[dev]" -e "./main[dev]" -e ./jlvm
 
       # Test before publishing, mirroring the npm job's release-time backstop
       # (CI already runs the full lint/type/test matrix on every PR).
       - name: Test (pytest)
         working-directory: packages/python
-        run: pytest
+        run: pytest core main
 
-      - name: Build sdist + wheel
+      - name: Build sdist + wheel (all three dists into one dir)
         working-directory: packages/python
-        run: python -m build
+        run: |
+          python -m build --outdir dist core
+          python -m build --outdir dist main
+          python -m build --outdir dist jlvm
 
-      # Trusted Publisher (OIDC) — no token needed. The PyPI project must
-      # authorize THIS workflow file (release.yml). A publisher scoped to the old
-      # release-python.yml does NOT carry over — add a new pending/trusted
-      # publisher for release.yml in the PyPI project settings before the first
-      # unified tag (see docs/PUBLISHING.md).
+      # Trusted Publisher (OIDC) — no token needed. EACH of the three PyPI projects
+      # (constellation-metagraph-sdk-core, constellation-metagraph-sdk, and
+      # constellation-metagraph-sdk-jlvm) must authorize THIS workflow file
+      # (release.yml). -core and -jlvm are NEW projects: create them with a PENDING
+      # trusted publisher for release.yml before the first unified tag (see
+      # docs/PUBLISHING.md). One publish call uploads all three dists from dist/.
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -305,7 +319,7 @@ jobs:
               echo "> **Prerelease.** npm packages publish under the \`next\` dist-tag — install with \`npm install @constellation-network/metagraph-sdk@next\`. For PyPI use \`pip install --pre constellation-metagraph-sdk\`; for crates.io pin the exact version (\`= $VERSION\`)."
               echo ""
             fi
-            echo "_Go and Java signing SDKs are not part of this unified release; see \`packages/{go,java}\`._"
+            echo "_Go and Java are not part of this unified release. Go ships via module path-tags (\`packages/go/vX.Y.Z\`); Java is now a \`core/base/jlvm\` Maven reactor but Maven Central publishing is not yet wired (needs \`flatten-maven-plugin\` + Sonatype/GPG credentials) — see \`packages/{go,java}\`._"
           } > "$BODY"
           echo "body_path=$BODY" >> "$GITHUB_OUTPUT"
 
