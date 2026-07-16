@@ -809,6 +809,140 @@ fn mpt_confirm(root: &str, proof: &MptInclusionProof) -> bool {
     }
 }
 
+// ===========================================================================
+// Sealed light-client verifier (port of api/MerklePatriciaVerifier.confirm on
+// the sealed `MerklePatriciaProof` = Inclusion | Absence, metakit #60).
+//
+// This is a SEPARATE light-client surface from the `mpt_verify` OPCODE above:
+// it verifies the committed-state proof wire shape `{type, path, witness}`
+// served by `GET /committed/proof/<key>`, NOT an on-chain guard predicate
+// binding a queried key->value. Both arms run the SAME root-first fold; they
+// differ only in the terminal assertion. Byte-parity reference:
+// metakit `docs/mpt-spec/js/merkle-patricia-verifier.js` (THE reference) and
+// the Scala `MerklePatriciaVerifier.confirmAbsence`. Companion TS port:
+// `crypto-ops.ts` `verifyMptProof` / `mptConfirmAbsence`.
+// ===========================================================================
+
+/// `confirmAbsence`: replay the SAME root-first fold as inclusion over the
+/// deepest-first `witness`; the deepest (terminal) commitment must hash to the
+/// digest the fold reached AND structurally refuse the next step of the path.
+/// A terminal that could CONTINUE -- or a Leaf that MATCHES -- proves nothing.
+fn mpt_confirm_absence(root: &str, path: &str, witness: &[MptCommitment]) -> bool {
+    if witness.is_empty() {
+        return false; // InvalidWitness ("Empty witness")
+    }
+    let commitments: Vec<&MptCommitment> = witness.iter().rev().collect();
+    let last = commitments.len() - 1;
+    let mut current_digest = root.to_string();
+    let mut remaining: Vec<u8> = path_nibbles(path);
+
+    for (index, commit) in commitments.iter().enumerate() {
+        // The deepest commitment is the divergence terminal.
+        if index == last {
+            return mpt_absence_terminal(commit, &current_digest, &remaining);
+        }
+        match commit {
+            MptCommitment::Extension {
+                shared,
+                child_digest,
+            } => {
+                // verifyExtension: the node's digest must bind, then `shared` MUST
+                // be a prefix of the remaining path -- a NON-terminal divergence is
+                // an invalid witness, not an absence.
+                if commit.digest() != current_digest {
+                    return false; // InvalidNodeCommitment
+                }
+                let shared_nibbles = path_nibbles(shared);
+                if shared_nibbles.len() > remaining.len()
+                    || remaining[..shared_nibbles.len()] != shared_nibbles[..]
+                {
+                    return false; // InvalidPath
+                }
+                current_digest = child_digest.clone();
+                remaining = remaining[shared_nibbles.len()..].to_vec();
+            }
+            MptCommitment::Branch { paths_digest } => {
+                // verifyBranch: an exhausted path or a missing child at a
+                // NON-terminal branch is an invalid witness (absence counts only
+                // at the terminal). Child is selected BEFORE hashing, as in the
+                // inclusion fold.
+                let Some(&first) = remaining.first() else {
+                    return false; // InvalidPath ("No remaining path at branch")
+                };
+                let nib = nibble_char(first).to_string();
+                let Some((_, child)) = paths_digest.iter().find(|(k, _)| *k == nib) else {
+                    return false; // InvalidPath
+                };
+                if commit.digest() != current_digest {
+                    return false; // InvalidNodeCommitment
+                }
+                current_digest = child.clone();
+                remaining = remaining[1..].to_vec();
+            }
+            // A Leaf has no child to continue into: it can only be terminal.
+            MptCommitment::Leaf { .. } => return false, // InvalidWitness
+        }
+    }
+    false // unreachable: the loop always returns at `index == last`.
+}
+
+/// The absence terminal assertion: bind the terminal commitment to the digest
+/// the fold reached (same prefixed hashing as every step), then require it to
+/// structurally refuse the next step of the remaining path.
+fn mpt_absence_terminal(commit: &MptCommitment, current_digest: &str, remaining: &[u8]) -> bool {
+    if commit.digest() != current_digest {
+        return false; // InvalidNodeCommitment
+    }
+    match commit {
+        MptCommitment::Branch { paths_digest } => match remaining.first() {
+            // A branch carries no value slot, so a path ending here is absent.
+            None => true,
+            Some(&first) => {
+                let nib = nibble_char(first).to_string();
+                !paths_digest.iter().any(|(k, _)| *k == nib)
+            }
+        },
+        MptCommitment::Extension { shared, .. } => {
+            let shared_nibbles = path_nibbles(shared);
+            let is_prefix = shared_nibbles.len() <= remaining.len()
+                && remaining[..shared_nibbles.len()] == shared_nibbles[..];
+            !is_prefix
+        }
+        MptCommitment::Leaf {
+            remaining: leaf_rem,
+            ..
+        } => path_nibbles(leaf_rem).as_slice() != remaining,
+    }
+}
+
+/// Verify a sealed `MerklePatriciaProof` -- inclusion OR absence -- against a
+/// trusted `root` (64-char lowercase hex). Dispatches on the
+/// proof-level `type` tag: `"Absence"` runs the absence arm; `"Inclusion"` or an
+/// un-tagged legacy `{path, witness}` proof runs the inclusion fold
+/// ([`mpt_confirm`]); any other tag, or undecodable proof JSON, returns `false`.
+///
+/// This is the light-client counterpart to the Scala
+/// `MerklePatriciaVerifier.confirm(MerklePatriciaProof)` -- NOT the `mpt_verify`
+/// opcode (a frozen on-chain guard predicate that additionally binds a queried
+/// key->value). Pure and total: never panics on malformed input.
+pub fn verify_mpt_proof(root: &str, proof: &serde_json::Value) -> bool {
+    let Some(obj) = proof.as_object() else {
+        return false;
+    };
+    match obj.get("type").and_then(|v| v.as_str()) {
+        Some("Absence") => match decode_mpt_inclusion_proof(proof, "verify_mpt_proof") {
+            Ok(p) => mpt_confirm_absence(root, &p.path, &p.witness),
+            Err(_) => false,
+        },
+        // Un-tagged legacy `{path, witness}` == Inclusion (byte-identical + tag).
+        None | Some("Inclusion") => match decode_mpt_inclusion_proof(proof, "verify_mpt_proof") {
+            Ok(p) => mpt_confirm(root, &p),
+            Err(_) => false,
+        },
+        Some(_) => false, // unknown proof type
+    }
+}
+
 /// `mpt_verify([rootHex, keyHex, valueJson, proofJson]) -> bool`.
 pub fn mpt_verify(values: &[Value]) -> Result<Value, String> {
     match values {

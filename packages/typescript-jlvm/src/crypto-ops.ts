@@ -2195,6 +2195,151 @@ const mptConfirm = (root: string, proof: MptInclusionProof): boolean => {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Sealed light-client verifier (port of api/MerklePatriciaVerifier.confirm on
+// the sealed `MerklePatriciaProof` = Inclusion | Absence, metakit #60).
+//
+// A SEPARATE light-client surface from the `mpt_verify` OPCODE above: it
+// verifies the committed-state proof wire shape `{type, path, witness}` served
+// by `GET /committed/proof/<key>`, NOT an on-chain guard predicate binding a
+// queried key->value. Both arms run the SAME root-first fold and differ only in
+// the terminal assertion. Byte-parity references: metakit
+// `docs/mpt-spec/js/merkle-patricia-verifier.js` (THE reference) and the Scala
+// `MerklePatriciaVerifier.confirmAbsence`. Companion Rust port:
+// `rust/jlvm-core/src/auth_db.rs` `verify_mpt_proof` / `mpt_confirm_absence`.
+// ---------------------------------------------------------------------------
+
+/**
+ * `confirmAbsence`: replay the SAME root-first fold as inclusion over the
+ * deepest-first `witness`; the deepest (terminal) commitment must hash to the
+ * digest the fold reached AND structurally refuse the next step of the path. A
+ * terminal that could CONTINUE -- or a Leaf that MATCHES -- proves nothing.
+ */
+const mptConfirmAbsence = (root: string, path: string, witness: MptCommitment[]): boolean => {
+  if (witness.length === 0) {
+    return false; // InvalidWitness ("Empty witness")
+  }
+  const commitments = [...witness].reverse();
+  const last = commitments.length - 1;
+  let currentDigest = root;
+  let remaining = pathNibbles(path);
+
+  for (let index = 0; index < commitments.length; index++) {
+    const commit = commitments[index];
+    // The deepest commitment is the divergence terminal.
+    if (index === last) {
+      return mptAbsenceTerminal(commit, currentDigest, remaining);
+    }
+    if (commit.kind === 'extension') {
+      // verifyExtension: the node's digest must bind, then `shared` MUST be a
+      // prefix of the remaining path -- a NON-terminal divergence is an invalid
+      // witness, not an absence.
+      if (mptCommitmentDigest(commit) !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      const sharedNibbles = pathNibbles(commit.shared);
+      if (sharedNibbles.length > remaining.length) {
+        return false; // InvalidPath
+      }
+      for (let i = 0; i < sharedNibbles.length; i++) {
+        if (remaining[i] !== sharedNibbles[i]) {
+          return false; // InvalidPath
+        }
+      }
+      currentDigest = commit.childDigest;
+      remaining = remaining.slice(sharedNibbles.length);
+    } else if (commit.kind === 'branch') {
+      // verifyBranch: an exhausted path or a missing child at a NON-terminal
+      // branch is an invalid witness (absence counts only at the terminal).
+      if (remaining.length === 0) {
+        return false; // InvalidPath ("No remaining path at branch")
+      }
+      const nib = nibbleChar(remaining[0]);
+      const entry = commit.pathsDigest.find(([k]) => k === nib);
+      if (entry === undefined) {
+        return false; // InvalidPath
+      }
+      if (mptCommitmentDigest(commit) !== currentDigest) {
+        return false; // InvalidNodeCommitment
+      }
+      currentDigest = entry[1];
+      remaining = remaining.slice(1);
+    } else {
+      // A Leaf has no child to continue into: it can only be terminal.
+      return false; // InvalidWitness
+    }
+  }
+  return false; // unreachable: the loop always returns at `index === last`.
+};
+
+/**
+ * The absence terminal assertion: bind the terminal commitment to the digest the
+ * fold reached (same prefixed hashing as every step), then require it to
+ * structurally refuse the next step of the remaining path.
+ */
+const mptAbsenceTerminal = (
+  commit: MptCommitment,
+  currentDigest: string,
+  remaining: number[]
+): boolean => {
+  if (mptCommitmentDigest(commit) !== currentDigest) {
+    return false; // InvalidNodeCommitment
+  }
+  if (commit.kind === 'branch') {
+    // A branch carries no value slot, so a path ending here is absent.
+    if (remaining.length === 0) {
+      return true;
+    }
+    const nib = nibbleChar(remaining[0]);
+    return commit.pathsDigest.find(([k]) => k === nib) === undefined;
+  }
+  if (commit.kind === 'extension') {
+    const sharedNibbles = pathNibbles(commit.shared);
+    let isPrefix = sharedNibbles.length <= remaining.length;
+    for (let i = 0; isPrefix && i < sharedNibbles.length; i++) {
+      if (remaining[i] !== sharedNibbles[i]) {
+        isPrefix = false;
+      }
+    }
+    return !isPrefix;
+  }
+  // Leaf: a different key occupies the position iff `remaining` differs.
+  return nibblesToStr(pathNibbles(commit.remaining)) !== nibblesToStr(remaining);
+};
+
+/**
+ * Verify a sealed `MerklePatriciaProof` -- inclusion OR absence -- against a
+ * trusted `root` (64-char lowercase hex). Dispatches on the proof-level `type`
+ * tag: `"Absence"` runs the absence arm; `"Inclusion"` or an un-tagged legacy
+ * `{path, witness}` proof runs the inclusion fold (`mptConfirm`); any other tag,
+ * or undecodable proof JSON, returns `false`.
+ *
+ * This is the light-client counterpart to the Scala
+ * `MerklePatriciaVerifier.confirm(MerklePatriciaProof)` -- NOT the `mpt_verify`
+ * opcode (a frozen on-chain guard predicate that additionally binds a queried
+ * key->value). Pure and total: never throws on malformed input.
+ */
+export const verifyMptProof = (root: string, proof: unknown): boolean => {
+  if (!isPlainObject(proof)) {
+    return false;
+  }
+  const tag = asStr(proof.type);
+  try {
+    if (tag === 'Absence') {
+      const p = decodeMptInclusionProof(proof, 'verifyMptProof');
+      return mptConfirmAbsence(root, p.path, p.witness);
+    }
+    // Un-tagged legacy `{path, witness}` == Inclusion (byte-identical + tag).
+    if (tag === undefined || tag === 'Inclusion') {
+      const p = decodeMptInclusionProof(proof, 'verifyMptProof');
+      return mptConfirm(root, p);
+    }
+    return false; // unknown proof type
+  } catch {
+    return false; // undecodable proof JSON
+  }
+};
+
 /** `mpt_verify([rootHex, keyHex, valueJson, proofJson]) -> bool`. */
 export const opMptVerify = (values: JsonLogicValue[]): JsonLogicValue => {
   if (values.length !== 4) {

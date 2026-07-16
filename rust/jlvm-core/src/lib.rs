@@ -44,6 +44,7 @@ pub mod ordinal_catalog;
 pub mod ratio;
 pub mod value;
 
+pub use auth_db::verify_mpt_proof;
 pub use eval::evaluate;
 pub use expression::{decode_expression, Expression};
 pub use gas_eval::{evaluate_with_gas, evaluate_with_gas_config, GasError, GasUsed};
