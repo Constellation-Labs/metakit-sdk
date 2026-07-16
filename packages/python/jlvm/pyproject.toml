@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "constellation-metagraph-sdk-jlvm"
+version = "1.8.0-rc.7"
+description = "Reserved placeholder distribution for the future JLVM evaluator / crypto-opcode / proof port of the Constellation metagraph SDK"
+readme = "README.md"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Constellation Network", email = "contact@constellationnetwork.io"}
+]
+keywords = [
+    "constellation",
+    "metagraph",
+    "jlvm",
+    "placeholder"
+]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/Constellation-Labs/metakit-sdk"
+Documentation = "https://github.com/Constellation-Labs/metakit-sdk/tree/main/packages/python"
+Repository = "https://github.com/Constellation-Labs/metakit-sdk.git"
+Issues = "https://github.com/Constellation-Labs/metakit-sdk/issues"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["constellation_metagraph.jlvm*"]
+namespaces = true
