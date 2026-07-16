@@ -1,74 +1,153 @@
-# JLVM Cross-Language Parity — Status
+# Cross-Language Parity & Packaging Roadmap
 
-> **Status doc (updated 2026-07-01).** This began as a plan; the plan is now
-> substantially complete. TypeScript and Rust have reached **full byte-for-byte
-> parity** with the metakit (Scala) reference JLVM — base opcodes *and* the
-> entire zk-JLVM — verified against the shared conformance vectors on every CI
-> run. The earlier note that "TypeScript is base-JLVM only, no ZK opcodes" is
-> **no longer true** and has been removed.
+> **Status (2026-07-16).** Supersedes the prior "JLVM lives in Rust + TS only;
+> Go/Java/Python are signing-only *by design*" note. That design decision is
+> **reversed**: the goal is now **full byte-for-byte JLVM parity across all five
+> client languages**, plus a **uniform 3-tier package delineation** (core / std /
+> jlvm) in every language. This doc is the plan of record.
 
-## Scope (as shipped)
+## Goal
 
-- **JLVM lives in TypeScript and Rust only.** Python, Go, and Java are
-  signing-SDK ports (canonicalization + ECDSA + currency/data transactions) and
-  intentionally have **no** JSON-Logic VM. This is by design, not a gap.
-- **TypeScript ↔ Rust ↔ Scala: FULL parity** — base JLVM **and** the entire
-  zk-JLVM: all ZK/crypto opcodes + full auth-DB (Sparse Merkle + Merkle
-  Patricia) + Σ-protocols.
+1. **Byte-for-byte parity** of Go, Java, and Python with the Scala reference
+   (`metakit`) and the two already-complete ports (Rust, TypeScript) — the whole
+   JLVM surface: evaluator, gas, crypto opcodes, proof verifiers, Poseidon.
+2. **Uniform packaging**: every language ships three artifacts —
+   - **core** — offline only: JCS canonicalization + `dropNulls`, `JsonBinaryHasher`
+     content-hash, binary codec, committed-roots light-client codecs. *No private
+     keys, no network.*
+   - **std** — signing + wallet + currency/data tx + network client. Depends on core.
+   - **jlvm** — the extension: evaluator + gas + all crypto/ZK opcodes + Poseidon +
+     MPT/SMT/PMT verifiers + numerics. Depends on core.
 
-## Principle
+Scala (`metakit`) is the reference. The **`shared/*.json` conformance vectors are
+the byte-exact contract**: a port is "at parity" iff it reproduces every vector.
 
-Scala (metakit) is the reference. The formal **shared vectors** live in
-`shared/` (known-answer where they exist, Scala-generated for coverage); Rust
-and TypeScript must reproduce every one byte-for-byte. The shared vectors are
-the canonical source of truth and are vendored into metakit's own test suite
-(`src/test/resources/conformance/`) — a byte `diff` of the two copies is zero.
+## Current state
 
-## Opcode surface (at parity in TS + Rust)
+| Surface | Scala (ref) | Rust | TS | Go | Java | Python |
+|---|---|---|---|---|---|---|
+| A. Canonicalization (JCS + dropNulls) | ✅ | ✅ | ✅ | ✅ | ✅ | ⚠️¹ |
+| B1. Content hash (JsonBinaryHasher) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| B2. Poseidon-BN254 | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| B3. secp256k1 signing / currency-tx | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| C. JLVM evaluator (87 ops) + gas | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| D. Crypto opcodes² | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| E. Proof structures (MPT/SMT/PMT) | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ |
+| F. Conformance vectors loaded | 6/6 | 6/6 | 6/6 | 2/6 | 2/6 | 2/6 |
 
-Base: control-flow / logical / comparison / arithmetic (incl. `hex_to_int`) /
-array / string / object-map (incl. `set`, `unset`) / utility.
+¹ Python `dropNulls` + JCS key-order are correct, but the `rfc8785` PyPI lib throws
+on integers ≥ 2⁵³ — unusable for JLVM values; a hand-rolled canonical-json is required.
+² `groth16_verify`, `sigma_verify` (+`prove_dlog`/`prove_dhtuple`, CDS AND/OR/THRESHOLD),
+`schnorr_verify`, `bls_verify`/`bls_aggregate_verify`, `ecvrf_verify`,
+`bn254_add`/`mul`/`pairing`, `poseidon`, `pmt_verify`, `smt_verify`, `mpt_verify`,
+`mpt_prefix_verify`.
 
-ZK / crypto / auth-DB: `poseidon` · `pmt_verify` · `smt_verify` · `mpt_verify`
-· `mpt_prefix_verify` · `groth16_verify` · `ecvrf_verify` ·
-`bn254_add`/`mul`/`pairing` · `bls_verify`/`bls_aggregate_verify` ·
-`schnorr_verify` · `prove_dlog_verify` · `prove_dhtuple_verify` ·
-`sigma_verify`.
+**Go, Java, Python are complete `core`+`std` ports and 0% of the JLVM tier.** Each
+needs a body of work comparable to `typescript-jlvm` / `rust/jlvm-core` (~10k LOC).
+Java is additionally version-skewed (`0.1.0` vs the `1.8.0-rc.x` line) and never
+published to Maven Central.
 
-## Conformance gates (run in CI)
+## The byte-parity contract (`shared/*.json`)
 
-| Vector file | version | Rust | TypeScript |
-|---|---|---|---|
-| `shared/json_logic_test_vectors.json` | 1.6.0 | `jlvm-core/tests/differential.rs` | `json-logic-vectors`, `hex-to-int`, `set-unset` |
-| `shared/zk_opcode_test_vectors.json` | 1.12.0 | `jlvm-core/tests/zk_differential.rs` | `json-logic-zk-vectors` (all 17 categories) |
-| `shared/gas_test_vectors.json` | 1.2.0 | `jlvm-core/tests/gas_differential.rs` | `gas-vectors` |
-| `shared/ordinal_catalog_test_vectors.json` | 1.0.0 | `jlvm-core/tests/ordinal_catalog_differential.rs` | `ordinal-catalog-vectors` |
+| File | Surface | Cases |
+|---|---|---|
+| `json_logic_test_vectors.json` | JLVM evaluator | 23 categories / 166 |
+| `zk_opcode_test_vectors.json` | crypto + auth-DB opcodes | 17 categories / 156 |
+| `gas_test_vectors.json` | gas meter (Default profile) | 12 categories |
+| `ordinal_catalog_test_vectors.json` | committed-state attestation (SMT + epoch-MPT) | 10 |
+| `test_vectors.json` | canonicalize + hash + sign KATs | 16 |
+| `currency_transaction_vectors.json` | currency-tx signing (SDK-only) | — |
 
-Green CI on `cargo test` + `npm test --workspaces` is a proof of byte-parity.
+Sync is **manual file-copy** metakit ⇄ `shared/`, with **no cross-repo CI gate**
+today — this already caused a drift (metakit `zk_opcode` v1.12.0 vs SDK v1.13.0).
 
-## BLS ciphersuite — DECIDED (shipped)
+### The most load-bearing byte rules (hand these to every porter)
 
-Standard **eth2 SSWU** ciphersuite
-(`BLS_SIG_BLS12381G2_XMD:SHA-256_SSWU_RO_`). Scala via Bouncy Castle 1.85
-(vendored, test-only); Rust via blst/arkworks (native, behind the default-on
-`bls` feature so the SP1 guest can drop the `blst` C backend). Interoperable +
-standard.
+1. Content-hash pre-image field order is **RFC-8785 sorted keys**, not struct order.
+2. `dropNulls` **before** JCS on every typed-content hash — drop object nulls,
+   **keep array nulls**.
+3. 1-byte type prefixes prepended to JCS bytes: MPT Leaf/Branch/Ext = `0x00/0x01/0x02`,
+   SMT Leaf/Internal = `0x00/0x01`; MPT `dataDigest` has **no** prefix.
+4. MPT `path`/`remaining`/`shared` = **one hex char per nibble**.
+5. SMT `position = sha256(UTF-8 of the key's hex string, undecoded)`.
+6. SMT bit order **MSB-first**, PMT bit order **LSB-first**.
+7. JLVM ints = unbounded BigInt, floats = **exact Ratio**; rounding only at
+   serialization (Ryu shortest-double) and the DECIMAL128 `cat`/`join`/`in` path.
+8. **String indexing is UTF-16 code units** (a hazard for Go byte-strings and Python
+   code-point strings); lone surrogates → U+FFFD.
+9. Sigma challenges are **31 bytes** (injective into Fr) with a frozen tag-byte transcript.
 
-## Follow-ups / open items
+## Sequencing (decided)
 
-- ✅ **Gas vectors for the newest opcodes.** `gas_test_vectors.json` is now
-  `1.2.0` with `hex_conversion` (`hex_to_int` = flat 15) and `map_mutation`
-  (`set`/`unset` = flat 10) categories, generated by the Scala meter
-  (`json_logic.GasVectorGenerator`) and reproduced byte-for-byte by the Rust
-  (`gas_differential.rs`) and TS (`gas-vectors.test.ts`) differential suites.
-- ✅ **Committed-roots light-client verification** — both the roots-only codec
-  (`CommittedRoots` / `CommittedBreadcrumb` / `CommitKey` / `combinedHash`, in
-  the core packages) and the full `OrdinalCatalogProof` epoch-catalog
-  attestation (in the JLVM packages, on top of `smt_verify`) are ported to TS +
-  Rust and proven against `shared/ordinal_catalog_test_vectors.json` (generated
-  by the Scala `OrdinalCatalogVectorGenerator`). See `docs/committed-roots.md`.
-  Not ported: node-side proof *serving*.
-- **Base-parity trivia found by the Scala conformance runner:** 3-arg `get`
-  `[map,key,default]` and object-form `let` `{let:[{name:expr},result]}` — TS
-  and Rust support both; metakit tracks them as guarded xfails in
-  `SharedVectorConformanceSuite`.
+**Contract-first, then Go pilot → Java → Python.**
+
+### Phase 1 — Contract (language-agnostic; make the oracle complete & drift-proof)
+
+- **C1. Vector drift reconciliation** — ✅ metakit#61 (sync `zk_opcode` to v1.13.0).
+- **C2. Cross-repo parity CI gate** — pinned-ref byte-diff: metakit CI checks out the
+  SDK `shared/` at a pinned SHA (a `.metakit-sdk-ref` file bumped alongside re-vendors)
+  and `sha256`-diffs the 5 vendored vector files; a soft non-blocking reminder in SDK
+  CI on `shared/**` changes. **Needs a read-only cross-repo token (user action).**
+- **C3. MPT absence for clients** — PR #60 added sealed `Inclusion|Absence` to the
+  **committed-state layer** (`Committed.proveKey`), *not* the `mpt_verify` opcode
+  (inclusion-only by design). No SDK port verifies absence yet. Add a light-client
+  sealed-proof verifier to Rust + TS (mirroring ottochain-sdk's `verifyMptAbsence`) +
+  vectors, so the client libs catch up to the server on the one feature it's ahead on.
+
+### Phase 2 — Packaging tiers (do before porting, so JLVM lands in the right package)
+
+1. Write the **tier-boundary spec** (exact symbol → core/std/jlvm map + the
+   core←std, core←jlvm edges).
+2. **Realign the reference langs** to the clean boundary: TS moves `sign/verify/wallet`
+   from `-core` → the std package; Rust splits a new `-core` crate out of the fused
+   `packages/rust`. *(Breaking for direct `-core` signing importers — safe now: no
+   external consumers yet.)*
+3. **Restructure Go/Java/Python** into `core`+`std` with an **empty `jlvm` placeholder**
+   package/module so the port is purely additive.
+4. **Unify the release train**: bump Java `0.1.0`→`1.8.0-rc.x`, wire Java into
+   `release.yml` (Maven job on the `v*` tag), extend the `version-check` gate to the new
+   artifacts; Go stays on its path-tag at the same version.
+
+### Phase 3 — JLVM ports (Go pilot → Java → Python), each layered & vector-gated
+
+Per language, dependency-ordered (each layer's acceptance = its vector suite green):
+
+1. **Canonicalization for the JLVM value space** — big-int/ratio-aware JCS (NOT the
+   generic RFC-8785 libs, which clamp/throw on large ints). *(json_logic vectors)*
+2. **Arbitrary-precision numerics** — BigInt + exact Ratio. Go: `math/big` (mind
+   auto-reduction). Java: `BigInteger` + `BigFraction`. Python: native `int` +
+   `fractions.Fraction` (cheap win — verify reduction/sign parity).
+3. **JLVM evaluator + 87 ops + gas meter** (the largest item). *(json_logic + gas vectors)*
+4. **Poseidon-BN254** — hand-ported constants/MDS/permutation. *(poseidon KATs)*
+5. **Crypto opcodes** — groth16 / sigma family / schnorr / bls / ecvrf / bn254 /
+   pmt / smt / mpt / mpt_prefix. Reuse curve/pairing libs (Go `gnark-crypto`+`btcec`;
+   Java web3j alt-bn128 or arkworks-JNI + BC; Python `py_ecc`), hand-write Poseidon +
+   sigma transcripts + proof verifiers. *(zk_opcode vectors)*
+6. **Proof structures** — MPT/SMT/PMT verifiers. *(zk_opcode + ordinal_catalog vectors)*
+7. **Vector wiring** — differential runners for all 6 shared sets.
+
+**Go first** as the pilot (best crypto-lib ecosystem: `gnark-crypto`, `btcec`) to prove
+the layered approach and shake out any vector issues, then replicate the proven pattern
+to **Java** and **Python**.
+
+## Per-language hazards (byte-parity traps)
+
+- **Go** — `big.Rat` auto-reduces (must match reference Ratio); byte-string indexing
+  vs UTF-16 rule; Poseidon constants have no drop-in (gnark's poseidon2 ≠ circomlib);
+  Groth16 must match the SP1 verifier pre-image, not gnark's generic verifier.
+- **Java** — `double` currency path is a precision hazard; needs `BigInteger`+exact
+  rational; JCS lib (`erdtman`) is double-based → disqualified for JLVM canonicalization;
+  BN254/pairing lib choice (web3j pure-Java vs arkworks-JNI) is the big architectural call.
+- **Python** — `rfc8785` throws on ints ≥ 2⁵³ (hard blocker → hand-roll JCS);
+  code-point vs UTF-16 string indexing; `py_ecc` covers BN254/BLS pairing but encodings
+  must be byte-matched.
+
+## Delegation / parallelization
+
+- The three ports are **independent** → separate tracks (Go pilots the pattern).
+- Within a language, layers 1–2 are the sequential foundation; Poseidon (4) is
+  independent of the evaluator (3); crypto (5) and proofs (6) follow Poseidon.
+- Each layer is a self-contained, **vector-gated** unit of work — ideal for delegation:
+  an agent ports a layer and must make its differential suite green.
+- The `shared/*.json` oracle makes every port mechanically verifiable — the saving
+  grace that makes a ~10k-LOC crypto port tractable via subagents.
