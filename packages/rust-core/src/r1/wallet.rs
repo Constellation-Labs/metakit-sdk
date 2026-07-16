@@ -18,7 +18,7 @@ const PKCS_PREFIX: &str = "3059301306072a8648ce3d020106082a8648ce3d0301070342000
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::r1::wallet::generate_key_pair;
+/// use constellation_sdk_core::r1::wallet::generate_key_pair;
 ///
 /// let key_pair = generate_key_pair();
 /// println!("Address: {}", key_pair.address);
