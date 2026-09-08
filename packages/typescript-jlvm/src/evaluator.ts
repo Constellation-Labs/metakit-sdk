@@ -1146,7 +1146,9 @@ export class Evaluator {
     if (values.length === 0) return nullValue();
     if (values.length === 1 && values[0].tag === 'null') return nullValue();
     if (values.length === 1 && values[0].tag === 'map') {
-      return arrayValue([...values[0].value.values()]);
+      return arrayValue(
+        [...values[0].value.entries()].sort(([a], [b]) => utf16Cmp(a, b)).map(([, v]) => v)
+      );
     }
     return fail('Unexpected input for `values`');
   }
@@ -1155,7 +1157,7 @@ export class Evaluator {
     if (values.length === 0) return nullValue();
     if (values.length === 1 && values[0].tag === 'null') return nullValue();
     if (values.length === 1 && values[0].tag === 'map') {
-      return arrayValue([...values[0].value.keys()].map((k) => strValue(k)));
+      return arrayValue([...values[0].value.keys()].sort(utf16Cmp).map((k) => strValue(k)));
     }
     return fail('Unexpected input for `keys`');
   }
@@ -1181,7 +1183,9 @@ export class Evaluator {
     if (values.length === 0) return nullValue();
     if (values.length === 1 && values[0].tag === 'map') {
       return arrayValue(
-        [...values[0].value.entries()].map(([k, v]) => arrayValue([strValue(k), v]))
+        [...values[0].value.entries()]
+          .sort(([a], [b]) => utf16Cmp(a, b))
+          .map(([k, v]) => arrayValue([strValue(k), v]))
       );
     }
     return fail('Unexpected input to entries');

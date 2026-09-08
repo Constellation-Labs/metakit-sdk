@@ -1012,7 +1012,13 @@ impl<'a> Evaluator<'a> {
         match values.as_slice() {
             [] => Ok(Value::Null),
             [Value::Null] => Ok(Value::Null),
-            [Value::Map(m)] => Ok(Value::Array(m.iter().map(|(_, v)| v.clone()).collect())),
+            [Value::Map(m)] => {
+                let mut entries: Vec<_> = m.iter().collect();
+                entries.sort_by(|a, b| crate::canonical::utf16_cmp(&a.0, &b.0));
+                Ok(Value::Array(
+                    entries.into_iter().map(|(_, v)| v.clone()).collect(),
+                ))
+            }
             _ => Err(format!("Unexpected input for `values` got {:?}", values)),
         }
     }
@@ -1021,9 +1027,16 @@ impl<'a> Evaluator<'a> {
         match values.as_slice() {
             [] => Ok(Value::Null),
             [Value::Null] => Ok(Value::Null),
-            [Value::Map(m)] => Ok(Value::Array(
-                m.iter().map(|(k, _)| Value::Str(k.clone())).collect(),
-            )),
+            [Value::Map(m)] => {
+                let mut entries: Vec<_> = m.iter().collect();
+                entries.sort_by(|a, b| crate::canonical::utf16_cmp(&a.0, &b.0));
+                Ok(Value::Array(
+                    entries
+                        .into_iter()
+                        .map(|(k, _)| Value::Str(k.clone()))
+                        .collect(),
+                ))
+            }
             _ => Err(format!("Unexpected input for `keys` got {:?}", values)),
         }
     }
@@ -1224,8 +1237,10 @@ impl<'a> Evaluator<'a> {
         match values.as_slice() {
             [] => Ok(Value::Null),
             [Value::Map(m)] => {
-                let entries = m
-                    .iter()
+                let mut sorted: Vec<_> = m.iter().collect();
+                sorted.sort_by(|a, b| crate::canonical::utf16_cmp(&a.0, &b.0));
+                let entries = sorted
+                    .into_iter()
                     .map(|(k, v)| Value::Array(vec![Value::Str(k.clone()), v.clone()]))
                     .collect();
                 Ok(Value::Array(entries))
