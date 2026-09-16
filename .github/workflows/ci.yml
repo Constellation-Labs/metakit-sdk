@@ -432,7 +432,7 @@ jobs:
 
       - name: Run cross-language tests (Java)
         working-directory: packages/java
-        run: mvn test -Dtest=CrossLanguageTest
+        run: mvn -pl core test -Dtest=CrossLanguageTest
 
   all-checks-pass:
     needs: [typescript, python, rust, go, java, jlvm-core, publish-dry-run, cross-language]

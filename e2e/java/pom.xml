@@ -24,7 +24,7 @@
         <dependency>
             <groupId>io.constellationnetwork</groupId>
             <artifactId>metagraph-sdk</artifactId>
-            <version>0.1.0</version>
+            <version>1.8.0-rc.8</version>
         </dependency>
 
         <!-- Bouncy Castle (transitive from SDK) -->

@@ -1,6 +1,8 @@
 import com.google.gson.Gson;
 import com.google.gson.annotations.SerializedName;
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.Types;
+import io.constellationnetwork.metagraph.sdk.core.Wallet;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -137,10 +139,7 @@ public class SendCurrencyTx {
         System.out.println();
 
         // Create client
-        NetworkTypes.NetworkConfig networkConfig = new NetworkTypes.NetworkConfig.Builder()
-                .l1Url(currencyL1Url)
-                .build();
-        CurrencyL1Client client = new CurrencyL1Client(networkConfig);
+        MetagraphClient client = new MetagraphClient(currencyL1Url, MetagraphClient.LayerType.CL1);
 
         // Check health
         System.out.println("Checking node health...");
