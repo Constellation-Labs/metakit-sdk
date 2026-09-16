@@ -1,6 +1,8 @@
-// Package constellation provides a complete SDK for signing and verifying
-// data on Constellation Network metagraphs.
-package constellation
+// Package core is the fully-offline signing kernel for Constellation Network
+// metagraphs: canonicalization, binary/codec, hashing, and the signing
+// primitives (sign/verify/signed-object/wallet). It has no network or currency
+// dependencies. The std package builds on top of it.
+package core
 
 import "errors"
 

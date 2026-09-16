@@ -1,4 +1,4 @@
-package constellation
+package core
 
 import (
 	"encoding/hex"
@@ -25,7 +25,7 @@ type TestVector struct {
 
 func loadTestVectors(t *testing.T) []TestVector {
 	// Try to find the shared test vectors file
-	vectorsPath := filepath.Join("..", "..", "shared", "test_vectors.json")
+	vectorsPath := filepath.Join("..", "..", "..", "shared", "test_vectors.json")
 
 	content, err := os.ReadFile(vectorsPath)
 	require.NoError(t, err, "Failed to read test vectors from %s", vectorsPath)

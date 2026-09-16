@@ -428,7 +428,11 @@ jobs:
 
       - name: Run cross-language tests (Go)
         working-directory: packages/go
-        run: go test -v -run CrossLanguage
+        # The cross-language vector tests live in the core package
+        # (core/cross_language_test.go). `-run CrossLanguage` matched NOTHING
+        # (no such name) — a silent vacuous pass; `./...` + the real function
+        # names run them for real.
+        run: go test -v ./... -run 'AllVectors|RejectsTamperedSignatures|BySourceLanguage'
 
       - name: Run cross-language tests (Java)
         working-directory: packages/java

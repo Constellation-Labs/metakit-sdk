@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 
 	constellation "github.com/Constellation-Labs/metakit-sdk/packages/go"
+	"github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 type Config struct {
@@ -43,7 +44,7 @@ func loadConfig(configPath string) (*Config, error) {
 }
 
 func generateKeypairCommand() {
-	keypair, err := constellation.GenerateKeyPair()
+	keypair, err := core.GenerateKeyPair()
 	if err != nil {
 		fmt.Printf("Error generating keypair: %v\n", err)
 		os.Exit(1)
@@ -90,7 +91,7 @@ func sendTransaction(config *Config) {
 	}
 
 	// Derive address from private key
-	keypair, err := constellation.KeyPairFromPrivateKey(privateKey)
+	keypair, err := core.KeyPairFromPrivateKey(privateKey)
 	if err != nil {
 		fmt.Printf("Error deriving keypair: %v\n", err)
 		os.Exit(1)
@@ -105,7 +106,7 @@ func sendTransaction(config *Config) {
 	fmt.Println()
 
 	// Create client
-	client, err := constellation.NewCurrencyL1Client(constellation.NetworkConfig{L1URL: currencyL1URL})
+	client, err := constellation.NewMetagraphClient(currencyL1URL, constellation.LayerCL1)
 	if err != nil {
 		fmt.Printf("Error creating client: %v\n", err)
 		os.Exit(1)
