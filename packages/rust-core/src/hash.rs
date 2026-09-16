@@ -19,7 +19,7 @@ use crate::types::{Hash, Result};
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::hash::hash_data;
+/// use constellation_sdk_core::hash::hash_data;
 /// use serde_json::json;
 ///
 /// let data = json!({"id": "test"});

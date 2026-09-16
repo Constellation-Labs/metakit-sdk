@@ -1,0 +1,53 @@
+[package]
+name = "constellation-metagraph-sdk-core"
+version = "1.8.0-rc.7"
+edition = "2021"
+authors = ["Constellation Network"]
+description = "Offline kernel for the Constellation Metagraph SDK — canonicalization, hashing, and secp256k1/secp256r1 signing with zero network dependencies"
+license = "Apache-2.0"
+repository = "https://github.com/Constellation-Labs/metakit-sdk"
+homepage = "https://github.com/Constellation-Labs/metakit-sdk"
+documentation = "https://docs.rs/constellation-metagraph-sdk-core"
+keywords = ["constellation", "metagraph", "ecdsa", "secp256k1", "secp256r1"]
+categories = ["cryptography", "api-bindings", "no-std"]
+readme = "README.md"
+rust-version = "1.70"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
+
+[dependencies]
+# Cryptography (core — secp256k1)
+secp256k1 = { version = "0.29", features = ["rand", "global-context"] }
+sha2 = "0.10"
+bs58 = "0.5"
+base64 = "0.22"
+hex = "0.4"
+
+# Cryptography (R1 / P-256 — gated behind the `r1` feature so consumers
+# that only need K1 don't pull the p256 dep tree).
+p256 = { version = "0.13", features = ["ecdsa", "pem"], optional = true }
+ecdsa = { version = "0.16", features = ["der", "signing", "verifying"], optional = true }
+elliptic-curve = { version = "0.13", features = ["sec1"], optional = true }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_json_canonicalizer = "0.2"
+
+# Error handling
+thiserror = "1.0"
+
+# Random number generation
+rand = "0.8"
+
+[features]
+default = []
+# Enables P-256 (secp256r1) signing — TPM-native curve. Pulls in the
+# p256 / ecdsa / elliptic-curve dep tree. See `crate::r1`.
+r1 = ["dep:p256", "dep:ecdsa", "dep:elliptic-curve"]
+
+[lib]
+name = "constellation_sdk_core"
+path = "src/lib.rs"

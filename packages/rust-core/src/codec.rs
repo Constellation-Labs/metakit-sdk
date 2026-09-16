@@ -20,7 +20,7 @@ pub use crate::binary::{encode_data_update, to_bytes};
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::codec::{encode_data_update, decode_data_update};
+/// use constellation_sdk_core::codec::{encode_data_update, decode_data_update};
 /// use serde_json::{json, Value};
 ///
 /// let data = json!({"id": "test"});

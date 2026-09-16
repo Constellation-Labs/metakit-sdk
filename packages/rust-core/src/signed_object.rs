@@ -19,8 +19,8 @@ use crate::types::{Result, SdkError, Signed};
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::signed_object::create_signed_object;
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::signed_object::create_signed_object;
+/// use constellation_sdk_core::wallet::generate_key_pair;
 /// use serde_json::json;
 ///
 /// let key_pair = generate_key_pair();
@@ -63,8 +63,8 @@ pub fn create_signed_object<T: Serialize + Clone>(
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::signed_object::{create_signed_object, add_signature};
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::signed_object::{create_signed_object, add_signature};
+/// use constellation_sdk_core::wallet::generate_key_pair;
 /// use serde_json::json;
 ///
 /// let key1 = generate_key_pair();
@@ -114,8 +114,8 @@ pub fn add_signature<T: Serialize + Clone>(
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::signed_object::batch_sign;
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::signed_object::batch_sign;
+/// use constellation_sdk_core::wallet::generate_key_pair;
 /// use serde_json::json;
 ///
 /// let key1 = generate_key_pair();

@@ -2,6 +2,15 @@
 //!
 //! A toolkit for signing and verifying data on Constellation Network metagraphs.
 //!
+//! The offline kernel (canonicalization, hashing, binary encoding,
+//! committed-roots codecs, and secp256k1/secp256r1 signing) lives in the
+//! [`constellation-metagraph-sdk-core`] crate and is re-exported here, so
+//! every `constellation_sdk::*` path resolves unchanged. This crate adds the
+//! higher tiers on top: currency transactions and the optional metagraph
+//! network client.
+//!
+//! [`constellation-metagraph-sdk-core`]: https://docs.rs/constellation-metagraph-sdk-core
+//!
 //! # Features
 //!
 //! - **ECDSA secp256k1 signing** — industry-standard elliptic curve signatures
@@ -44,21 +53,24 @@
 //! let sig = sign_hash(&"00".repeat(32), &kp.private_key)?;
 //! ```
 
-pub mod binary;
-pub mod canonicalize;
-pub mod codec;
-pub mod committed_roots;
-pub mod currency_transaction;
-pub mod currency_types;
-pub mod hash;
-pub mod sign;
-pub mod signed_object;
-pub mod types;
-pub mod verify;
-pub mod wallet;
+// ─── Offline kernel (re-exported from constellation-metagraph-sdk-core) ───
+//
+// The offline modules were split into the `constellation-metagraph-sdk-core`
+// crate to mirror the TypeScript 3-package tier model. They are re-exported
+// here so existing `constellation_sdk::{binary, canonicalize, codec, hash,
+// types, sign, signed_object, verify, wallet, committed_roots, r1}` paths —
+// and intra-crate `crate::types::…` / `crate::wallet::…` references from the
+// currency and network modules — keep resolving unchanged.
+pub use constellation_sdk_core::{
+    binary, canonicalize, codec, committed_roots, hash, sign, signed_object, types, verify, wallet,
+};
 
 #[cfg(feature = "r1")]
-pub mod r1;
+pub use constellation_sdk_core::r1;
+
+// ─── Higher tiers owned by this crate ────────────────────────────────────
+pub mod currency_transaction;
+pub mod currency_types;
 
 #[cfg(feature = "network")]
 pub mod network;
@@ -71,14 +83,20 @@ pub use types::{
     VerificationResult, ALGORITHM, ALGORITHM_R1, CONSTELLATION_PREFIX,
 };
 
-// secp256k1 (K1) — always present
+// secp256k1 (K1) — always present.
+//
+// NOTE: the `canonicalize`, `sign`, and `verify` *functions* share a name
+// with their module, so they are already re-exported into this crate's root
+// by the `pub use constellation_sdk_core::{…}` module re-export above (a
+// value + a module in the same `use`). Re-listing them here would be a
+// duplicate-definition error, so only the differently-named items follow.
 pub use binary::{encode_data_update, to_bytes};
-pub use canonicalize::{canonicalize, canonicalize_bytes, drop_null_fields};
+pub use canonicalize::{canonicalize_bytes, drop_null_fields};
 pub use codec::decode_data_update;
 pub use hash::{compute_digest, hash_bytes, hash_data};
-pub use sign::{sign, sign_data_update, sign_hash};
+pub use sign::{sign_data_update, sign_hash};
 pub use signed_object::{add_signature, batch_sign, create_signed_object};
-pub use verify::{verify, verify_hash, verify_signature};
+pub use verify::{verify_hash, verify_signature};
 pub use wallet::{
     generate_key_pair, get_address, get_public_key_hex, get_public_key_id, is_valid_private_key,
     is_valid_public_key, key_pair_from_private_key,

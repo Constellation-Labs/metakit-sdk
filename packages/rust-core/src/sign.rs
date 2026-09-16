@@ -30,8 +30,8 @@ use crate::wallet::get_public_key_id;
 ///
 /// # Example
 /// ```
-/// use constellation_sdk::sign::sign;
-/// use constellation_sdk::wallet::generate_key_pair;
+/// use constellation_sdk_core::sign::sign;
+/// use constellation_sdk_core::wallet::generate_key_pair;
 /// use serde_json::json;
 ///
 /// let key_pair = generate_key_pair();

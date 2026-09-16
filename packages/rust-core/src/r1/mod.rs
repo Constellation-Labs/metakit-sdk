@@ -14,10 +14,10 @@
 //!
 //! ```toml
 //! [dependencies]
-//! constellation-metagraph-sdk = { version = "0.2", features = ["r1"] }
+//! constellation-metagraph-sdk-core = { version = "1.8", features = ["r1"] }
 //! ```
 //!
-//! Without the feature, importing `constellation_sdk::r1` is a
+//! Without the feature, importing `constellation_sdk_core::r1` is a
 //! compile error — the K1 functions at the crate root continue to
 //! work unchanged.
 //!
