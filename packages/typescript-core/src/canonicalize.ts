@@ -70,6 +70,18 @@ export function dropNullFields<T>(data: T): T {
   return data;
 }
 
+/** Reject malformed UTF-16 before applying the JCS string escaping set. */
+function serializeString(value: string): string {
+  for (const ch of value) {
+    const code = ch.codePointAt(0) as number;
+    // Valid surrogate pairs are combined by the string iterator.
+    if (code >= 0xd800 && code <= 0xdfff) {
+      throw new Error('Unpaired surrogate in canonical JSON string');
+    }
+  }
+  return JSON.stringify(value);
+}
+
 /**
  * Serialize a single value to its RFC 8785 canonical form.
  *
@@ -95,7 +107,7 @@ function serializeJcs(value: unknown): string | undefined {
 
     case 'string':
       // ECMAScript JSON.stringify escaping == the JCS escaping set.
-      return JSON.stringify(value);
+      return serializeString(value);
 
     case 'bigint':
       throw new Error(
@@ -124,7 +136,7 @@ function serializeJcs(value: unknown): string | undefined {
     if (serialized === undefined) {
       continue; // omit members without a JSON representation
     }
-    parts.push(`${JSON.stringify(key)}:${serialized}`);
+    parts.push(`${serializeString(key)}:${serialized}`);
   }
   return `{${parts.join(',')}}`;
 }

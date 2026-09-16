@@ -39,6 +39,10 @@ const serializeString = (s: string): string => {
   let out = '"';
   for (const ch of s) {
     const code = ch.codePointAt(0) as number;
+    // for...of combines valid pairs; a surrogate code point here is unpaired.
+    if (code >= 0xd800 && code <= 0xdfff) {
+      throw new Error('Unpaired surrogate in canonical JSON string');
+    }
     switch (ch) {
       case '\n':
         out += '\\n';
