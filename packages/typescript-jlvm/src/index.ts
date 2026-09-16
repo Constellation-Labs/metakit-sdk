@@ -187,6 +187,12 @@ export {
   type OrdinalCatalogResult,
 } from './ordinal-catalog';
 
+// Sealed Merkle-Patricia light-client verifier (committed-state proof
+// `{type: "Inclusion" | "Absence", path, witness}` served by
+// `GET /committed/proof/<key>`; port of the Scala MerklePatriciaVerifier /
+// metakit `docs/mpt-spec/js`). SEPARATE from the frozen `mpt_verify` opcode.
+export { verifyMptProof } from './crypto-ops';
+
 // ============= High-level API =============
 
 import { parseExpression, parseValue, encodeValue } from './codec';
