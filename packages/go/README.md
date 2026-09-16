@@ -4,6 +4,13 @@ Go SDK for signing data and currency transactions on Constellation Network metag
 
 > **Scope:** This SDK supports both data transactions (state updates) and metagraph token transactions (value transfers). It implements the standardized serialization, hashing, and signing routines defined by metakit and may not be compatible with metagraphs using custom serialization.
 
+## Package layout
+
+Offline signing, wallet, hashing, canonicalization, and their types now live in
+`github.com/Constellation-Labs/metakit-sdk/packages/go/core`. Update those imports
+and call sites to `core`; currency transactions and `NewMetagraphClient` remain
+in the root `constellation` package. This split changes the old flat signing API.
+
 ## Installation
 
 ```bash
@@ -17,12 +24,12 @@ package main
 
 import (
     "fmt"
-    constellation "github.com/Constellation-Labs/metakit-sdk/packages/go"
+    core "github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 func main() {
     // Generate a key pair
-    keyPair, err := constellation.GenerateKeyPair()
+    keyPair, err := core.GenerateKeyPair()
     if err != nil {
         panic(err)
     }
@@ -33,13 +40,13 @@ func main() {
         "action": "UPDATE",
         "payload": map[string]interface{}{"key": "value"},
     }
-    signed, err := constellation.CreateSignedObject(data, keyPair.PrivateKey, false)
+    signed, err := core.CreateSignedObject(data, keyPair.PrivateKey, false)
     if err != nil {
         panic(err)
     }
 
     // Verify
-    result := constellation.Verify(signed, false)
+    result := core.Verify(signed, false)
     fmt.Println("Valid:", result.IsValid)
 }
 ```
@@ -53,10 +60,10 @@ func main() {
 Create a signed object with a single signature.
 
 ```go
-signed, err := constellation.CreateSignedObject(data, privateKey, false)
+signed, err := core.CreateSignedObject(data, privateKey, false)
 
 // For L1 submission (DataUpdate)
-signed, err := constellation.CreateSignedObject(data, privateKey, true)
+signed, err := core.CreateSignedObject(data, privateKey, true)
 ```
 
 #### `AddSignature(signed, privateKey, isDataUpdate) (*Signed, error)`
@@ -64,8 +71,8 @@ signed, err := constellation.CreateSignedObject(data, privateKey, true)
 Add an additional signature to an existing signed object.
 
 ```go
-signed, _ := constellation.CreateSignedObject(data, party1Key, false)
-signed, _ = constellation.AddSignature(signed, party2Key, false)
+signed, _ := core.CreateSignedObject(data, party1Key, false)
+signed, _ = core.AddSignature(signed, party2Key, false)
 // len(signed.Proofs) == 2
 ```
 
@@ -74,7 +81,7 @@ signed, _ = constellation.AddSignature(signed, party2Key, false)
 Create a signed object with multiple signatures at once.
 
 ```go
-signed, _ := constellation.BatchSign(data, []string{key1, key2, key3}, false)
+signed, _ := core.BatchSign(data, []string{key1, key2, key3}, false)
 // len(signed.Proofs) == 3
 ```
 
@@ -83,7 +90,7 @@ signed, _ := constellation.BatchSign(data, []string{key1, key2, key3}, false)
 Verify all signatures on a signed object.
 
 ```go
-result := constellation.Verify(signed, false)
+result := core.Verify(signed, false)
 if result.IsValid {
     fmt.Println("All signatures valid")
 } else {
@@ -98,7 +105,7 @@ if result.IsValid {
 Canonicalize JSON data according to RFC 8785.
 
 ```go
-canonical, _ := constellation.Canonicalize(map[string]int{"b": 2, "a": 1})
+canonical, _ := core.Canonicalize(map[string]int{"b": 2, "a": 1})
 // `{"a":1,"b":2}`
 ```
 
@@ -108,10 +115,10 @@ Convert data to binary bytes for signing.
 
 ```go
 // Regular encoding
-bytes, _ := constellation.ToBytes(data, false)
+bytes, _ := core.ToBytes(data, false)
 
 // DataUpdate encoding (with Constellation prefix)
-bytes, _ := constellation.ToBytes(data, true)
+bytes, _ := core.ToBytes(data, true)
 ```
 
 #### `HashData(data) (*Hash, error)` / `HashBytes(bytes) *Hash`
@@ -119,7 +126,7 @@ bytes, _ := constellation.ToBytes(data, true)
 Compute SHA-256 hash.
 
 ```go
-hash, _ := constellation.HashData(data)
+hash, _ := core.HashData(data)
 fmt.Println(hash.Value)  // 64-char hex
 fmt.Println(hash.Bytes)  // [32]byte
 ```
@@ -129,7 +136,7 @@ fmt.Println(hash.Bytes)  // [32]byte
 Sign data and return a proof.
 
 ```go
-proof, _ := constellation.Sign(data, privateKey)
+proof, _ := core.Sign(data, privateKey)
 // SignatureProof{ID: "...", Signature: "..."}
 ```
 
@@ -138,8 +145,8 @@ proof, _ := constellation.Sign(data, privateKey)
 Sign a pre-computed hash.
 
 ```go
-hash, _ := constellation.HashData(data)
-signature, _ := constellation.SignHash(hash.Value, privateKey)
+hash, _ := core.HashData(data)
+signature, _ := core.SignHash(hash.Value, privateKey)
 ```
 
 ### Wallet Utilities
@@ -149,7 +156,7 @@ signature, _ := constellation.SignHash(hash.Value, privateKey)
 Generate a new random key pair.
 
 ```go
-keyPair, _ := constellation.GenerateKeyPair()
+keyPair, _ := core.GenerateKeyPair()
 // KeyPair{PrivateKey, PublicKey, Address}
 ```
 
@@ -158,7 +165,7 @@ keyPair, _ := constellation.GenerateKeyPair()
 Derive a key pair from an existing private key.
 
 ```go
-keyPair, _ := constellation.KeyPairFromPrivateKey(existingPrivateKey)
+keyPair, _ := core.KeyPairFromPrivateKey(existingPrivateKey)
 ```
 
 #### `GetPublicKeyID(privateKey) (string, error)`
@@ -166,7 +173,7 @@ keyPair, _ := constellation.KeyPairFromPrivateKey(existingPrivateKey)
 Get the public key ID (128 chars, no 04 prefix) for use in proofs.
 
 ```go
-id, _ := constellation.GetPublicKeyID(privateKey)
+id, _ := core.GetPublicKeyID(privateKey)
 ```
 
 ### Currency Transactions
@@ -402,7 +409,7 @@ import (
     "encoding/json"
     "net/http"
 
-    constellation "github.com/Constellation-Labs/metakit-sdk/packages/go"
+    core "github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 func main() {
@@ -414,7 +421,7 @@ func main() {
     }
 
     // Sign as DataUpdate
-    signed, _ := constellation.CreateSignedObject(dataUpdate, privateKey, true)
+    signed, _ := core.CreateSignedObject(dataUpdate, privateKey, true)
 
     // Submit to data-l1
     body, _ := json.Marshal(signed)
@@ -429,23 +436,23 @@ package main
 
 import (
     "fmt"
-    constellation "github.com/Constellation-Labs/metakit-sdk/packages/go"
+    core "github.com/Constellation-Labs/metakit-sdk/packages/go/core"
 )
 
 func main() {
     data := map[string]interface{}{"action": "multisig-test"}
 
     // Party 1 creates and signs
-    signed, _ := constellation.CreateSignedObject(data, party1Key, false)
+    signed, _ := core.CreateSignedObject(data, party1Key, false)
 
     // Party 2 adds signature
-    signed, _ = constellation.AddSignature(signed, party2Key, false)
+    signed, _ = core.AddSignature(signed, party2Key, false)
 
     // Party 3 adds signature
-    signed, _ = constellation.AddSignature(signed, party3Key, false)
+    signed, _ = core.AddSignature(signed, party3Key, false)
 
     // Verify all signatures
-    result := constellation.Verify(signed, false)
+    result := core.Verify(signed, false)
     fmt.Printf("%d valid signatures\n", len(result.ValidProofs))
 }
 ```
