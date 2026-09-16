@@ -17,14 +17,14 @@ Java SDK for signing data and currency transactions on Constellation Network met
 <dependency>
     <groupId>io.constellationnetwork</groupId>
     <artifactId>metagraph-sdk</artifactId>
-    <version>0.1.0</version>
+    <version>1.8.0-rc.8</version>
 </dependency>
 ```
 
 ### Gradle
 
 ```groovy
-implementation 'io.constellationnetwork:metagraph-sdk:0.1.0'
+implementation 'io.constellationnetwork:metagraph-sdk:1.8.0-rc.8'
 ```
 
 ## Quick Start
@@ -33,6 +33,7 @@ implementation 'io.constellationnetwork:metagraph-sdk:0.1.0'
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 import java.util.Map;
 
 public class Example {
@@ -61,6 +62,7 @@ public class Example {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 
 public class CurrencyExample {
     public static void main(String[] args) {
@@ -309,6 +311,7 @@ Client for interacting with Currency L1 nodes.
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 
 NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
     .l1Url("http://localhost:9010")
@@ -340,6 +343,7 @@ Client for interacting with Data L1 nodes (metagraphs).
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 
 NetworkTypes.NetworkConfig config = new NetworkTypes.NetworkConfig.Builder()
     .dataL1Url("http://localhost:8080")
@@ -469,6 +473,7 @@ public class TransferParams {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 import com.google.gson.Gson;
 import java.net.http.*;
 import java.util.Map;
@@ -503,6 +508,7 @@ public class DataUpdateExample {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 import java.util.Map;
 
 public class MultiSigExample {
@@ -531,6 +537,7 @@ public class MultiSigExample {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 
 public class CurrencyExample {
     public static void main(String[] args) {
@@ -563,6 +570,7 @@ public class CurrencyExample {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 import java.util.Arrays;
 import java.util.List;
 
@@ -597,6 +605,7 @@ public class BatchExample {
 
 ```java
 import io.constellationnetwork.metagraph.sdk.*;
+import io.constellationnetwork.metagraph.sdk.core.*;
 
 public class MultiSigExample {
     public static void main(String[] args) {
