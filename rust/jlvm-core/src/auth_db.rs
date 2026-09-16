@@ -740,6 +740,10 @@ fn nibbles_to_str(nibbles: &[u8]) -> String {
 /// from the root, folding through extension/branch nodes and terminating at a
 /// single leaf. Returns `true` iff the proof reproduces the root for `path`.
 fn mpt_confirm(root: &str, proof: &MptInclusionProof) -> bool {
+    mpt_confirm_impl(root, proof, false)
+}
+
+fn mpt_confirm_impl(root: &str, proof: &MptInclusionProof, validate_extension_paths: bool) -> bool {
     // The verifier folds `proof.witness.reverse` starting at `root` with the full
     // path nibbles. We mutate a working list (consumed head-first).
     let mut commitments: Vec<MptCommitment> = proof.witness.iter().rev().cloned().collect();
@@ -767,6 +771,14 @@ fn mpt_confirm(root: &str, proof: &MptInclusionProof) -> bool {
                 },
                 _,
             )) => {
+                // Bind the client API's full path while preserving the frozen
+                // opcode's historical fold through the wrapper above.
+                if validate_extension_paths {
+                    let shared_nibbles = path_nibbles(shared);
+                    if !remaining.starts_with(&shared_nibbles) {
+                        return false;
+                    }
+                }
                 let head = commitments[0].clone();
                 let digest = head.digest();
                 if digest != current_digest {
@@ -929,14 +941,19 @@ pub fn verify_mpt_proof(root: &str, proof: &serde_json::Value) -> bool {
     let Some(obj) = proof.as_object() else {
         return false;
     };
-    match obj.get("type").and_then(|v| v.as_str()) {
+    let tag = match obj.get("type") {
+        None => None,
+        Some(serde_json::Value::String(tag)) => Some(tag.as_str()),
+        Some(_) => return false,
+    };
+    match tag {
         Some("Absence") => match decode_mpt_inclusion_proof(proof, "verify_mpt_proof") {
             Ok(p) => mpt_confirm_absence(root, &p.path, &p.witness),
             Err(_) => false,
         },
         // Un-tagged legacy `{path, witness}` == Inclusion (byte-identical + tag).
         None | Some("Inclusion") => match decode_mpt_inclusion_proof(proof, "verify_mpt_proof") {
-            Ok(p) => mpt_confirm(root, &p),
+            Ok(p) => mpt_confirm_impl(root, &p, true),
             Err(_) => false,
         },
         Some(_) => false, // unknown proof type

@@ -2146,7 +2146,11 @@ const nibblesToStr = (nibbles: number[]): string => nibbles.map(nibbleChar).join
  * from the root, folding through extension/branch nodes and terminating at a
  * single leaf. `true` iff the proof reproduces the root for `path`.
  */
-const mptConfirm = (root: string, proof: MptInclusionProof): boolean => {
+const mptConfirm = (
+  root: string,
+  proof: MptInclusionProof,
+  validateExtensionPaths = false
+): boolean => {
   const commitments: MptCommitment[] = [...proof.witness].reverse();
   let currentDigest = root;
   let remaining = pathNibbles(proof.path);
@@ -2161,6 +2165,14 @@ const mptConfirm = (root: string, proof: MptInclusionProof): boolean => {
       return digest === currentDigest && nibblesToStr(remaining) === head.remaining;
     }
     if (head.kind === 'extension') {
+      // The client API must bind the full path. Keep the frozen opcode's
+      // historical fold unless this validation is explicitly enabled.
+      if (validateExtensionPaths) {
+        const shared = pathNibbles(head.shared);
+        if (shared.length > remaining.length || shared.some((n, i) => n !== remaining[i])) {
+          return false;
+        }
+      }
       const digest = mptCommitmentDigest(head);
       if (digest !== currentDigest) {
         return false; // InvalidNodeCommitment
@@ -2323,7 +2335,7 @@ export const verifyMptProof = (root: string, proof: unknown): boolean => {
   if (!isPlainObject(proof)) {
     return false;
   }
-  const tag = asStr(proof.type);
+  const tag = proof.type;
   try {
     if (tag === 'Absence') {
       const p = decodeMptInclusionProof(proof, 'verifyMptProof');
@@ -2332,7 +2344,7 @@ export const verifyMptProof = (root: string, proof: unknown): boolean => {
     // Un-tagged legacy `{path, witness}` == Inclusion (byte-identical + tag).
     if (tag === undefined || tag === 'Inclusion') {
       const p = decodeMptInclusionProof(proof, 'verifyMptProof');
-      return mptConfirm(root, p);
+      return mptConfirm(root, p, true);
     }
     return false; // unknown proof type
   } catch {

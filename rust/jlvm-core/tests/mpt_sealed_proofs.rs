@@ -16,6 +16,7 @@
 
 use jlvm_core::verify_mpt_proof;
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 fn load_fixture() -> Value {
@@ -161,6 +162,51 @@ fn rejects_absence_of_a_present_key() {
         !verify_mpt_proof(root, &proof),
         "must not prove absence of a present key"
     );
+}
+
+#[test]
+fn rejects_present_non_string_type_tags() {
+    let doc = load_fixture();
+    let c = find(&doc, "inclusion-tagged");
+    let root = c["rootHash"].as_str().unwrap();
+    for tag in [
+        Value::Null,
+        serde_json::json!(42),
+        serde_json::json!(false),
+        serde_json::json!({}),
+        serde_json::json!([]),
+    ] {
+        let mut proof = c["proof"].clone();
+        proof["type"] = tag;
+        assert!(!verify_mpt_proof(root, &proof));
+    }
+}
+
+#[test]
+fn inclusion_binds_every_extension_prefix() {
+    let doc = load_fixture();
+    let c = find(&doc, "inclusion-tagged");
+    let contents = serde_json::json!({"childDigest": c["rootHash"], "shared": "cc"});
+    let mut hasher = Sha256::new();
+    hasher.update([2]);
+    hasher.update(serde_json::to_vec(&contents).unwrap());
+    let root = format!("{:x}", hasher.finalize());
+    let mut proof = c["proof"].clone();
+    proof["witness"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({"type": "Extension", "contents": contents}));
+    for legacy in [false, true] {
+        if legacy {
+            proof.as_object_mut().unwrap().remove("type");
+        }
+        proof["path"] = serde_json::json!("cca1");
+        assert!(verify_mpt_proof(&root, &proof));
+        proof["path"] = serde_json::json!("dda1");
+        assert!(!verify_mpt_proof(&root, &proof));
+        proof["path"] = serde_json::json!("c");
+        assert!(!verify_mpt_proof(&root, &proof));
+    }
 }
 
 #[test]

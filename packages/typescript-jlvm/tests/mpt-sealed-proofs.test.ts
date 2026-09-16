@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 
@@ -113,6 +114,28 @@ describe('Sealed Merkle-Patricia light-client verification (KATs)', () => {
     const proof = clone(c.proof);
     proof.type = 'Bogus';
     expect(verifyMptProof(c.rootHash, proof)).toBe(false);
+  });
+
+  it('rejects present non-string type tags instead of treating them as legacy proofs', () => {
+    const c = byName('inclusion-tagged');
+    for (const type of [null, 42, false, {}, []]) {
+      expect(verifyMptProof(c.rootHash, { ...c.proof, type })).toBe(false);
+    }
+  });
+
+  it('binds inclusion paths to every extension prefix', () => {
+    const c = byName('inclusion-tagged');
+    const contents = { childDigest: c.rootHash, shared: 'cc' };
+    const root = createHash('sha256')
+      .update(Buffer.from([2]))
+      .update(JSON.stringify(contents))
+      .digest('hex');
+    const witness = [...c.proof.witness, { type: 'Extension', contents }];
+    for (const type of ['Inclusion', undefined]) {
+      expect(verifyMptProof(root, { type, path: 'cca1', witness })).toBe(true);
+      expect(verifyMptProof(root, { type, path: 'dda1', witness })).toBe(false);
+      expect(verifyMptProof(root, { type, path: 'c', witness })).toBe(false);
+    }
   });
 
   it('does not prove absence of a present key', () => {
